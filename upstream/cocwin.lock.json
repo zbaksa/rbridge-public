@@ -1,0 +1,210 @@
+{
+  "automaticMutation": false,
+  "bridgeReleaseSha": "38491cf9f3deb22b3fafd1f995fa6d37e42cb49a",
+  "bridgeReleaseTree": "5a5f0ca18cef2ea839a26a3889b4d386e4436032",
+  "cocwinMainSha": "8ca7c3372b82cbe0172c302fdf1644d8a5269fa6",
+  "cocwinMainTree": "9bd9ca4aab36ebadd52db3e6ce4fa511b1f6567e",
+  "extractionBranch": "extract/frozen-stage2-r2",
+  "files": [
+    {
+      "category": "active",
+      "destinationPath": "src/adapters/appExecutionClient.ts",
+      "sourcePath": "src/adapters/appExecutionClient.ts",
+      "sourceSha256": "d1e4ca262890e7b465e428810bfd9d001a87b565b0d82e55a9abaa4c2ba7bb9c"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/adapters/controllerExecRemoteBridge.ts",
+      "sourcePath": "src/adapters/controllerExecRemoteBridge.ts",
+      "sourceSha256": "03c60761ba031ef649eb08a9f311b9652dbb8ddf62ab6d7d3e2e881f1cc248dd"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/adapters/githubIssueRemoteBridge.ts",
+      "sourcePath": "src/adapters/githubIssueRemoteBridge.ts",
+      "sourceSha256": "f00e0e611684f2a7e8afa284c0aef35fd24599413c2fea77777281077b285999"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/domain/remoteBridgeHostProfiles.ts",
+      "sourcePath": "src/domain/remoteBridgeHostProfiles.ts",
+      "sourceSha256": "17223d74d42cb5af801a756455e32c06caba405246d4a339006bc38b6d86e817"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/domain/remoteBridgeProtocol.ts",
+      "sourcePath": "src/domain/remoteBridgeProtocol.ts",
+      "sourceSha256": "0997a29fa176aadf74e1071e13542d9746f0be84f2e31a2b7637305cf56c8708"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/domain/remoteBridgeStage2Protocol.ts",
+      "sourcePath": "src/domain/remoteBridgeStage2Protocol.ts",
+      "sourceSha256": "957ad1fd4e254d9a3cc406f453d5f204dcc3856742a4563568e45a18de39979a"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeChunkStore.ts",
+      "sourcePath": "src/server/remoteBridgeChunkStore.ts",
+      "sourceSha256": "536529d41a8a717fb538e77eca3ae0126c2f8c6237897e8d04ad657f024609dd"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeFileOps.ts",
+      "sourcePath": "src/server/remoteBridgeFileOps.ts",
+      "sourceSha256": "4acae14d8ae10939553d182e38dde1a00fb3c077f9349bd9a534acda1d20b10b"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeHealth.ts",
+      "sourcePath": "src/server/remoteBridgeHealth.ts",
+      "sourceSha256": "500b0c7635149abf2f6a5e1e4ce878145f3eebf23e3e3a602629c7fe31ac745d"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeMain.ts",
+      "sourcePath": "src/server/remoteBridgeMain.ts",
+      "sourceSha256": "d532b0ccf1a5716a621d4a1d87262c37c69454258c42ccbab2dd5d8e4ef30697"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeProcessSessions.ts",
+      "sourcePath": "src/server/remoteBridgeProcessSessions.ts",
+      "sourceSha256": "428e44f4ab6f4c3bc9faf4687d564fae6b2dc5e22fab397efef40b41b03a5a2b"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeProcessSupervisor.ts",
+      "sourcePath": "src/server/remoteBridgeProcessSupervisor.ts",
+      "sourceSha256": "f415476ddd103acca21f50678aebe9862f59015e7df187420ed3490a56ddc5ac"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeStore.ts",
+      "sourcePath": "src/server/remoteBridgeStore.ts",
+      "sourceSha256": "696f7235dea05333bf5bceec5037c1a0a9d747cde1d76d6eb4bf677c28cc839c"
+    },
+    {
+      "category": "active",
+      "destinationPath": "src/server/remoteBridgeWorker.ts",
+      "sourcePath": "src/server/remoteBridgeWorker.ts",
+      "sourceSha256": "e8598ca02316eb05d1fc9a542433354a70733c1e710258d39f84090e80ce2bbd"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/adapters/app-execution-client.test.ts",
+      "sourcePath": "tests/adapters/app-execution-client.test.ts",
+      "sourceSha256": "89091641e53ac0fe4aaee0e2a7b46fee4963f8702c92dc6c8961b7754aa033c7"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/adapters/controller-exec-remote-bridge.test.ts",
+      "sourcePath": "tests/adapters/controller-exec-remote-bridge.test.ts",
+      "sourceSha256": "5cd983aaf8bf014a3cc854fb309887fe7a639ab6a291bd2026be28e0e6c0a7a5"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/adapters/github-issue-remote-bridge.test.ts",
+      "sourcePath": "tests/adapters/github-issue-remote-bridge.test.ts",
+      "sourceSha256": "1d4ef4c5967ced898495faadde7b157aacc9aa2febf82522b155a0a25908b5d0"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/domain/remote-bridge-host-profiles.test.ts",
+      "sourcePath": "tests/domain/remote-bridge-host-profiles.test.ts",
+      "sourceSha256": "cb4b1103c3fa03fb6bcb96a44d1a17ed0fc2178831e12cef1c702632e1f1fecb"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/domain/remote-bridge-process-profiles.test.ts",
+      "sourcePath": "tests/domain/remote-bridge-process-profiles.test.ts",
+      "sourceSha256": "7e1d745f471610c66b3046283f0b5495d20647e1f1473bffcfc0b4dc4d35cd6a"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/domain/remote-bridge-protocol.test.ts",
+      "sourcePath": "tests/domain/remote-bridge-protocol.test.ts",
+      "sourceSha256": "32c94c338d8beb945d4b9915e080a82e47b659788504a667c94387ba8f4eecf9"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/domain/remote-bridge-stage2-protocol.test.ts",
+      "sourcePath": "tests/domain/remote-bridge-stage2-protocol.test.ts",
+      "sourceSha256": "d1f6d3160644882f827184d24927bac6886bdd0146a383ba8c4682b464f790bb"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-chunk-store.test.ts",
+      "sourcePath": "tests/server/remote-bridge-chunk-store.test.ts",
+      "sourceSha256": "5fb5b8474ce29049adc8d771ad63f5a3a6a859af4b2f30f877bb003008b74546"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-file-main-contract.test.ts",
+      "sourcePath": "tests/server/remote-bridge-file-main-contract.test.ts",
+      "sourceSha256": "7102aa5a7aa089aa5ff20d96f82c1e29506fb62e7e2e9348baf28446b45a9f28"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-file-ops.test.ts",
+      "sourcePath": "tests/server/remote-bridge-file-ops.test.ts",
+      "sourceSha256": "d351b585665c8005132634d6d114e3b7a8d51a8ea573f6ee0709c84648b99597"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-file-worker.test.ts",
+      "sourcePath": "tests/server/remote-bridge-file-worker.test.ts",
+      "sourceSha256": "482537c166d7cb98f1731c21deadd1d260e93d645b1bb4b7787585d18e08bf57"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-health.test.ts",
+      "sourcePath": "tests/server/remote-bridge-health.test.ts",
+      "sourceSha256": "285d50caadcd9029bfd3f1510bb5e3f85f25f7af71e7b692f6a2acee8d5a2f7e"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-main.test.ts",
+      "sourcePath": "tests/server/remote-bridge-main.test.ts",
+      "sourceSha256": "ed576a7f81b5e31d9e51ac14391988953401364125041dd74151074962178438"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-process-sessions.test.ts",
+      "sourcePath": "tests/server/remote-bridge-process-sessions.test.ts",
+      "sourceSha256": "ad10884f8bc6aa0326e0c95296b98abce637f9bc5f7d2b85ac55493b11da4ec3"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-store.test.ts",
+      "sourcePath": "tests/server/remote-bridge-store.test.ts",
+      "sourceSha256": "bd024eb0867f28bcddfffe00cc842055742f726a542fffabbae7bb09184713e0"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-worker-health.test.ts",
+      "sourcePath": "tests/server/remote-bridge-worker-health.test.ts",
+      "sourceSha256": "dd0134cf3fc4d58378d00088eabb1f193eef1e2b3d3216bffde5cd5e82cc663b"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-worker-process.test.ts",
+      "sourcePath": "tests/server/remote-bridge-worker-process.test.ts",
+      "sourceSha256": "ec57d82e430bef18db583b4f7d57936d9f55a324f01859cbe9b977f7dc2bf3c3"
+    },
+    {
+      "category": "active",
+      "destinationPath": "tests/server/remote-bridge-worker.test.ts",
+      "sourcePath": "tests/server/remote-bridge-worker.test.ts",
+      "sourceSha256": "591b4e5cb0f29b093270106912cd840ec4d5d334fe679cec29b1c78041bec045"
+    }
+  ],
+  "policyName": "COCWIN 024 Standard od 23092026.md",
+  "policySha256": "5bc1d3539ef0be5a3a1efc096c3c9ba127b8a884e03fbf762e67bb5c4b4f1cfa",
+  "publicBaseSha": "5ca94ad6733bfda752c450ae821c6fa227303dcf",
+  "publicBaseTree": "d3614467e3dfc21a2e9176d292d8a03a60daa442",
+  "publicRepository": "zbaksa/rbridge-public",
+  "publicationStatus": "BLOCKED_PENDING_SCRUB",
+  "schema": "RBRIDGE_UPSTREAM_LOCK_V2",
+  "sourceRepository": "zbaksa/cocwin-private"
+}
