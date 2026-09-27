@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 
 export type RemoteBridgeStage2Operation =
   | {kind:'APP_RUN'; appId:string; jobId:string; payload:AppExecutionPayload}
-  | {kind:'FILE'; action:'LIST'|'STAT'|'READ'|'READ_MANY'|'WRITE_TEXT'|'APPEND_TEXT'|'EDIT_EXACT'|'MOVE'|'SEARCH'; target:string; args:Record<string,unknown>}
+  | {kind:'FILE'; action:'LIST'|'STAT'|'READ'|'READ_MANY'|'READ_BINARY'|'WRITE_TEXT'|'WRITE_BINARY'|'APPEND_TEXT'|'EDIT_EXACT'|'MOVE'|'SEARCH'; target:string; args:Record<string,unknown>}
   | {kind:'PROCESS'; action:'START'|'STATUS'|'READ_OUTPUT'|'WRITE_INPUT'|'TERMINATE'; sessionId?:string; args:Record<string,unknown>}
   | {kind:'CHUNK'; action:'PUT'|'GET'|'FINALIZE'; transferId:string; args:Record<string,unknown>}
   | {kind:'HEALTH'; action:'STATUS'};
@@ -30,7 +30,7 @@ const PROCESS_SESSION_FIELDS=new Set(['kind','action','args','sessionId']);
 const CHUNK_FIELDS=new Set(['kind','action','transferId','args']);
 const HEALTH_FIELDS=new Set(['kind','action']);
 
-const FILE_ACTIONS=new Set(['LIST','STAT','READ','READ_MANY','WRITE_TEXT','APPEND_TEXT','EDIT_EXACT','MOVE','SEARCH']);
+const FILE_ACTIONS=new Set(['LIST','STAT','READ','READ_MANY','READ_BINARY','WRITE_TEXT','WRITE_BINARY','APPEND_TEXT','EDIT_EXACT','MOVE','SEARCH']);
 const PROCESS_ACTIONS=new Set(['START','STATUS','READ_OUTPUT','WRITE_INPUT','TERMINATE']);
 const CHUNK_ACTIONS=new Set(['PUT','GET','FINALIZE']);
 

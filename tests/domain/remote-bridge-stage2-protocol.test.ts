@@ -17,6 +17,11 @@ describe('COCWIN remote bridge Stage-2 protocol',()=>{
     for(const [operation,kind] of [[appRun,'APP_RUN'],[fileOp,'FILE'],[processOp,'PROCESS'],[chunkOp,'CHUNK'],[healthOp,'HEALTH']] as const){expect(parse(operation).operation.kind).toBe(kind);}
     expect(()=>parse({kind:'SHELL',action:'RUN',args:{}})).toThrow(/REMOTE_BRIDGE_V2_OPERATION_KIND_INVALID/);
   });
+  it('accepts explicit bounded binary FILE actions and still rejects unknown actions',()=>{
+    expect(parse({kind:'FILE',action:'READ_BINARY',target:'/mnt/data/a.bin',args:{}}).operation.kind).toBe('FILE');
+    expect(parse({kind:'FILE',action:'WRITE_BINARY',target:'/mnt/data/a.bin',args:{dataBase64:'AA==',sha256:'0'.repeat(64)}}).operation.kind).toBe('FILE');
+    expect(()=>parse({kind:'FILE',action:'WRITE_BYTES',target:'/mnt/data/a.bin',args:{}})).toThrow(/REMOTE_BRIDGE_V2_FILE_ACTION_INVALID/);
+  });
   it('produces a stable semantic digest that changes with semantic content',()=>{
     const first=parse(fileOp);const second=parse({...fileOp,args:{maxBytes:4096}});
     expect(remoteBridgeRequestV2Digest(first)).toMatch(/^[0-9a-f]{64}$/);

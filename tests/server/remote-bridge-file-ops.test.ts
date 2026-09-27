@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {mkdtemp,mkdir,readFile,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -8,6 +9,8 @@ type StatResult={type:string;size:number};
 type ReadResult={text:string};
 type ReadManyResult={files:Array<{path:string;text:string}>};
 type SearchResult={matches:Array<{path:string}>;truncated:boolean};
+type BinaryResult={path:string;dataBase64:string;bytes:number;sha256:string};
+const digest=(data:Buffer)=>createHash('sha256').update(data).digest('hex');
 
 async function fixture(){
   const base=await mkdtemp(join(tmpdir(),'bridge-fileops-'));
@@ -30,6 +33,23 @@ describe('remote bridge safe FILE operations',()=>{
     expect(read.text).toBe('alpha');
     const many=await fileOps.execute({kind:'FILE',action:'READ_MANY',target:root,args:{paths:['a.txt','b.txt']}}) as ReadManyResult;
     expect(many.files.map(x=>x.text)).toEqual(['alpha','beta']);
+  });
+
+  it('round-trips bounded binary files with canonical base64 and SHA-256 binding',async()=>{
+    const {root,fileOps}=await fixture();const target=join(root,'asset.bin'),data=Buffer.from([0,255,1,2,3,128,10,0,77]),sha=digest(data);
+    await expect(fileOps.execute({kind:'FILE',action:'WRITE_BINARY',target,args:{dataBase64:data.toString('base64'),sha256:sha}})).resolves.toEqual({path:target,written:true,bytes:data.byteLength,sha256:sha});
+    expect(await readFile(target)).toEqual(data);
+    const out=await fileOps.execute({kind:'FILE',action:'READ_BINARY',target,args:{}}) as BinaryResult;
+    expect(out).toEqual({path:target,dataBase64:data.toString('base64'),bytes:data.byteLength,sha256:sha});
+  });
+
+  it('rejects malformed, digest-mismatched and oversized binary writes without replacing the target',async()=>{
+    const {root,fileOps}=await fixture();const target=join(root,'asset.bin');await writeFile(target,Buffer.from([9,8,7]));
+    const data=Buffer.from([0,1,2,3]);
+    await expect(fileOps.execute({kind:'FILE',action:'WRITE_BINARY',target,args:{dataBase64:'***',sha256:digest(data)}})).rejects.toThrow(/BASE64_INVALID/);
+    await expect(fileOps.execute({kind:'FILE',action:'WRITE_BINARY',target,args:{dataBase64:data.toString('base64'),sha256:'0'.repeat(64)}})).rejects.toThrow(/SHA256_MISMATCH/);
+    const big=Buffer.alloc(65,1);await expect(fileOps.execute({kind:'FILE',action:'WRITE_BINARY',target,args:{dataBase64:big.toString('base64'),sha256:digest(big)}})).rejects.toThrow(/TOO_LARGE/);
+    expect(await readFile(target)).toEqual(Buffer.from([9,8,7]));
   });
 
   it('writes/appends/edits/moves atomically inside one allowed root',async()=>{
