@@ -13,10 +13,10 @@ afterEach(async()=>{await Promise.all(roots.splice(0).map(p=>rm(p,{recursive:tru
 async function store(){const p=await mkdtemp(join(tmpdir(),'rbridge-uncertain-'));roots.push(p);return createRemoteBridgeStore(p,NOW);}
 
 function v1Issue(){
-  return {number:1,title:'[COCWIN BRIDGE REQUEST] rbridge.uncertain.v1',authorLogin:TRANSPORT.authorLogin,url:'https://github.com/example/rbridge-control/issues/1',body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1',requestId:'rbridge.uncertain.v1',createdAt:'2026-09-27T11:59:00.000Z',expiresAt:'2026-09-27T12:20:00.000Z',appId:'rbridge',jobId:'uncertain-v1',operation:'RUN',payload:{tool:'node',cwd:'/home/rbridge/backend',args:['--version'],timeout_ms:30000,max_bytes:65536}})};
+  return {number:1,title:'[COCWIN BRIDGE REQUEST] rbridge.uncertain.v1',authorLogin:TRANSPORT.authorLogin,url:'https://github.com/example/rbridge-control/issues/1',body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1',requestId:'rbridge.uncertain.v1',createdAt:'2026-09-27T11:59:00.000Z',expiresAt:'2026-09-27T12:20:00.000Z',appId:'rbridge',jobId:'uncertain-v1',operation:'RUN',payload:{tool:'node',cwd:'/srv/rbridge/backend',args:['--version'],timeout_ms:30000,max_bytes:65536}})};
 }
 function v2Issue(){
-  return {number:2,title:'[COCWIN BRIDGE REQUEST] rbridge.uncertain.v2',authorLogin:TRANSPORT.authorLogin,url:'https://github.com/example/rbridge-control/issues/2',body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V2',requestId:'rbridge.uncertain.v2',createdAt:'2026-09-27T11:59:00.000Z',expiresAt:'2026-09-27T12:20:00.000Z',operation:{kind:'APP_RUN',appId:'rbridge',jobId:'uncertain-v2',payload:{tool:'node',cwd:'/home/rbridge/backend',args:['--version'],timeout_ms:30000,max_bytes:65536}}})};
+  return {number:2,title:'[COCWIN BRIDGE REQUEST] rbridge.uncertain.v2',authorLogin:TRANSPORT.authorLogin,url:'https://github.com/example/rbridge-control/issues/2',body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V2',requestId:'rbridge.uncertain.v2',createdAt:'2026-09-27T11:59:00.000Z',expiresAt:'2026-09-27T12:20:00.000Z',operation:{kind:'APP_RUN',appId:'rbridge',jobId:'uncertain-v2',payload:{tool:'node',cwd:'/srv/rbridge/backend',args:['--version'],timeout_ms:30000,max_bytes:65536}}})};
 }
 
 describe('durable APP_RUN UNCERTAIN reconciliation',()=>{
