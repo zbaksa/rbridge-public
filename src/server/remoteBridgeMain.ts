@@ -44,7 +44,7 @@ export async function runRemoteBridgeMain():Promise<void>{
   const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env);
   const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
   let queueCount=0,sessionCount=(await processSessions.stats()).activeSessions,transferCount=(await chunkStore.stats()).activeTransfers;
-  const releaseSha=process.env.COCWIN_REMOTE_BRIDGE_RELEASE_SHA??'',health=createRemoteBridgeHealth({releaseSha,startedAt:new Date(),counts:()=>({queueCount,sessionCount,transferCount})});
+  const releaseSha=process.env.RBRIDGE_RELEASE_SHA??process.env.COCWIN_REMOTE_BRIDGE_RELEASE_SHA??'',health=createRemoteBridgeHealth({releaseSha,startedAt:new Date(),counts:()=>({queueCount,sessionCount,transferCount})});
   // Construct FILE ops from source-controlled host profile
   const fileProfile=resolveHostProfile({kind:'FILE',action:'LIST',target:'/mnt/data',args:{}});
   if(fileProfile.kind!=='FILE')throw new Error('REMOTE_BRIDGE_FILE_PROFILE_INVALID');

@@ -1,0 +1,35 @@
+[Unit]
+Description=RBridge Remote Execution Gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@RBRIDGE_USER@
+Group=@RBRIDGE_GROUP@
+SupplementaryGroups=@CONTROLLER_GROUP@
+Environment=HOME=@RBRIDGE_HOME@
+Environment=PATH=/opt/ai-tool-fabric/runtime:/usr/local/bin:/usr/bin:/bin
+Environment=RBRIDGE_RUNTIME_USER=@RBRIDGE_USER@
+EnvironmentFile=@RBRIDGE_ENV_FILE@
+ExecStart=/opt/ai-tool-fabric/runtime/node /usr/local/libexec/rbridge/current/dist/server/remoteBridgeMain.js
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@RBRIDGE_STATE_ROOT@
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
