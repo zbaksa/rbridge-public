@@ -21,6 +21,13 @@ export function resolveRemoteBridgeGitHubConfig(env:Record<string,string|undefin
   if(!/^[A-Za-z0-9-]{1,39}$/.test(authorLogin))throw new Error('REMOTE_BRIDGE_GITHUB_AUTHOR_CONFIG_INVALID');
   return {repository,authorLogin};
 }
+export function resolveRemoteBridgeRuntimeConfig(env:Record<string,string|undefined>,identity:{username:string;homedir:string;uid:number}){
+  const runtimeUser=(env.RBRIDGE_RUNTIME_USER??'').trim();
+  if(!/^[a-z_][a-z0-9_-]{0,31}$/.test(runtimeUser))throw new Error('REMOTE_BRIDGE_RUNTIME_USER_CONFIG_INVALID');
+  if(identity.uid===0||identity.username!==runtimeUser)throw new Error('REMOTE_BRIDGE_RUNTIME_USER_REQUIRED');
+  if(!identity.homedir.startsWith('/')||identity.homedir==='/'||identity.homedir==='/root'||identity.homedir.includes('\0'))throw new Error('REMOTE_BRIDGE_HOME_INVALID');
+  return {runtimeUser,stateRoot:join(identity.homedir,'.local','state','rbridge')};
+}
 export async function runRemoteBridgeLoop(options:RemoteBridgeLoopOptions):Promise<void>{
   const lock=await options.acquireLock(),now=options.now??(()=>new Date()),maxBackoffMs=Math.max(options.pollMs,options.maxBackoffMs??60_000);let errorStreak=0;
   try{while(options.shouldContinue()){
@@ -32,9 +39,10 @@ export async function runRemoteBridgeLoop(options:RemoteBridgeLoopOptions):Promi
 }
 
 export async function runRemoteBridgeMain():Promise<void>{
-  const user=userInfo();if(user.username!=='bai'||(typeof process.getuid==='function'&&process.getuid()===0))throw new Error('REMOTE_BRIDGE_BAI_REQUIRED');if(!user.homedir.startsWith('/')||user.homedir==='/'||user.homedir==='/root')throw new Error('REMOTE_BRIDGE_HOME_INVALID');
+  const user=userInfo(),uid=typeof process.getuid==='function'?process.getuid():user.uid;
+  const {stateRoot:root}=resolveRemoteBridgeRuntimeConfig(process.env,{username:user.username,homedir:user.homedir,uid});
   const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env);
-  const root=join(user.homedir,'.local','state','cocwin-remote-bridge'),store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
+  const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
   let queueCount=0,sessionCount=(await processSessions.stats()).activeSessions,transferCount=(await chunkStore.stats()).activeTransfers;
   const releaseSha=process.env.COCWIN_REMOTE_BRIDGE_RELEASE_SHA??'',health=createRemoteBridgeHealth({releaseSha,startedAt:new Date(),counts:()=>({queueCount,sessionCount,transferCount})});
   // Construct FILE ops from source-controlled host profile
