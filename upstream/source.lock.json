@@ -2,8 +2,6 @@
   "automaticMutation": false,
   "bridgeReleaseSha": "38491cf9f3deb22b3fafd1f995fa6d37e42cb49a",
   "bridgeReleaseTree": "5a5f0ca18cef2ea839a26a3889b4d386e4436032",
-  "cocwinMainSha": "8ca7c3372b82cbe0172c302fdf1644d8a5269fa6",
-  "cocwinMainTree": "9bd9ca4aab36ebadd52db3e6ce4fa511b1f6567e",
   "extractionBranch": "extract/frozen-stage2-r2",
   "files": [
     {
@@ -199,12 +197,12 @@
       "sourceSha256": "591b4e5cb0f29b093270106912cd840ec4d5d334fe679cec29b1c78041bec045"
     }
   ],
-  "policyName": "COCWIN 024 Standard od 23092026.md",
-  "policySha256": "5bc1d3539ef0be5a3a1efc096c3c9ba127b8a884e03fbf762e67bb5c4b4f1cfa",
   "publicBaseSha": "5ca94ad6733bfda752c450ae821c6fa227303dcf",
   "publicBaseTree": "d3614467e3dfc21a2e9176d292d8a03a60daa442",
   "publicRepository": "zbaksa/rbridge-public",
-  "publicationStatus": "BLOCKED_PENDING_SCRUB",
+  "publicationStatus": "READY_FOR_PUBLICATION_REVIEW",
   "schema": "RBRIDGE_UPSTREAM_LOCK_V2",
-  "sourceRepository": "zbaksa/cocwin-private"
+  "upstreamSourceSha": "8ca7c3372b82cbe0172c302fdf1644d8a5269fa6",
+  "upstreamSourceTree": "9bd9ca4aab36ebadd52db3e6ce4fa511b1f6567e",
+  "extractionPolicySha256": "5bc1d3539ef0be5a3a1efc096c3c9ba127b8a884e03fbf762e67bb5c4b4f1cfa"
 }

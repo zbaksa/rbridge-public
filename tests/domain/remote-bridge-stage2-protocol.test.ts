@@ -3,7 +3,7 @@ import {parseRemoteBridgeRequestV2,remoteBridgeRequestV2Digest} from '../../src/
 
 const NOW=new Date('2026-09-16T20:40:00.000Z');
 const REQUEST_ID='stage2.req.1';
-const INPUT_BASE={title:`[COCWIN BRIDGE REQUEST] ${REQUEST_ID}`,author:'zbaksa',repository:'zbaksa/cocwin-private',now:NOW};
+const INPUT_BASE={title:`[COCWIN BRIDGE REQUEST] ${REQUEST_ID}`,author:'bridge-owner',repository:'example/rbridge-control',expectedAuthor:'bridge-owner',expectedRepository:'example/rbridge-control',now:NOW};
 const appRun={kind:'APP_RUN',appId:'cocwin',jobId:'stage2-probe-1',payload:{tool:'probe',cwd:'/home/cocwin/backend',args:[],timeout_ms:30_000,max_bytes:65_536}};
 const fileOp={kind:'FILE',action:'READ',target:'/mnt/data/stage2-canary.txt',args:{maxBytes:4096}};
 const processOp={kind:'PROCESS',action:'STATUS',sessionId:'session-abc123',args:{}};

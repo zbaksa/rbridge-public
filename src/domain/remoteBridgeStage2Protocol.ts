@@ -46,9 +46,11 @@ function validateJobId(jobId:string):void{if(typeof jobId!=='string'||!JOB_RE.te
 function isSafePath(path:unknown):boolean{if(typeof path!=='string'||path.length>1024||path.startsWith('//')||/\s|\0/.test(path))return false;const parts=path.split('/').slice(1);if(parts.some(part=>!part||part==='.'||part==='..'))return false;return path.startsWith('/');}
 function validateProcessSessionId(id:unknown):void{if(typeof id!=='string'||!/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(id))fail('REMOTE_BRIDGE_V2_SESSION_ID_INVALID');}
 
-export function parseRemoteBridgeRequestV2(input:{title:string;body:string;author:string;repository:string;now:Date}):RemoteBridgeRequestV2{
-  if(input.author!=='zbaksa')fail('REMOTE_BRIDGE_V2_AUTHOR_INVALID');
-  if(input.repository!=='zbaksa/cocwin-private')fail('REMOTE_BRIDGE_V2_REPOSITORY_INVALID');
+export function parseRemoteBridgeRequestV2(input:{title:string;body:string;author:string;repository:string;expectedAuthor:string;expectedRepository:string;now:Date}):RemoteBridgeRequestV2{
+  if(typeof input.expectedAuthor!=='string'||!/^[A-Za-z0-9-]{1,39}$/.test(input.expectedAuthor))fail('REMOTE_BRIDGE_V2_AUTHOR_CONFIG_INVALID');
+  if(typeof input.expectedRepository!=='string'||!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.expectedRepository))fail('REMOTE_BRIDGE_V2_REPOSITORY_CONFIG_INVALID');
+  if(input.author!==input.expectedAuthor)fail('REMOTE_BRIDGE_V2_AUTHOR_INVALID');
+  if(input.repository!==input.expectedRepository)fail('REMOTE_BRIDGE_V2_REPOSITORY_INVALID');
   if(typeof input.title!=='string'||!input.title.startsWith(REQUEST_PREFIX))fail('REMOTE_BRIDGE_V2_TITLE_INVALID');
   if(typeof input.body!=='string'||Buffer.byteLength(input.body)>MAX_BODY_BYTES)fail('REMOTE_BRIDGE_V2_BODY_TOO_LARGE');
   let parsed:unknown;try{parsed=JSON.parse(input.body);}catch{fail('REMOTE_BRIDGE_V2_BODY_JSON_INVALID');}

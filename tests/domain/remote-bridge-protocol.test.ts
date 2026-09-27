@@ -3,7 +3,7 @@ import { parseRemoteBridgeRequest, remoteBridgeRequestDigest } from '../../src/d
 
 const NOW=new Date('2026-09-16T18:10:00.000Z');
 const body=()=>({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1',requestId:'bridge.req.1',createdAt:'2026-09-16T18:00:00.000Z',expiresAt:'2026-09-16T18:20:00.000Z',appId:'cocwin',jobId:'bridge-probe-1',operation:'RUN',payload:{tool:'probe',cwd:'/home/cocwin/backend',args:[],timeout_ms:30000,max_bytes:262144}});
-const issue=(patch:Record<string,unknown>={})=>({title:'[COCWIN BRIDGE REQUEST] bridge.req.1',authorLogin:'zbaksa',body:JSON.stringify({...body(),...patch}),now:NOW});
+const issue=(patch:Record<string,unknown>={})=>({title:'[COCWIN BRIDGE REQUEST] bridge.req.1',authorLogin:'bridge-owner',expectedAuthorLogin:'bridge-owner',body:JSON.stringify({...body(),...patch}),now:NOW});
 const parse=(patch:Record<string,unknown>={})=>parseRemoteBridgeRequest(issue(patch));
 const code=(fn:()=>unknown,expected:string)=>expect(fn).toThrowError(expected);
 

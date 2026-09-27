@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 export type RemoteBridgeTool='probe'|'git'|'npm'|'node'|'opencode'|'verify';
 export interface RemoteBridgePayload {tool:RemoteBridgeTool;cwd:string;args:string[];timeout_ms:number;max_bytes:number;}
 export interface RemoteBridgeRequest {schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1';requestId:string;createdAt:string;expiresAt:string;appId:string;jobId:string;operation:'RUN';payload:RemoteBridgePayload;}
-export interface RemoteBridgeIssueInput {title:string;body:string;authorLogin:string;now?:Date;}
+export interface RemoteBridgeIssueInput {title:string;body:string;authorLogin:string;expectedAuthorLogin:string;now?:Date;}
 
 const REQUEST_PREFIX='[COCWIN BRIDGE REQUEST] ';
 const REQUEST_ID_RE=/^[a-z0-9][a-z0-9._:-]{0,127}$/;
@@ -23,7 +23,8 @@ function cwd(value:unknown):string{if(typeof value!=='string'||!value.startsWith
 function args(value:unknown,tool:RemoteBridgeTool):string[]{if(!Array.isArray(value)||value.length>256)fail('REMOTE_BRIDGE_ARGS_INVALID');let total=0;for(let i=0;i<value.length;i++){const arg=value[i];if(typeof arg!=='string'||arg.includes('\0'))fail('REMOTE_BRIDGE_ARGS_INVALID');const bytes=Buffer.byteLength(arg);const limit=tool==='opencode'&&i===value.length-1?24*1024:8192;if(bytes>limit)fail('REMOTE_BRIDGE_ARGS_INVALID');total+=bytes;}if(total>32768)fail('REMOTE_BRIDGE_ARGS_INVALID');return [...value] as string[];}
 
 export function parseRemoteBridgeRequest(input:RemoteBridgeIssueInput):RemoteBridgeRequest{
-  if(input.authorLogin!=='zbaksa')fail('REMOTE_BRIDGE_AUTHOR_INVALID');
+  if(typeof input.expectedAuthorLogin!=='string'||!/^[A-Za-z0-9-]{1,39}$/.test(input.expectedAuthorLogin))fail('REMOTE_BRIDGE_AUTHOR_CONFIG_INVALID');
+  if(input.authorLogin!==input.expectedAuthorLogin)fail('REMOTE_BRIDGE_AUTHOR_INVALID');
   if(typeof input.title!=='string'||!input.title.startsWith(REQUEST_PREFIX))fail('REMOTE_BRIDGE_TITLE_INVALID');
   if(typeof input.body!=='string'||Buffer.byteLength(input.body)>MAX_BODY_BYTES)fail('REMOTE_BRIDGE_BODY_TOO_LARGE');
   let parsed:unknown;try{parsed=JSON.parse(input.body);}catch{fail('REMOTE_BRIDGE_BODY_JSON_INVALID');}

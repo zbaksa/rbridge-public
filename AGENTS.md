@@ -1,21 +1,19 @@
 # AGENTS.md — RBridge
 
-## Governing operating standard
+## Working rules
 
-Use `COCWIN 024 Standard od 23092026.md` (SHA-256 `5bc1d3539ef0be5a3a1efc096c3c9ba127b8a884e03fbf762e67bb5c4b4f1cfa`) together with current COCWIN
-coordination.  Latest explicit owner instructions prevail where they conflict
-with older project notes.
+- Treat repository source, tests and public documentation as the canonical development surface.
+- Work in isolated branches/worktrees.
+- Preserve fail-closed behavior, least privilege and explicit identity boundaries.
+- Never weaken path, repository, author, app, process or request validation for convenience.
+- Never add a generic shell or request-controlled executable path.
+- Keep durable request identity and replay/collision protection intact.
+- Use regression-first changes for bug fixes: reproduce, patch minimally, then run targeted and full verification.
+- Keep source verification, CI, publication and live deployment evidence separate.
+- Do not claim PASS without fresh evidence for the exact candidate being described.
 
-## Mandatory boundaries
+## Required verification
 
-- Remote access to `aether-engine` uses only the existing COCWIN Remote Bridge.
-- Do not use SSH, Desktop Commander, or another gateway as fallback.
-- Durable, recurring, or autonomous work belongs in COCWIN Automation Engine
-  and Windmill; do not create ChatGPT Automations or a parallel scheduler.
-- Keep the frozen live COCWIN Remote Bridge v1.00 and shared root helpers intact.
-- Develop RBridge under Linux identity `rbridge` in isolated branches/worktrees.
-- Distinguish APP_SOURCE_SHA, COCWIN_SOURCE_SHA, bridge release SHA and
-  POLICY_SHA256.  Never substitute one for another.
-- Never claim PASS without fresh corresponding test evidence.
-- Public publication is blocked until private-path, secret, identity and
-  COCWIN-specific reference review is complete.
+For a release candidate run typecheck, targeted tests for touched behavior, the full test suite, lint, server build and git diff --check.
+
+Security-sensitive changes also require negative tests proving unauthorized repository, author, app, path and process inputs remain rejected.
