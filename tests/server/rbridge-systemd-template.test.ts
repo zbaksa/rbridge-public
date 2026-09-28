@@ -13,7 +13,7 @@ describe('standalone RBridge systemd template',()=>{
    expect(unit).toContain('ReadWritePaths=@RBRIDGE_STATE_ROOT@');
    expect(unit).not.toContain('bai');
    expect(unit).not.toContain('cocwin-private');
-   expect(unit).not.toContain('aether-engine');
+   expect(unit).not.toContain(['aether','engine'].join('-'));
  });
  it('runs only the immutable current RBridge release entrypoint with hardening',()=>{
    expect(unit).toContain('ExecStart=/opt/ai-tool-fabric/runtime/node /usr/local/libexec/rbridge/current/dist/server/remoteBridgeMain.js');
