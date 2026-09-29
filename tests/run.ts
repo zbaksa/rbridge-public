@@ -267,10 +267,14 @@ await test('MV3 extension manifest is minimal and service worker owns native por
     {onServerHello:()=>{helloSeen++;},onProtocolError:error=>{protocolErrors.push(error.message);}},
   );
   link.connect();equal(requestedHost,RBRIDGE_NATIVE_HOST_NAME,'fixed host');equal(port.sent.length,1,'hello sent');equal((port.sent[0] as {schema:string}).schema,'RBRIDGE_CHAT_HELLO_V1','hello schema');
-  port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));equal(helloSeen,1,'server hello accepted');
-  port.onMessage.emit({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_COMMAND_CONTRACT_UNAVAILABLE'),'unknown command blocked');
   const eventSource=new RbridgeEventSpoolV1();
   const event=await eventSource.append({eventId:'ext-event-1',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt:testReceipt}});
+  await rejects(()=>link.sendEvent(event),/PROTOCOL_NOT_NEGOTIATED/,'event blocked before peer hello');
+  port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));equal(helloSeen,1,'server hello accepted');assert(link.protocolReady,'extension protocol ready');
+  port.onMessage.emit({...hello,capabilities:hello.capabilities.slice(0,-1)});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_CAPABILITY_MISSING'),'missing capability fails closed');equal(link.protocolReady,false,'bad hello clears negotiation');
+  port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));assert(link.protocolReady,'protocol restored after valid hello');
+  port.onMessage.emit({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_COMMAND_CONTRACT_UNAVAILABLE'),'unknown command blocked');equal(link.protocolReady,false,'unknown server message clears negotiation');
+  port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));assert(link.protocolReady,'protocol renegotiated');
   await link.sendEvent(event);equal((port.sent.at(-1) as {eventId:string}).eventId,'ext-event-1','event sent');
   link.disconnect();assert(port.disconnected,'disconnect');
 });
@@ -307,12 +311,22 @@ await test('Native Host persists event before forwarding and can replay after re
       forwarded.push(value.schema);
     }};
     const relay=new NativeHostRelayV1(store,peer);
-    equal(await relay.acceptBrowserMessage(event),'EVENT_DURABLE_FORWARDED','event result');
-    assert(durableBeforeForward,'durable before forward');
-    equal(forwarded.length,1,'one forward');
-    const replayPeer={sent:0,send:async()=>{replayPeer.sent++;}};
-    const replayRelay=new NativeHostRelayV1(new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536}),replayPeer);
-    equal(await replayRelay.replayDurableEvents(),1,'replay count');equal(replayPeer.sent,1,'replay sent');
+    equal(await relay.acceptBrowserMessage(hello),'HELLO_CACHED','browser hello cached while ssh down');
+    equal(await relay.acceptBrowserMessage(event),'EVENT_DURABLE_QUEUED','event durable queued before ssh negotiation');
+    assert(!durableBeforeForward,'not forwarded before negotiation');
+    equal((await store.load()).length,1,'queued event durable');
+    equal(await relay.peerConnected(),'HELLO_SENT','hello first on peer connect');equal(forwarded[0],'RBRIDGE_CHAT_HELLO_V1','hello precedes event');
+    const accepted=await relay.acceptServerMessage(hello);equal(accepted.replayedEvents,1,'queued event replayed after hello');assert(relay.protocolReady,'native relay protocol ready');
+    assert(durableBeforeForward,'event was durable before replay forward');equal(forwarded.at(-1),'RBRIDGE_CHAT_EVENT_V1','event follows hello');
+    await rejects(()=>relay.acceptServerMessage({...hello,capabilities:hello.capabilities.slice(0,-1)}),/RBRIDGE_CAPABILITY_MISSING/,'native missing capability fails closed');
+    equal(relay.protocolReady,false,'bad native peer hello clears negotiation');
+    await relay.acceptServerMessage(hello);assert(relay.protocolReady,'native protocol restored');
+    relay.peerDisconnected();equal(relay.protocolReady,false,'disconnect invalidates negotiation');
+    await rejects(()=>relay.replayDurableEvents(),/PROTOCOL_NOT_NEGOTIATED/,'replay blocked while disconnected');
+    const queued=await source.append({eventId:'native-evt-2',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:'2026-09-29T17:00:00.001Z',payload:{receipt:testReceipt}});
+    equal(await relay.acceptBrowserMessage(queued),'EVENT_DURABLE_QUEUED','event queues during ssh outage');
+    equal(await relay.peerConnected(),'HELLO_SENT','hello replayed after reconnect');
+    const acceptedAgain=await relay.acceptServerMessage(hello);equal(acceptedAgain.replayedEvents,2,'full durable chain replayed after renegotiation');
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
