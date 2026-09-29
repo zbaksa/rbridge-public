@@ -10,6 +10,8 @@ import {canonicalChatgptProjectId,describeChatgptUrl,requireExactProjectConversa
 import {assertSafeRolloverCheckpoint,createRolloverProof,quotaEligibleForRouting,validateQuotaObservation} from '../src/domain/browserQuotaRollover.js';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {mkdtemp,rm} from 'node:fs/promises';
+import {JSDOM} from 'jsdom';
+import {locateHighConfidenceSendButton,scanAssistantTurns,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -110,6 +112,30 @@ await test('event replay chain and collision',async()=>{
   await rejects(()=>spool.append({...base,payload:{status:'different'}}),/REQUEST_ID_COLLISION/,'collision');
   const second=await spool.append({...base,eventId:'evt-2',eventType:'CAPTURE_ACTIVE'});equal(second.sequence,2,'sequence');equal(second.previousEventSha256,first.eventSha256,'chain');
   equal((await validateEventEnvelope(second,first.eventSha256,2)).eventSha256,second.eventSha256,'validate');
+});
+
+await test('assistant capture is assistant-only and preserves distinct code blocks',()=>{
+  const dom=new JSDOM('<article data-testid="conversation-turn-1"><div data-message-author-role="user"><pre><code>USER</code></pre></div></article><article data-testid="conversation-turn-2"><div data-message-author-role="assistant"><pre><code>A</code></pre><pre><code>A</code></pre><pre><code>B</code></pre></div></article>');
+  const turns=scanAssistantTurns(dom.window.document);equal(turns.length,1,'assistant only');equal(turns[0]!.assistantTurnId,'conversation-turn-2','turn id');equal(turns[0]!.codeBlocks.length,2,'dedup exact duplicate code');equal(turns[0]!.codeBlocks[1],'B','distinct code preserved');
+});
+
+await test('send locator is composer-bound, rejects voice controls and fails closed on ambiguity',()=>{
+  const one=new JSDOM('<form><div id="prompt-textarea" contenteditable="true" role="textbox">hello</div><button aria-label="Voice input" type="button">mic</button><button data-testid="send-button" type="submit">Send</button></form>');
+  const found=locateHighConfidenceSendButton(one.window.document);equal(found.status,'FOUND','found');equal(found.element?.getAttribute('data-testid'),'send-button','exact send');
+  const two=new JSDOM('<form><div id="prompt-textarea" contenteditable="true" role="textbox">hello</div><button data-testid="send-button" type="submit">Send</button><button data-testid="send-button" type="submit">Send</button></form>');
+  equal(locateHighConfidenceSendButton(two.window.document).status,'AMBIGUOUS','ambiguous');
+  const none=new JSDOM('<form><div id="prompt-textarea" contenteditable="true" role="textbox">hello</div><button aria-label="Voice input" type="button">mic</button></form>');
+  equal(locateHighConfidenceSendButton(none.window.document).status,'NOT_FOUND','voice not send');
+});
+
+await test('capture observer can defer initial scan and only reacts to child-list mutation',async()=>{
+  const dom=new JSDOM('<main></main>',{pretendToBeVisual:true});let scans=0;
+  const stop=startAssistantTurnObserver(dom.window.document,()=>{scans++;},{deferInitialScan:true,debounceMs:0});
+  equal(scans,0,'deferred');
+  const article=dom.window.document.createElement('article');article.setAttribute('data-testid','conversation-turn-9');article.innerHTML='<div data-message-author-role="assistant">ok</div>';
+  dom.window.document.querySelector('main')!.appendChild(article);
+  await new Promise(resolve=>dom.window.setTimeout(resolve,5));
+  equal(scans,1,'mutation scan');stop();
 });
 
 await test('durable event spool survives restart and preserves replay/collision rules',async()=>{
