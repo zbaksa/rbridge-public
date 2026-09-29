@@ -6,6 +6,7 @@ import {
 import {NativeMessageDecoder,assertApprovedExtensionOrigin,encodeNativeMessage} from '../src/transport/nativeMessaging.js';
 import {StdioFrameDecoder,buildSshStdioLaunch,encodeStdioFrame} from '../src/transport/sshStdio.js';
 import {selectExactBrowserTarget} from '../src/domain/browserInventory.js';
+import {canonicalChatgptProjectId,describeChatgptUrl,requireExactProjectConversationUrl,sameCanonicalChatgptProject} from '../src/browser/chatgptConversationIdentity.js';
 import {assertSafeRolloverCheckpoint,createRolloverProof,quotaEligibleForRouting,validateQuotaObservation} from '../src/domain/browserQuotaRollover.js';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -47,6 +48,17 @@ await test('browser inventory selects exactly one bound target and rejects ambig
   equal(selectExactBrowserTarget([surface],query).tabId,11,'exact target');
   await rejects(()=>Promise.resolve(selectExactBrowserTarget([{...surface,tabId:11},{...surface,tabId:12}],query)),/TARGET_AMBIGUOUS/,'ambiguous target');
   await rejects(()=>Promise.resolve(selectExactBrowserTarget([surface],{...query,conversationId:'wrong'})),/TARGET_NOT_FOUND/,'wrong conversation');
+});
+
+await test('ChatGPT donor identity parser requires exact project conversation',async()=>{
+  const project='g-p-'+'a'.repeat(32),conversation='6a819823-07fc-83eb-b324-ddf6f474ea29';
+  const identity=requireExactProjectConversationUrl('https://chatgpt.com/g/'+project+'-05-cocwin/c/'+conversation+'?foo=bar#ignored');
+  equal(identity.kind,'CONVERSATION','kind');equal(identity.conversationId,conversation,'conversation');equal(identity.canonicalProjectId,project,'canonical project');
+  assert(sameCanonicalChatgptProject(project+'-05-cocwin',project+'-renamed'),'project slug ignored for canonical identity');
+  equal(canonicalChatgptProjectId(project+'-05-cocwin'),project,'canonical helper');
+  equal(describeChatgptUrl('https://chatgpt.com/g/'+project).kind,'ROUTE','project home is not conversation');
+  await rejects(()=>Promise.resolve(requireExactProjectConversationUrl('https://chatgpt.com/g/'+project)),/PROJECT_CONVERSATION_REQUIRED/,'project home rejected');
+  await rejects(()=>Promise.resolve(describeChatgptUrl('https://example.com/g/'+project+'/c/'+conversation)),/URL_DENIED/,'foreign origin rejected');
 });
 
 await test('quota observation is fail-closed and rollover requires quiescence',async()=>{
