@@ -238,6 +238,80 @@ function canonicalOrigin(value:unknown):string{
 }
 function nowIso(now:Date):string{if(!(now instanceof Date)||!Number.isFinite(now.getTime()))fail('RBRIDGE_NOW_INVALID');return now.toISOString();}
 
+function receiptPayload(value:unknown):Record<string,JsonValue>{
+  const row=ownObject(value,'RBRIDGE_RECEIPT_REF_INVALID');
+  exactKeys(row,['schema','receiptId','receiptSchema','sha256'],'RBRIDGE_RECEIPT_REF_FIELDS_INVALID');
+  if(row.schema!=='COCWIN_RECEIPT_REF_V1')fail('RBRIDGE_RECEIPT_REF_INVALID');
+  const receiptId=assertIdentity(row.receiptId,512,'RBRIDGE_RECEIPT_ID_INVALID');
+  const receiptSchema=assertIdentity(row.receiptSchema,128,'RBRIDGE_RECEIPT_SCHEMA_INVALID');
+  if(typeof row.sha256!=='string'||!SHA256_RE.test(row.sha256))fail('RBRIDGE_RECEIPT_SHA_INVALID');
+  return {schema:'COCWIN_RECEIPT_REF_V1',receiptId,receiptSchema,sha256:row.sha256};
+}
+
+function eventPurpose(value:unknown):'PROMPT'|'RESULT'{
+  if(value!=='PROMPT'&&value!=='RESULT')fail('RBRIDGE_EVENT_PURPOSE_INVALID');
+  return value;
+}
+
+function validateFrozenEventPayload(eventType:string,value:unknown):Record<string,JsonValue>{
+  const row=ownObject(value,'RBRIDGE_EVENT_PAYLOAD_INVALID');
+  const receiptOnly=()=>{
+    exactKeys(row,['receipt'],'RBRIDGE_EVENT_PAYLOAD_FIELDS_INVALID');
+    return {receipt:receiptPayload(row.receipt)};
+  };
+  const reasonOnly=()=>{
+    exactKeys(row,['reason'],'RBRIDGE_EVENT_PAYLOAD_FIELDS_INVALID');
+    return {reason:assertReason(row.reason)};
+  };
+  switch(eventType){
+    case 'BINDING_VERIFIED':
+    case 'WRITE_LEADER_ACQUIRED':
+    case 'CAPTURE_ACTIVE':
+      return receiptOnly();
+    case 'BINDING_LOST':
+    case 'WRITE_LEADER_RELEASED':
+    case 'CAPTURE_LOST':
+      return reasonOnly();
+    case 'SEND_INTENT_PERSISTED':
+    case 'SEND_VERIFIED':{
+      exactKeys(row,['purpose','receipt'],'RBRIDGE_EVENT_PAYLOAD_FIELDS_INVALID');
+      return {purpose:eventPurpose(row.purpose),receipt:receiptPayload(row.receipt)};
+    }
+    case 'SEND_UNCERTAIN':{
+      exactKeys(row,['purpose','reason','receipt'],'RBRIDGE_EVENT_PAYLOAD_FIELDS_INVALID');
+      return {purpose:eventPurpose(row.purpose),reason:assertReason(row.reason),receipt:receiptPayload(row.receipt)};
+    }
+    case 'RESPONSE_CAPTURED':{
+      exactKeys(row,['captureReceipt','machineBlockUtf8'],'RBRIDGE_EVENT_PAYLOAD_FIELDS_INVALID');
+      let machineBlockUtf8:null|string=null;
+      if(row.machineBlockUtf8!==null){
+        if(typeof row.machineBlockUtf8!=='string'||encoder.encode(row.machineBlockUtf8).byteLength>M0_LIMITS.maxMachineBlockUtf8Bytes)fail('MACHINE_RESPONSE_TOO_LARGE');
+        machineBlockUtf8=row.machineBlockUtf8;
+      }
+      return {captureReceipt:receiptPayload(row.captureReceipt),machineBlockUtf8};
+    }
+    case 'QUOTA_OBSERVED':{
+      exactKeys(row,['capability','state','resetAt','receipt'],'RBRIDGE_EVENT_PAYLOAD_FIELDS_INVALID');
+      if(row.capability!=='BROWSER_WORK'&&row.capability!=='BROWSER_CHAT_FAST'&&row.capability!=='BROWSER_CHAT_STRONG')fail('RBRIDGE_QUOTA_CAPABILITY_INVALID');
+      if(row.state!=='AVAILABLE'&&row.state!=='QUOTA_EXHAUSTED'&&row.state!=='RATE_LIMITED'&&row.state!=='AUTH_REQUIRED'&&
+        row.state!=='MODEL_UNAVAILABLE'&&row.state!=='SURFACE_UNAVAILABLE'&&row.state!=='UI_PROTOCOL_CHANGED'&&
+        row.state!=='NETWORK_UNAVAILABLE'&&row.state!=='PROBE_REQUIRED'&&row.state!=='UNKNOWN')fail('RBRIDGE_QUOTA_STATE_INVALID');
+      const resetAt=row.resetAt===null?null:assertIso(row.resetAt,'RBRIDGE_QUOTA_RESET_AT_INVALID');
+      return {capability:row.capability,state:row.state,resetAt,receipt:receiptPayload(row.receipt)};
+    }
+    case 'ROLLOVER_VERIFIED':{
+      exactKeys(row,['previousConversationId','newConversationId','bindingReceipt'],'RBRIDGE_EVENT_PAYLOAD_FIELDS_INVALID');
+      return {
+        previousConversationId:assertIdentity(row.previousConversationId,256,'RBRIDGE_ROLLOVER_PREVIOUS_INVALID'),
+        newConversationId:assertIdentity(row.newConversationId,256,'RBRIDGE_ROLLOVER_NEW_INVALID'),
+        bindingReceipt:receiptPayload(row.bindingReceipt),
+      };
+    }
+    default:
+      fail('RBRIDGE_EVENT_TYPE_INVALID');
+  }
+}
+
 export function canonicalJson(value:unknown):string{
   const visit=(item:unknown):JsonValue=>{
     if(item===null||typeof item==='string'||typeof item==='boolean')return item;
@@ -453,14 +527,15 @@ export class RbridgeEventSpoolV1{
     const eventId=assertIdentity(input.eventId,192,'RBRIDGE_EVENT_ID_INVALID'),sessionId=assertSession(input.sessionId),generation=assertGeneration(input.generation);
     const attemptId=input.attemptId===null?null:assertAttempt(input.attemptId,sessionId),effectId=input.effectId===null?null:assertEffect(input.effectId),observedAt=assertIso(input.observedAt);
     const eventType=assertIdentity(input.eventType,128,'RBRIDGE_EVENT_TYPE_INVALID');
+    const payload=validateFrozenEventPayload(eventType,input.payload);
     const existing=this.byId.get(eventId);
     if(existing){
-      const replayWithoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence:existing.sequence,previousEventSha256:existing.previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload:input.payload};
+      const replayWithoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence:existing.sequence,previousEventSha256:existing.previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload};
       if(await canonicalDigest(replayWithoutSha)!==existing.eventSha256)fail('REQUEST_ID_COLLISION');
       return existing;
     }
     const sequence=this.events.length+1,previousEventSha256=this.events.at(-1)?.eventSha256??null;
-    const withoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence,previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload:input.payload};
+    const withoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence,previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload};
     const eventSha256=await canonicalDigest(withoutSha),candidate:RbridgeChatEventV1={...withoutSha,eventSha256};
     this.events.push(candidate);this.byId.set(eventId,candidate);return candidate;
   }
@@ -474,9 +549,10 @@ export async function validateEventEnvelope(input:unknown,expectedPreviousSha:st
   const previous=row.previousEventSha256;if(previous!==null&&(typeof previous!=='string'||!SHA256_RE.test(previous)))fail('RBRIDGE_EVENT_PREVIOUS_DIGEST_INVALID');
   if(expectedSequence!==null&&sequence!==expectedSequence)fail('RBRIDGE_EVENT_SEQUENCE_GAP');
   if(expectedPreviousSha!==null&&previous!==expectedPreviousSha)fail('RBRIDGE_EVENT_CHAIN_MISMATCH');
-  const payload=ownObject(row.payload,'RBRIDGE_EVENT_PAYLOAD_INVALID') as Record<string,JsonValue>;
+  const eventType=assertIdentity(row.eventType,128,'RBRIDGE_EVENT_TYPE_INVALID');
+  const payload=validateFrozenEventPayload(eventType,row.payload);
   const candidate={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId:assertIdentity(row.eventId,192,'RBRIDGE_EVENT_ID_INVALID'),sequence,previousEventSha256:previous as string|null,
-    eventType:assertIdentity(row.eventType,128,'RBRIDGE_EVENT_TYPE_INVALID'),sessionId,generation:assertGeneration(row.generation),
+    eventType,sessionId,generation:assertGeneration(row.generation),
     attemptId:row.attemptId===null?null:assertAttempt(row.attemptId,sessionId),effectId:row.effectId===null?null:assertEffect(row.effectId),observedAt:assertIso(row.observedAt),payload};
   if(typeof row.eventSha256!=='string'||!SHA256_RE.test(row.eventSha256))fail('RBRIDGE_EVENT_DIGEST_INVALID');
   if(await canonicalDigest(candidate)!==row.eventSha256)fail('RBRIDGE_EVENT_DIGEST_INVALID');

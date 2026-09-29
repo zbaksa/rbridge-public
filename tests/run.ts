@@ -37,6 +37,8 @@ async function test(name:string,fn:()=>unknown|Promise<unknown>){
 
 const session='exta-'+'a'.repeat(32),generation='123e4567-e89b-42d3-a456-426614174000',attempt=session+':a:1';
 const effect='b'.repeat(64),challenge='c'.repeat(64),at='2026-09-29T17:00:00.000Z';
+const testReceipt={schema:'COCWIN_RECEIPT_REF_V1' as const,receiptId:'receipt-1',receiptSchema:'RBRIDGE_TEST_RECEIPT_V1',sha256:'d'.repeat(64)};
+const otherReceipt={...testReceipt,receiptId:'receipt-2'};
 const target={sessionId:session,generation,browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',windowId:7,tabId:11,origin:'https://chatgpt.com',projectId:'05-cocwin',conversationId:'conv-123',conversationGeneration:1,ownerSessionId:session};
 const hello={schema:'RBRIDGE_CHAT_HELLO_V1' as const,protocolMajor:1 as const,protocolMinor:3,releaseSha:'1'.repeat(40),maxMessageBytes:65536,capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES],browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',nativeHostVersion:'1.0.0'};
 
@@ -131,11 +133,21 @@ await test('frozen assistant output budget',async()=>{
   await rejects(()=>captureResponse({assistantTurnId:'turn-big',responseText:'x'.repeat(16385),machineBlockUtf8:null},tx,capture,new Date(at)),/OUTPUT_BUDGET_EXCEEDED/,'output cap');
 });
 
+await test('event type and payload shapes are frozen fail-closed',async()=>{
+  const spool=new RbridgeEventSpoolV1();
+  const base={eventId:'strict-1',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at};
+  await rejects(()=>spool.append({...base,eventType:'UNFROZEN_EVENT',payload:{}}),/EVENT_TYPE_INVALID/,'unknown event type');
+  await rejects(()=>spool.append({...base,eventType:'BINDING_VERIFIED',payload:{receipt:testReceipt,extra:true}}),/EVENT_PAYLOAD_FIELDS_INVALID/,'extra payload field');
+  await rejects(()=>spool.append({...base,eventType:'SEND_VERIFIED',payload:{purpose:'OTHER',receipt:testReceipt}}),/EVENT_PURPOSE_INVALID/,'invalid purpose');
+  const quota=await spool.append({...base,eventId:'strict-quota',eventType:'QUOTA_OBSERVED',payload:{capability:'BROWSER_CHAT_STRONG',state:'AVAILABLE',resetAt:'2026-10-01T00:00:00.000Z',receipt:testReceipt}});
+  equal(quota.eventType,'QUOTA_OBSERVED','valid quota event');
+});
+
 await test('event replay chain and collision',async()=>{
   const spool=new RbridgeEventSpoolV1();
-  const base={eventId:'evt-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}};
+  const base={eventId:'evt-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt:testReceipt}};
   const first=await spool.append(base),replay=await spool.append(base);equal(replay.eventSha256,first.eventSha256,'replay');equal(spool.size,1,'size');
-  await rejects(()=>spool.append({...base,payload:{status:'different'}}),/REQUEST_ID_COLLISION/,'collision');
+  await rejects(()=>spool.append({...base,payload:{receipt:otherReceipt}}),/REQUEST_ID_COLLISION/,'collision');
   const second=await spool.append({...base,eventId:'evt-2',eventType:'CAPTURE_ACTIVE'});equal(second.sequence,2,'sequence');equal(second.previousEventSha256,first.eventSha256,'chain');
   equal((await validateEventEnvelope(second,first.eventSha256,2)).eventSha256,second.eventSha256,'validate');
 });
@@ -168,7 +180,7 @@ await test('durable event spool survives restart and preserves replay/collision 
   const root=await mkdtemp(join(tmpdir(),'rbridge-chat-events-'));
   try{
     const source=new RbridgeEventSpoolV1();
-    const base={eventId:'durable-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}};
+    const base={eventId:'durable-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt:testReceipt}};
     const first=await source.append(base);
     const second=await source.append({...base,eventId:'durable-2',eventType:'CAPTURE_ACTIVE'});
     const store=new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536});
@@ -177,8 +189,8 @@ await test('durable event spool survives restart and preserves replay/collision 
     const loaded=await reopened.load();equal(loaded.length,2,'restart event count');equal(loaded[1]!.previousEventSha256,first.eventSha256,'restart chain');
     equal((await reopened.append(first)).eventSha256,first.eventSha256,'durable replay');
     equal((await reopened.load()).length,2,'replay not duplicated');
-    await rejects(()=>reopened.append({...first,payload:{status:'forged'}}),/EVENT_DIGEST_INVALID/,'forged same-id same-sha payload rejected');
-    const other=new RbridgeEventSpoolV1(),conflict=await other.append({...base,payload:{status:'different'}});
+    await rejects(()=>reopened.append({...first,payload:{receipt:otherReceipt}}),/EVENT_DIGEST_INVALID/,'forged same-id same-sha payload rejected');
+    const other=new RbridgeEventSpoolV1(),conflict=await other.append({...base,payload:{receipt:otherReceipt}});
     await rejects(()=>reopened.append(conflict),/REQUEST_ID_COLLISION/,'durable collision');
   }finally{await rm(root,{recursive:true,force:true});}
 });
@@ -213,7 +225,7 @@ await test('MV3 extension manifest is minimal and service worker owns native por
   port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));equal(helloSeen,1,'server hello accepted');
   port.onMessage.emit({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_COMMAND_CONTRACT_UNAVAILABLE'),'unknown command blocked');
   const eventSource=new RbridgeEventSpoolV1();
-  const event=await eventSource.append({eventId:'ext-event-1',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}});
+  const event=await eventSource.append({eventId:'ext-event-1',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt:testReceipt}});
   await link.sendEvent(event);equal((port.sent.at(-1) as {eventId:string}).eventId,'ext-event-1','event sent');
   link.disconnect();assert(port.disconnected,'disconnect');
 });
@@ -239,7 +251,7 @@ await test('Native Host persists event before forwarding and can replay after re
   const root=await mkdtemp(join(tmpdir(),'rbridge-native-relay-'));
   try{
     const source=new RbridgeEventSpoolV1();
-    const event=await source.append({eventId:'native-evt-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}});
+    const event=await source.append({eventId:'native-evt-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt:testReceipt}});
     const store=new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536});
     let durableBeforeForward=false;const forwarded:string[]=[];
     const peer={send:async(value:{schema:string;eventId?:string})=>{
