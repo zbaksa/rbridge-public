@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import type {Signals} from 'node:os';
+type Signals=NodeJS.Signals;
 import {buildSshStdioLaunch,encodeStdioFrame,StdioFrameDecoder,type SshStdioLaunchConfig} from '../transport/sshStdio.js';
 
 export type PersistentSshStateV1='STOPPED'|'CONNECTING'|'CONNECTED'|'BACKOFF';
