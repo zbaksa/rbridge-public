@@ -21,6 +21,7 @@ import {parseNativeHostInvocation} from '../src/nativeHost/nativeHostInvocation.
 import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFactoryV1,type SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
 import {buildRbridgeExtensionManifest} from '../src/extension/extensionManifest.js';
 import {ExtensionNativePortLinkV1,RBRIDGE_NATIVE_HOST_NAME,type ExtensionNativePortV1} from '../src/extension/nativePortServiceWorker.js';
+import {ChromeTabsInventoryAdapterV1,discoverChatgptConversationTabs,selectExactDiscoveredChatgptTarget} from '../src/extension/chromeTabInventory.js';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -49,6 +50,22 @@ await test('HELLO required capabilities and negotiated limits',async()=>{
   const peer={...hello,protocolMinor:1,maxMessageBytes:32768,releaseSha:'2'.repeat(40)};
   const out=negotiateHello(hello,peer);equal(out.protocolMinor,1,'minor');equal(out.maxMessageBytes,32768,'bytes');
   await rejects(()=>Promise.resolve(negotiateHello(hello,{...peer,capabilities:peer.capabilities.slice(0,-1)})),/RBRIDGE_CAPABILITY_MISSING/,'cap missing');
+});
+
+await test('Chrome tabs discovery is exact and duplicate conversation tabs are ambiguous',async()=>{
+  const project='g-p-'+'a'.repeat(32),conversation='6a819823-07fc-83eb-b324-ddf6f474ea29';
+  const tabs=[
+    {id:1,windowId:10,url:'https://chatgpt.com/g/'+project+'-05-cocwin/c/'+conversation,active:true},
+    {id:2,windowId:10,url:'https://chatgpt.com/g/'+project,active:false},
+    {id:3,windowId:11,url:'https://example.com/g/'+project+'/c/'+conversation,active:false},
+    {id:4,windowId:11,url:'https://chatgpt.com/',active:false},
+  ];
+  const rows=discoverChatgptConversationTabs(tabs,'chrome-main','profile-main');
+  equal(rows.length,1,'only exact conversation');equal(rows[0]!.tabId,1,'tab');equal(rows[0]!.canonicalProjectId,project,'canonical project');
+  equal(selectExactDiscoveredChatgptTarget(rows,{browserInstanceId:'chrome-main',browserProfileId:'profile-main',canonicalProjectId:project,conversationId:conversation}).tabId,1,'select exact');
+  const adapter=new ChromeTabsInventoryAdapterV1({query:async()=>tabs},'chrome-main','profile-main');equal((await adapter.discover()).length,1,'adapter discovery');
+  const dup=discoverChatgptConversationTabs([tabs[0]!,{...tabs[0]!,id:5,windowId:12}],'chrome-main','profile-main');
+  await rejects(()=>Promise.resolve(selectExactDiscoveredChatgptTarget(dup,{browserInstanceId:'chrome-main',browserProfileId:'profile-main',canonicalProjectId:project,conversationId:conversation})),/TARGET_AMBIGUOUS/,'duplicate exact conversation tabs ambiguous');
 });
 
 await test('browser inventory selects exactly one bound target and rejects ambiguity',async()=>{
