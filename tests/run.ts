@@ -1,6 +1,6 @@
 import {
   REQUIRED_RBRIDGE_CAPABILITIES,RbridgeEventSpoolV1,acquireWriteLeader,activateCapture,canonicalDigest,canonicalJson,captureResponse,
-  createSendTransaction,markClicked,markResponseVerified,markSendReady,markSendUncertain,markSentVerified,markWaitingResponse,
+  createSendTransaction,markClicked,markResponseVerified,markSendReady,markSendUncertain,markSentVerified,markWaitingResponse,stopSend,supersedeSend,
   negotiateHello,persistSendIntent,prepareBinding,projectSendReceipt,validateEventEnvelope,verifyBinding
 } from '../src/domain/rbridgeChatCore.js';
 import {NativeMessageDecoder,assertApprovedExtensionOrigin,encodeNativeMessage} from '../src/transport/nativeMessaging.js';
@@ -91,7 +91,7 @@ await test('quota observation is fail-closed and rollover requires quiescence',a
   const receipt={schema:'COCWIN_RECEIPT_REF_V1' as const,receiptId:'quota-1',receiptSchema:'RBRIDGE_QUOTA_RECEIPT_V1',sha256:'d'.repeat(64)};
   assert(quotaEligibleForRouting({capability:'BROWSER_CHAT_STRONG',state:'AVAILABLE',resetAt:null,receipt}),'available routes');
   equal(quotaEligibleForRouting({capability:'BROWSER_CHAT_STRONG',state:'UNKNOWN',resetAt:null,receipt}),false,'unknown blocked');
-  await rejects(()=>Promise.resolve(validateQuotaObservation({capability:'BROWSER_WORK',state:'AVAILABLE',resetAt:'2026-10-01T00:00:00.000Z',receipt})),/AVAILABLE_RESET_INVALID/,'available reset rejected');
+  equal(validateQuotaObservation({capability:'BROWSER_WORK',state:'AVAILABLE',resetAt:'2026-10-01T00:00:00.000Z',receipt}).resetAt,'2026-10-01T00:00:00.000Z','available may retain known reset time');
   assertSafeRolloverCheckpoint({durableSessionState:true,streamedResponseActive:false,currentSend:null});
   await rejects(()=>Promise.resolve(assertSafeRolloverCheckpoint({durableSessionState:false,streamedResponseActive:false,currentSend:null})),/SESSION_NOT_DURABLE/,'durability required');
   const proof=createRolloverProof({previousConversationId:'conv-123',newConversationId:'conv-124',bindingReceipt:receipt},{durableSessionState:true,streamedResponseActive:false,currentSend:null});
@@ -115,6 +115,8 @@ await test('SEND intent-before-click and uncertainty reconciliation',async()=>{
   tx=markSendReady(tx);tx=persistSendIntent(tx,new Date(at));tx=markClicked(tx,new Date(at));tx=markSendUncertain(tx);
   await rejects(()=>Promise.resolve(persistSendIntent(tx,new Date(at))),/SEND_STATE_INVALID/,'blind resend');
   tx=markSentVerified(tx,new Date(at));equal((await projectSendReceipt(tx,new Date(at))).transactionState,'SENT_VERIFIED','send receipt');
+  await rejects(()=>Promise.resolve(stopSend(tx,'OWNER_STOP')),/SEND_RESPONSE_PENDING/,'stop cannot hide verified send awaiting response');
+  await rejects(()=>Promise.resolve(supersedeSend(tx,'NEW_ATTEMPT')),/SEND_RESPONSE_PENDING/,'supersede cannot hide verified send awaiting response');
   tx=markWaitingResponse(tx);
   const captured=await captureResponse({assistantTurnId:'turn-1',responseText:'ok',machineBlockUtf8:null},tx,capture,new Date(at));
   equal(captured.receipt.responseUtf8Bytes,2,'capture bytes');

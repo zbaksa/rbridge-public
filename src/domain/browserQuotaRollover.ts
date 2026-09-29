@@ -48,7 +48,6 @@ export function validateQuotaObservation(input:BrowserQuotaObservationV1):Browse
   if(!QUOTA_CAPABILITIES.has(input.capability))fail('RBRIDGE_QUOTA_CAPABILITY_INVALID');
   if(!QUOTA_STATES.has(input.state))fail('RBRIDGE_QUOTA_STATE_INVALID');
   const resetAt=isoOrNull(input.resetAt);
-  if(input.state==='AVAILABLE'&&resetAt!==null)fail('RBRIDGE_QUOTA_AVAILABLE_RESET_INVALID');
   return {capability:input.capability,state:input.state,resetAt,receipt:receipt(input.receipt)};
 }
 export function quotaEligibleForRouting(input:BrowserQuotaObservationV1):boolean{

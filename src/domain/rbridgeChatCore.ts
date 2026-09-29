@@ -403,11 +403,13 @@ export function markFailedBeforeClick(tx:RbridgeSendTransactionV1,reason:string)
 export function markSendUncertain(tx:RbridgeSendTransactionV1,reason='SEND_UNCERTAIN'):RbridgeSendTransactionV1{return transition(tx,['SEND_INTENT','CLICKED_UNVERIFIED','SENT_VERIFIED','WAITING_RESPONSE'],'UNCERTAIN',{reason:assertReason(reason)});}
 export function stopSend(tx:RbridgeSendTransactionV1,reason:string):RbridgeSendTransactionV1{
   if(tx.state==='SEND_INTENT'||tx.state==='CLICKED_UNVERIFIED'||tx.state==='UNCERTAIN')fail('SEND_UNCERTAIN');
-  return transition(tx,['PREPARING','READY_NOT_SENT','SENT_VERIFIED','WAITING_RESPONSE'],'STOPPED',{reason:assertReason(reason)});
+  if(tx.state==='SENT_VERIFIED'||tx.state==='WAITING_RESPONSE')fail('RBRIDGE_SEND_RESPONSE_PENDING');
+  return transition(tx,['PREPARING','READY_NOT_SENT'],'STOPPED',{reason:assertReason(reason)});
 }
 export function supersedeSend(tx:RbridgeSendTransactionV1,reason:string):RbridgeSendTransactionV1{
   if(tx.state==='SEND_INTENT'||tx.state==='CLICKED_UNVERIFIED'||tx.state==='UNCERTAIN')fail('SEND_UNCERTAIN');
-  return transition(tx,['PREPARING','READY_NOT_SENT','SENT_VERIFIED','WAITING_RESPONSE'],'SUPERSEDED',{reason:assertReason(reason)});
+  if(tx.state==='SENT_VERIFIED'||tx.state==='WAITING_RESPONSE')fail('RBRIDGE_SEND_RESPONSE_PENDING');
+  return transition(tx,['PREPARING','READY_NOT_SENT'],'SUPERSEDED',{reason:assertReason(reason)});
 }
 
 function sendProjectionState(state:SendTxState):RbridgeChatSendReceiptV1['transactionState']{
