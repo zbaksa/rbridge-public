@@ -11,6 +11,7 @@ export interface RbridgeChatEventStoreConfig{
 const DEFAULT_MAX_EVENTS=4096;
 const DEFAULT_MAX_BYTES=8*1024*1024;
 function fail(code:string):never{throw new Error(code);}
+function cloneEvent(value:RbridgeChatEventV1):RbridgeChatEventV1{return structuredClone(value);}
 function privateMode(mode:number):boolean{return process.platform==='win32'||(mode&0o077)===0;}
 function samePath(a:string,b:string):boolean{
   const left=resolve(a),right=resolve(b);
@@ -73,7 +74,7 @@ export class RbridgeChatEventStoreV1{
   async load():Promise<readonly RbridgeChatEventV1[]>{
     await this.queue;
     await this.loadUnsafe();
-    return [...this.events];
+    return this.events.map(cloneEvent);
   }
 
   async append(eventInput:RbridgeChatEventV1):Promise<RbridgeChatEventV1>{
@@ -87,7 +88,7 @@ export class RbridgeChatEventStoreV1{
       const existing=this.byId.get(event.eventId);
       if(existing){
         if(existing.eventSha256!==event.eventSha256)fail('REQUEST_ID_COLLISION');
-        return existing;
+        return cloneEvent(existing);
       }
       if(this.events.length>=this.maxEvents)fail('RBRIDGE_EVENT_STORE_EVENT_LIMIT_EXCEEDED');
       const previous=this.events.at(-1)?.eventSha256??null,nextSequence=this.events.length+1;
@@ -106,7 +107,7 @@ export class RbridgeChatEventStoreV1{
         throw error instanceof Error&&error.message.startsWith('RBRIDGE_')?error:new Error('RBRIDGE_EVENT_STORE_WRITE_UNCERTAIN');
       }finally{await handle.close().catch(()=>{});}
       if(process.platform!=='win32')await chmod(this.path,0o600);
-      this.events.push(event);this.byId.set(event.eventId,event);this.bytes+=lineBytes;return event;
+      this.events.push(event);this.byId.set(event.eventId,event);this.bytes+=lineBytes;return cloneEvent(event);
     }finally{resolveQueue();}
   }
 }

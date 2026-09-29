@@ -21,6 +21,7 @@ const SESSION=/^exta-[0-9a-f]{32}$/;
 const GENERATION=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ATTEMPT=/^exta-[0-9a-f]{32}:a:[1-9][0-9]*$/;
 function fail(code:string):never{throw new Error(code);}
+function cloneReceipt(value:RbridgeReceiptV1):RbridgeReceiptV1{return structuredClone(value);}
 function row(value:unknown,code:string):Record<string,unknown>{
   if(value===null||typeof value!=='object'||Array.isArray(value))fail(code);
   return value as Record<string,unknown>;
@@ -173,7 +174,7 @@ export class RbridgeReceiptStoreV1 {
 
   async get(receiptId:string):Promise<RbridgeReceiptV1|null>{
     await this.queue;await this.loadUnsafe();
-    return this.receipts.get(text(receiptId,512,'RBRIDGE_RECEIPT_ID_INVALID'))??null;
+    const value=this.receipts.get(text(receiptId,512,'RBRIDGE_RECEIPT_ID_INVALID'));return value?cloneReceipt(value):null;
   }
 
   async put(input:unknown):Promise<CocwinReceiptRefV1>{

@@ -177,6 +177,32 @@ await test('capture observer can defer initial scan and only reacts to child-lis
   equal(scans,1,'mutation scan');stop();
 });
 
+await test('authority-store readbacks are immutable copies',async()=>{
+  const eventRoot=await mkdtemp(join(tmpdir(),'rbridge-event-copy-'));
+  const receiptRoot=await mkdtemp(join(tmpdir(),'rbridge-receipt-copy-'));
+  try{
+    const source=new RbridgeEventSpoolV1();
+    const event=await source.append({eventId:'copy-event-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt:testReceipt}});
+    const eventStore=new RbridgeChatEventStoreV1({root:eventRoot,maxEvents:10,maxBytes:65536});
+    const returned=await eventStore.append(event);
+    (returned.payload.receipt as Record<string,unknown>).receiptId='mutated';
+    const reread=await eventStore.load();
+    equal(((reread[0]!.payload.receipt as Record<string,unknown>).receiptId as string),testReceipt.receiptId,'event store internal authority unchanged');
+
+    const verified=await verifyBinding(prepareBinding(target,new Date(at)),target,new Date(at));
+    const receiptStore=new RbridgeReceiptStoreV1({root:receiptRoot,maxReceipts:10,maxBytes:65536});
+    await receiptStore.put(verified.receipt);
+    const first=await receiptStore.get(verified.receipt.receiptId);
+    assert(first!==null,'receipt returned');
+    (first as {projectId?:string}).projectId='mutated';
+    const second=await receiptStore.get(verified.receipt.receiptId);
+    equal((second as {projectId?:string})?.projectId,verified.receipt.projectId,'receipt store internal authority unchanged');
+  }finally{
+    await rm(eventRoot,{recursive:true,force:true});
+    await rm(receiptRoot,{recursive:true,force:true});
+  }
+});
+
 await test('durable receipt store verifies digest, restart replay and ID collision',async()=>{
   const root=await mkdtemp(join(tmpdir(),'rbridge-receipts-'));
   try{

@@ -518,11 +518,13 @@ export async function captureResponse(input:{assistantTurnId:string;responseText
   return {receipt:{...withoutSha,sha256:await canonicalDigest(withoutSha)},machineBlockUtf8:input.machineBlockUtf8};
 }
 
+function cloneEventValue(value:RbridgeChatEventV1):RbridgeChatEventV1{return structuredClone(value);}
+
 export class RbridgeEventSpoolV1{
   private readonly events:RbridgeChatEventV1[]=[];
   private readonly byId=new Map<string,RbridgeChatEventV1>();
   get size():number{return this.events.length;}
-  list():readonly RbridgeChatEventV1[]{return this.events;}
+  list():readonly RbridgeChatEventV1[]{return this.events.map(cloneEventValue);}
   async append(input:{eventId:string;eventType:string;sessionId:string;generation:string;attemptId:string|null;effectId:string|null;observedAt:string;payload:Record<string,JsonValue>}):Promise<RbridgeChatEventV1>{
     const eventId=assertIdentity(input.eventId,192,'RBRIDGE_EVENT_ID_INVALID'),sessionId=assertSession(input.sessionId),generation=assertGeneration(input.generation);
     const attemptId=input.attemptId===null?null:assertAttempt(input.attemptId,sessionId),effectId=input.effectId===null?null:assertEffect(input.effectId),observedAt=assertIso(input.observedAt);
@@ -532,12 +534,12 @@ export class RbridgeEventSpoolV1{
     if(existing){
       const replayWithoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence:existing.sequence,previousEventSha256:existing.previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload};
       if(await canonicalDigest(replayWithoutSha)!==existing.eventSha256)fail('REQUEST_ID_COLLISION');
-      return existing;
+      return cloneEventValue(existing);
     }
     const sequence=this.events.length+1,previousEventSha256=this.events.at(-1)?.eventSha256??null;
     const withoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence,previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload};
     const eventSha256=await canonicalDigest(withoutSha),candidate:RbridgeChatEventV1={...withoutSha,eventSha256};
-    this.events.push(candidate);this.byId.set(eventId,candidate);return candidate;
+    this.events.push(candidate);this.byId.set(eventId,candidate);return cloneEventValue(candidate);
   }
 }
 
