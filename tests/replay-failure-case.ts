@@ -20,7 +20,7 @@ export async function verifyReplayFailureFailClosed():Promise<void>{
   };
   try{
     const source=new RbridgeEventSpoolV1();
-    const event=await source.append({eventId:'rf-1',eventType:'CAPTURE_ACTIVE',sessionId,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt}});
+    const event=await source.append({eventId:'rf-1',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{receipt}});
     const store=new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536});
     await store.append(event);
     const peer={send:async(value:{schema:string})=>{if(value.schema==='RBRIDGE_CHAT_EVENT_V1')throw new Error('TEST_REPLAY_FAILURE');}};
@@ -31,7 +31,7 @@ export async function verifyReplayFailureFailClosed():Promise<void>{
     try{await relay.acceptServerMessage(hello);}catch(error){failed=error instanceof Error&&error.message==='TEST_REPLAY_FAILURE';}
     if(!failed)throw new Error('REPLAY_TEST_EXPECTED_FAILURE_MISSING');
     if(relay.protocolReady)throw new Error('REPLAY_TEST_NEGOTIATION_NOT_CLEARED');
-    const second=await source.append({eventId:'rf-2',eventType:'CAPTURE_ACTIVE',sessionId,generation,attemptId:attempt,effectId:effect,observedAt:'2026-09-29T17:00:00.001Z',payload:{receipt}});
+    const second=await source.append({eventId:'rf-2',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:'2026-09-29T17:00:00.001Z',payload:{receipt}});
     if(await relay.acceptBrowserMessage(second)!=='EVENT_DURABLE_QUEUED')throw new Error('REPLAY_TEST_EVENT_NOT_QUEUED');
   }finally{
     await rm(root,{recursive:true,force:true});
