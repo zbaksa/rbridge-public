@@ -18,6 +18,8 @@ import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
 import {routeServerToNative} from '../src/nativeHost/nativeHostProtocol.js';
 import {NativeHostRelayV1} from '../src/nativeHost/nativeHostRelay.js';
 import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFactoryV1,type SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
+import {buildRbridgeExtensionManifest} from '../src/extension/extensionManifest.js';
+import {ExtensionNativePortLinkV1,RBRIDGE_NATIVE_HOST_NAME,type ExtensionNativePortV1} from '../src/extension/nativePortServiceWorker.js';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -158,6 +160,41 @@ await test('durable event spool survives restart and preserves replay/collision 
     const other=new RbridgeEventSpoolV1(),conflict=await other.append({...base,payload:{status:'different'}});
     await rejects(()=>reopened.append(conflict),/REQUEST_ID_COLLISION/,'durable collision');
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('Chrome native framing uses platform native byte order',()=>{
+  const wire=encodeNativeMessage({schema:'ENDIAN_PROBE'});
+  const little=new Uint8Array(new Uint16Array([0x0102]).buffer)[0]===0x02;
+  const size=new DataView(wire.buffer,wire.byteOffset,wire.byteLength).getUint32(0,little);
+  equal(size,wire.byteLength-4,'native byte order length');
+});
+
+await test('MV3 extension manifest is minimal and service worker owns native port',async()=>{
+  const manifest=buildRbridgeExtensionManifest('1.0.0');
+  assert(manifest.permissions.includes('nativeMessaging'),'native messaging permission');
+  assert(!manifest.permissions.includes('debugger' as 'tabs'),'no debugger permission');
+  assert(!('content_scripts' in manifest),'no static content-script authority');
+  equal(manifest.background.type,'module','module service worker');
+
+  class FakeEvent<T>{listeners:Array<(value:T)=>void>=[];addListener(listener:(value:T)=>void){this.listeners.push(listener);}emit(value:T){for(const listener of this.listeners)listener(value);}}
+  class FakePort implements ExtensionNativePortV1{
+    sent:unknown[]=[];disconnected=false;onMessage=new FakeEvent<unknown>();onDisconnect=new FakeEvent<void>();
+    postMessage(value:unknown){this.sent.push(value);}
+    disconnect(){this.disconnected=true;this.onDisconnect.emit(undefined);}
+  }
+  const port=new FakePort();let requestedHost='';let helloSeen=0;const protocolErrors:string[]=[];
+  const link=new ExtensionNativePortLinkV1(
+    {connectNative:name=>{requestedHost=name;return port;}},
+    hello,
+    {onServerHello:()=>{helloSeen++;},onProtocolError:error=>{protocolErrors.push(error.message);}},
+  );
+  link.connect();equal(requestedHost,RBRIDGE_NATIVE_HOST_NAME,'fixed host');equal(port.sent.length,1,'hello sent');equal((port.sent[0] as {schema:string}).schema,'RBRIDGE_CHAT_HELLO_V1','hello schema');
+  port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));equal(helloSeen,1,'server hello accepted');
+  port.onMessage.emit({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_COMMAND_CONTRACT_UNAVAILABLE'),'unknown command blocked');
+  const eventSource=new RbridgeEventSpoolV1();
+  const event=await eventSource.append({eventId:'ext-event-1',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}});
+  await link.sendEvent(event);equal((port.sent.at(-1) as {eventId:string}).eventId,'ext-event-1','event sent');
+  link.disconnect();assert(port.disconnected,'disconnect');
 });
 
 await test('Native Host manifest and router are strict allowlists',async()=>{

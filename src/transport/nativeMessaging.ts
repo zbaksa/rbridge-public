@@ -1,6 +1,7 @@
 import {M0_LIMITS,canonicalJson} from '../domain/rbridgeChatCore.js';
 
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
+const nativeLittleEndian=new Uint8Array(new Uint16Array([0x0102]).buffer)[0]===0x02;
 function fail(code:string):never{throw new Error(code);}
 
 export function assertApprovedExtensionOrigin(origin:string,expectedExtensionId:string):void{
@@ -13,7 +14,7 @@ export function encodeNativeMessage(value:unknown,maxBytes=M0_LIMITS.maxRbridgeC
   const body=encoder.encode(canonicalJson(value));
   if(body.byteLength===0||body.byteLength>maxBytes)fail('RBRIDGE_NATIVE_MESSAGE_TOO_LARGE');
   const out=new Uint8Array(4+body.byteLength),view=new DataView(out.buffer);
-  view.setUint32(0,body.byteLength,true);out.set(body,4);return out;
+  view.setUint32(0,body.byteLength,nativeLittleEndian);out.set(body,4);return out;
 }
 
 export class NativeMessageDecoder{
@@ -26,7 +27,7 @@ export class NativeMessageDecoder{
     const merged=new Uint8Array(this.buffer.byteLength+chunk.byteLength);merged.set(this.buffer);merged.set(chunk,this.buffer.byteLength);this.buffer=merged;
     const out:unknown[]=[];
     while(this.buffer.byteLength>=4){
-      const size=new DataView(this.buffer.buffer,this.buffer.byteOffset,this.buffer.byteLength).getUint32(0,true);
+      const size=new DataView(this.buffer.buffer,this.buffer.byteOffset,this.buffer.byteLength).getUint32(0,nativeLittleEndian);
       if(size===0||size>this.maxBytes)fail('RBRIDGE_NATIVE_MESSAGE_TOO_LARGE');
       if(this.buffer.byteLength<4+size)break;
       const body=this.buffer.slice(4,4+size);let parsed:unknown;
