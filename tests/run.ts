@@ -7,6 +7,10 @@ import {NativeMessageDecoder,assertApprovedExtensionOrigin,encodeNativeMessage} 
 import {StdioFrameDecoder,buildSshStdioLaunch,encodeStdioFrame} from '../src/transport/sshStdio.js';
 import {selectExactBrowserTarget} from '../src/domain/browserInventory.js';
 import {assertSafeRolloverCheckpoint,createRolloverProof,quotaEligibleForRouting,validateQuotaObservation} from '../src/domain/browserQuotaRollover.js';
+import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -94,6 +98,24 @@ await test('event replay chain and collision',async()=>{
   await rejects(()=>spool.append({...base,payload:{status:'different'}}),/REQUEST_ID_COLLISION/,'collision');
   const second=await spool.append({...base,eventId:'evt-2',eventType:'CAPTURE_ACTIVE'});equal(second.sequence,2,'sequence');equal(second.previousEventSha256,first.eventSha256,'chain');
   equal((await validateEventEnvelope(second,first.eventSha256,2)).eventSha256,second.eventSha256,'validate');
+});
+
+await test('durable event spool survives restart and preserves replay/collision rules',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'rbridge-chat-events-'));
+  try{
+    const source=new RbridgeEventSpoolV1();
+    const base={eventId:'durable-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}};
+    const first=await source.append(base);
+    const second=await source.append({...base,eventId:'durable-2',eventType:'CAPTURE_ACTIVE'});
+    const store=new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536});
+    await store.append(first);await store.append(second);
+    const reopened=new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536});
+    const loaded=await reopened.load();equal(loaded.length,2,'restart event count');equal(loaded[1]!.previousEventSha256,first.eventSha256,'restart chain');
+    equal((await reopened.append(first)).eventSha256,first.eventSha256,'durable replay');
+    equal((await reopened.load()).length,2,'replay not duplicated');
+    const other=new RbridgeEventSpoolV1(),conflict=await other.append({...base,payload:{status:'different'}});
+    await rejects(()=>reopened.append(conflict),/REQUEST_ID_COLLISION/,'durable collision');
+  }finally{await rm(root,{recursive:true,force:true});}
 });
 
 await test('Native Messaging exact framing and extension origin',async()=>{
