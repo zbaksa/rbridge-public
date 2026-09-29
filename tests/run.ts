@@ -5,6 +5,7 @@ import {
 } from '../src/domain/rbridgeChatCore.js';
 import {NativeMessageDecoder,assertApprovedExtensionOrigin,encodeNativeMessage} from '../src/transport/nativeMessaging.js';
 import {StdioFrameDecoder,buildSshStdioLaunch,encodeStdioFrame} from '../src/transport/sshStdio.js';
+import {selectExactBrowserTarget} from '../src/domain/browserInventory.js';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -33,6 +34,14 @@ await test('HELLO required capabilities and negotiated limits',async()=>{
   const peer={...hello,protocolMinor:1,maxMessageBytes:32768,releaseSha:'2'.repeat(40)};
   const out=negotiateHello(hello,peer);equal(out.protocolMinor,1,'minor');equal(out.maxMessageBytes,32768,'bytes');
   await rejects(()=>Promise.resolve(negotiateHello(hello,{...peer,capabilities:peer.capabilities.slice(0,-1)})),/RBRIDGE_CAPABILITY_MISSING/,'cap missing');
+});
+
+await test('browser inventory selects exactly one bound target and rejects ambiguity',async()=>{
+  const surface={browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',windowId:7,tabId:11,origin:'https://chatgpt.com',projectId:'05-cocwin',conversationId:'conv-123',conversationGeneration:1,active:true};
+  const query={browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',origin:'https://chatgpt.com',projectId:'05-cocwin',conversationId:'conv-123'};
+  equal(selectExactBrowserTarget([surface],query).tabId,11,'exact target');
+  await rejects(()=>Promise.resolve(selectExactBrowserTarget([{...surface,tabId:11},{...surface,tabId:12}],query)),/TARGET_AMBIGUOUS/,'ambiguous target');
+  await rejects(()=>Promise.resolve(selectExactBrowserTarget([surface],{...query,conversationId:'wrong'})),/TARGET_NOT_FOUND/,'wrong conversation');
 });
 
 await test('binding gates leader and capture',async()=>{
