@@ -62,6 +62,7 @@ export class NativeHostRelayV1{
   async acceptServerMessage(input:unknown):Promise<ServerHelloResultV1>{
     if(!this.transportConnected)throw new Error('RBRIDGE_PEER_NOT_CONNECTED');
     if(!this.browserHello)throw new Error('RBRIDGE_BROWSER_HELLO_REQUIRED');
+    this.negotiated=null;
     const message=routeServerToNative(input);
     const negotiated=negotiateHello(this.browserHello,message.value);
     this.negotiated=negotiated;
