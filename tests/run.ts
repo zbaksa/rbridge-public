@@ -17,6 +17,7 @@ import {join} from 'node:path';
 import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
 import {routeServerToNative} from '../src/nativeHost/nativeHostProtocol.js';
 import {NativeHostRelayV1} from '../src/nativeHost/nativeHostRelay.js';
+import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFactoryV1,type SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -197,6 +198,38 @@ await test('Native Messaging exact framing and extension origin',async()=>{
   await rejects(()=>Promise.resolve(assertApprovedExtensionOrigin('chrome-extension://'+'b'.repeat(32)+'/',id)),/ORIGIN_DENIED/,'origin');
   const wire=encodeNativeMessage({schema:'X',n:1}),decoder=new NativeMessageDecoder();
   equal(decoder.push(wire.slice(0,3)).length,0,'partial');const values=decoder.push(wire.slice(3));equal(values.length,1,'frame');assert((values[0] as {n:number}).n===1,'value');
+});
+
+await test('persistent SSH session reconnects with bounded backoff and framed replay callback',async()=>{
+  class FakeHandle implements SshProcessHandleV1{
+    writes:Uint8Array[]=[];dataListener:(chunk:Uint8Array)=>void=()=>{};closeListener:(code:number|null,signal:string|null)=>void=()=>{};errorListener:(error:Error)=>void=()=>{};killed=false;
+    write(data:Uint8Array){this.writes.push(data);return true;}
+    onData(listener:(chunk:Uint8Array)=>void){this.dataListener=listener;}
+    onClose(listener:(code:number|null,signal:string|null)=>void){this.closeListener=listener;}
+    onError(listener:(error:Error)=>void){this.errorListener=listener;}
+    kill(){this.killed=true;}
+    emitData(data:Uint8Array){this.dataListener(data);}
+    close(code:number|null=0,signal:string|null=null){this.closeListener(code,signal);}
+  }
+  const handles:FakeHandle[]=[];
+  const factory:SshProcessFactoryV1={launch:()=>{const h=new FakeHandle();handles.push(h);return h;}};
+  const scheduled:{delay:number;fn:()=>void;cancelled:boolean}[]=[];
+  const scheduler:ReconnectSchedulerV1={
+    set:(delay,fn)=>{const row={delay,fn,cancelled:false};scheduled.push(row);return row;},
+    clear:(handle)=>{(handle as {cancelled:boolean}).cancelled=true;},
+  };
+  const messages:unknown[]=[];let connected=0;
+  const session=new PersistentSshStdioSessionV1(
+    {sshPath:'/usr/bin/ssh',host:'aether-engine',port:22,user:'rbridge',identityFile:'/home/rbridge/.ssh/id_ed25519',knownHostsFile:'/home/rbridge/.ssh/known_hosts'},
+    {onConnected:()=>{connected++;},onMessage:value=>{messages.push(value);}},
+    factory,scheduler,
+  );
+  session.start();equal(session.state,'CONNECTED','connected');equal(connected,1,'connect hook');
+  assert(session.send({schema:'PING'})===true,'send accepted');equal(handles[0]!.writes.length,1,'one framed write');
+  handles[0]!.emitData(encodeStdioFrame({schema:'PONG'}));equal((messages[0] as {schema:string}).schema,'PONG','decoded');
+  handles[0]!.close(255,null);equal(session.state,'BACKOFF','backoff');equal(scheduled[0]!.delay,100,'first delay');
+  scheduled[0]!.fn();equal(session.state,'CONNECTED','reconnected');equal(connected,2,'second connect');equal(handles.length,2,'second process');
+  session.stop();equal(session.state,'STOPPED','stopped');assert(handles[1]!.killed,'active process killed');
 });
 
 await test('SSH stdio fixed command and no shell',()=>{
