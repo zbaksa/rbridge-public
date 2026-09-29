@@ -48,8 +48,8 @@ export class NativeHostRuntimeV1 {
   ){
     const store=new RbridgeChatEventStoreV1({
       root:config.eventStoreRoot,
-      maxEvents:config.maxEvents,
-      maxBytes:config.maxEventBytes,
+      ...(config.maxEvents===undefined?{}:{maxEvents:config.maxEvents}),
+      ...(config.maxEventBytes===undefined?{}:{maxBytes:config.maxEventBytes}),
     });
 
     let session!:PersistentSshStdioSessionV1;
@@ -72,7 +72,6 @@ export class NativeHostRuntimeV1 {
             this.output.write(encodeNativeMessage(accepted.message.value));
           }catch(cause){
             await this.invokeHook(this.hooks.onProtocolError,error(cause));
-            throw cause;
           }
         },
         onDisconnected:async()=>{this.relay.peerDisconnected();},
