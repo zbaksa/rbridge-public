@@ -66,8 +66,13 @@ export class NativeHostRelayV1{
     const message=routeServerToNative(input);
     const negotiated=negotiateHello(this.browserHello,message.value);
     this.negotiated=negotiated;
-    const replayedEvents=await this.replayDurableEvents();
-    return {message,negotiated,replayedEvents};
+    try{
+      const replayedEvents=await this.replayDurableEvents();
+      return {message,negotiated,replayedEvents};
+    }catch(error){
+      this.negotiated=null;
+      throw error;
+    }
   }
 
   async replayDurableEvents():Promise<number>{
