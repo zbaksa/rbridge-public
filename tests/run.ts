@@ -6,6 +6,7 @@ import {
 import {NativeMessageDecoder,assertApprovedExtensionOrigin,encodeNativeMessage} from '../src/transport/nativeMessaging.js';
 import {StdioFrameDecoder,buildSshStdioLaunch,encodeStdioFrame} from '../src/transport/sshStdio.js';
 import {selectExactBrowserTarget} from '../src/domain/browserInventory.js';
+import {assertSafeRolloverCheckpoint,createRolloverProof,quotaEligibleForRouting,validateQuotaObservation} from '../src/domain/browserQuotaRollover.js';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -42,6 +43,17 @@ await test('browser inventory selects exactly one bound target and rejects ambig
   equal(selectExactBrowserTarget([surface],query).tabId,11,'exact target');
   await rejects(()=>Promise.resolve(selectExactBrowserTarget([{...surface,tabId:11},{...surface,tabId:12}],query)),/TARGET_AMBIGUOUS/,'ambiguous target');
   await rejects(()=>Promise.resolve(selectExactBrowserTarget([surface],{...query,conversationId:'wrong'})),/TARGET_NOT_FOUND/,'wrong conversation');
+});
+
+await test('quota observation is fail-closed and rollover requires quiescence',async()=>{
+  const receipt={schema:'COCWIN_RECEIPT_REF_V1' as const,receiptId:'quota-1',receiptSchema:'RBRIDGE_QUOTA_RECEIPT_V1',sha256:'d'.repeat(64)};
+  assert(quotaEligibleForRouting({capability:'BROWSER_CHAT_STRONG',state:'AVAILABLE',resetAt:null,receipt}),'available routes');
+  equal(quotaEligibleForRouting({capability:'BROWSER_CHAT_STRONG',state:'UNKNOWN',resetAt:null,receipt}),false,'unknown blocked');
+  await rejects(()=>Promise.resolve(validateQuotaObservation({capability:'BROWSER_WORK',state:'AVAILABLE',resetAt:'2026-10-01T00:00:00.000Z',receipt})),/AVAILABLE_RESET_INVALID/,'available reset rejected');
+  assertSafeRolloverCheckpoint({durableSessionState:true,streamedResponseActive:false,currentSend:null});
+  await rejects(()=>Promise.resolve(assertSafeRolloverCheckpoint({durableSessionState:false,streamedResponseActive:false,currentSend:null})),/SESSION_NOT_DURABLE/,'durability required');
+  const proof=createRolloverProof({previousConversationId:'conv-123',newConversationId:'conv-124',bindingReceipt:receipt},{durableSessionState:true,streamedResponseActive:false,currentSend:null});
+  equal(proof.newConversationId,'conv-124','rollover proof');
 });
 
 await test('binding gates leader and capture',async()=>{
