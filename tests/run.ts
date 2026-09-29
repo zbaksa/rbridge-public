@@ -36,7 +36,7 @@ async function test(name:string,fn:()=>unknown|Promise<unknown>){
 const session='exta-'+'a'.repeat(32),generation='123e4567-e89b-42d3-a456-426614174000',attempt=session+':a:1';
 const effect='b'.repeat(64),challenge='c'.repeat(64),at='2026-09-29T17:00:00.000Z';
 const target={sessionId:session,generation,browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',windowId:7,tabId:11,origin:'https://chatgpt.com',projectId:'05-cocwin',conversationId:'conv-123',conversationGeneration:1,ownerSessionId:session};
-const hello={schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1 as const,protocolMinor:3,releaseSha:'1'.repeat(40),maxMessageBytes:65536,capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES],browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',nativeHostVersion:'1.0.0'};
+const hello={schema:'RBRIDGE_CHAT_HELLO_V1' as const,protocolMajor:1 as const,protocolMinor:3,releaseSha:'1'.repeat(40),maxMessageBytes:65536,capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES],browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',nativeHostVersion:'1.0.0'};
 
 await test('canonical JSON and digest',async()=>{
   equal(canonicalJson({z:1,a:{y:2,x:3}}),'{"a":{"x":3,"y":2},"z":1}','canonical ordering');
