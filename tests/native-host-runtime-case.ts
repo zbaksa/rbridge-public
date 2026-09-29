@@ -128,7 +128,7 @@ export async function verifyNativeHostRuntimeFlow():Promise<void>{
     handles[0]!.emitData(encodeStdioFrame({...hello,releaseSha:'2'.repeat(40)}));
     await sleep();
     if(!runtime.protocolReady)throw new Error('NATIVE_RUNTIME_PROTOCOL_NOT_READY');
-    if(handles[0]!.writes.length!==2)throw new Error('NATIVE_RUNTIME_EVENT_NOT_REPLAYED');
+    if(Number(handles[0]!.writes.length)!==2)throw new Error('NATIVE_RUNTIME_EVENT_NOT_REPLAYED');
 
     const replayDecode=new StdioFrameDecoder();
     const replayed=replayDecode.push(handles[0]!.writes[1]!);
