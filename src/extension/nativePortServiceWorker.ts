@@ -1,4 +1,4 @@
-import {parseHello,type RbridgeChatEventV1,type RbridgeChatHelloV1,validateEventEnvelope} from '../domain/rbridgeChatCore.js';
+import {negotiateHello,parseHello,type NegotiatedHelloV1,type RbridgeChatEventV1,type RbridgeChatHelloV1,validateEventEnvelope} from '../domain/rbridgeChatCore.js';
 import {routeServerToNative} from '../nativeHost/nativeHostProtocol.js';
 
 export const RBRIDGE_NATIVE_HOST_NAME='com.cocwin.rbridge_chat_v1';
@@ -19,7 +19,7 @@ export interface ExtensionRuntimeNativeApiV1{
 }
 
 export interface ExtensionNativeLinkHooksV1{
-  onServerHello?:(hello:RbridgeChatHelloV1)=>void|Promise<void>;
+  onServerHello?:(hello:RbridgeChatHelloV1,negotiated:NegotiatedHelloV1)=>void|Promise<void>;
   onDisconnected?:()=>void|Promise<void>;
   onProtocolError?:(error:Error)=>void|Promise<void>;
 }
@@ -28,39 +28,55 @@ function normalizeError(error:unknown):Error{return error instanceof Error?error
 
 export class ExtensionNativePortLinkV1{
   private port:ExtensionNativePortV1|null=null;
+  private negotiated:NegotiatedHelloV1|null=null;
+  private readonly localHello:RbridgeChatHelloV1;
 
   constructor(
     private readonly runtime:ExtensionRuntimeNativeApiV1,
-    private readonly hello:RbridgeChatHelloV1,
+    hello:RbridgeChatHelloV1,
     private readonly hooks:ExtensionNativeLinkHooksV1={},
-  ){}
+  ){
+    this.localHello=parseHello(hello);
+  }
 
   get connected():boolean{return this.port!==null;}
+  get protocolReady():boolean{return this.port!==null&&this.negotiated!==null;}
+  get negotiation():NegotiatedHelloV1|null{return this.negotiated?structuredClone(this.negotiated):null;}
 
   connect():void{
     if(this.port)return;
+    this.negotiated=null;
     const port=this.runtime.connectNative(RBRIDGE_NATIVE_HOST_NAME);
     this.port=port;
     port.onMessage.addListener(value=>{void this.handleInbound(value);});
-    port.onDisconnect.addListener(()=>{if(this.port===port)this.port=null;this.invoke(()=>this.hooks.onDisconnected?.());});
-    port.postMessage(parseHello(this.hello));
+    port.onDisconnect.addListener(()=>{
+      if(this.port===port){this.port=null;this.negotiated=null;}
+      this.invoke(()=>this.hooks.onDisconnected?.());
+    });
+    port.postMessage(this.localHello);
   }
 
   disconnect():void{
-    const port=this.port;this.port=null;port?.disconnect();
+    const port=this.port;this.port=null;this.negotiated=null;port?.disconnect();
   }
 
   async sendEvent(event:unknown):Promise<void>{
     const port=this.port;if(!port)throw new Error('RBRIDGE_NATIVE_PORT_DISCONNECTED');
-    const validated: RbridgeChatEventV1=await validateEventEnvelope(event);
+    if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+    const validated:RbridgeChatEventV1=await validateEventEnvelope(event);
     port.postMessage(validated);
   }
 
   private async handleInbound(value:unknown):Promise<void>{
     try{
       const routed=routeServerToNative(value);
-      if(routed.kind==='HELLO')await this.hooks.onServerHello?.(routed.value);
+      if(routed.kind==='HELLO'){
+        const negotiated=negotiateHello(this.localHello,routed.value);
+        this.negotiated=negotiated;
+        await this.hooks.onServerHello?.(routed.value,negotiated);
+      }
     }catch(error){
+      this.negotiated=null;
       await this.hooks.onProtocolError?.(normalizeError(error));
     }
   }
