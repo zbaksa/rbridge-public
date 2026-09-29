@@ -23,6 +23,7 @@ import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFac
 import {buildRbridgeExtensionManifest} from '../src/extension/extensionManifest.js';
 import {ExtensionNativePortLinkV1,RBRIDGE_NATIVE_HOST_NAME,type ExtensionNativePortV1} from '../src/extension/nativePortServiceWorker.js';
 import {ChromeTabsInventoryAdapterV1,discoverChatgptConversationTabs,selectExactDiscoveredChatgptTarget} from '../src/extension/chromeTabInventory.js';
+import {verifyReplayFailureFailClosed} from './replay-failure-case.js';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -374,6 +375,8 @@ await test('SSH stdio fixed command and no shell',()=>{
   equal(launch.options.shell,false,'shell');assert(launch.args.includes('-oBatchMode=yes'),'batch');assert(launch.args.includes('-oStrictHostKeyChecking=yes'),'host key');equal(launch.args.at(-1),'rbridge-chat-stdio-v1','command');
   const wire=encodeStdioFrame({schema:'X',sequence:1}),decoder=new StdioFrameDecoder();equal(decoder.push(wire.slice(0,4)).length,0,'partial');equal(decoder.push(wire.slice(4)).length,1,'frame');
 });
+
+await test('reconnect replay failure clears protocol readiness',verifyReplayFailureFailClosed);
 
 console.log('SUMMARY passed='+passed+' failed='+failed);
 if(failed!==0)throw new Error('TESTS_FAILED:'+String(failed));
