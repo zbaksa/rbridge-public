@@ -24,7 +24,7 @@ const target={sessionId:session,generation,browserInstanceId:'chrome-main',brows
 const hello={schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1 as const,protocolMinor:3,releaseSha:'1'.repeat(40),maxMessageBytes:65536,capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES],browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',nativeHostVersion:'1.0.0'};
 
 await test('canonical JSON and digest',async()=>{
-  equal(canonicalJson({z:1,a:{y:2,x:3}}),'{"a":{"x":3,"y":2},"z":1','canonical ordering');
+  equal(canonicalJson({z:1,a:{y:2,x:3}}),'{"a":{"x":3,"y":2},"z":1}','canonical ordering');
   equal((await canonicalDigest({a:1})).length,64,'sha length');
   await rejects(()=>Promise.resolve(canonicalJson({x:1.5})),/NUMBER_INVALID/,'float rejected');
 });
