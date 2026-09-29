@@ -14,6 +14,9 @@ import {JSDOM} from 'jsdom';
 import {locateHighConfidenceSendButton,scanAssistantTurns,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
+import {routeServerToNative} from '../src/nativeHost/nativeHostProtocol.js';
+import {NativeHostRelayV1} from '../src/nativeHost/nativeHostRelay.js';
 
 let passed=0,failed=0;
 function assert(condition:unknown,message:string):asserts condition{if(!condition)throw new Error(message);}
@@ -153,6 +156,39 @@ await test('durable event spool survives restart and preserves replay/collision 
     equal((await reopened.load()).length,2,'replay not duplicated');
     const other=new RbridgeEventSpoolV1(),conflict=await other.append({...base,payload:{status:'different'}});
     await rejects(()=>reopened.append(conflict),/REQUEST_ID_COLLISION/,'durable collision');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('Native Host manifest and router are strict allowlists',async()=>{
+  const extensionId='a'.repeat(32);
+  const manifest=buildNativeHostManifest({executablePath:'/opt/rbridge/rbridge-native-host',extensionId});
+  equal(manifest.allowed_origins[0],'chrome-extension://'+extensionId+'/','origin');
+  await rejects(()=>Promise.resolve(buildNativeHostManifest({executablePath:'relative-host',extensionId})),/HOST_PATH_INVALID/,'absolute host path');
+  equal(routeServerToNative(hello).kind,'HELLO','server hello');
+  await rejects(()=>Promise.resolve(routeServerToNative({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'})),/COMMAND_CONTRACT_UNAVAILABLE/,'unknown command denied');
+});
+
+await test('Native Host persists event before forwarding and can replay after restart',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'rbridge-native-relay-'));
+  try{
+    const source=new RbridgeEventSpoolV1();
+    const event=await source.append({eventId:'native-evt-1',eventType:'BINDING_VERIFIED',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}});
+    const store=new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536});
+    let durableBeforeForward=false;const forwarded:string[]=[];
+    const peer={send:async(value:{schema:string;eventId?:string})=>{
+      if(value.schema==='RBRIDGE_CHAT_EVENT_V1'){
+        const reopened=new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536});
+        durableBeforeForward=(await reopened.load()).some(x=>x.eventId===value.eventId);
+      }
+      forwarded.push(value.schema);
+    }};
+    const relay=new NativeHostRelayV1(store,peer);
+    equal(await relay.acceptBrowserMessage(event),'EVENT_DURABLE_FORWARDED','event result');
+    assert(durableBeforeForward,'durable before forward');
+    equal(forwarded.length,1,'one forward');
+    const replayPeer={sent:0,send:async()=>{replayPeer.sent++;}};
+    const replayRelay=new NativeHostRelayV1(new RbridgeChatEventStoreV1({root,maxEvents:10,maxBytes:65536}),replayPeer);
+    equal(await replayRelay.replayDurableEvents(),1,'replay count');equal(replayPeer.sent,1,'replay sent');
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
