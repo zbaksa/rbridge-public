@@ -1,0 +1,57 @@
+name: RBridge TopPlan W1 CI
+
+on:
+  push:
+    branches: ['topplan/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: rbridge-topplan-w1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  w1:
+    runs-on: [self-hosted, linux, x64, rbridge]
+    timeout-minutes: 20
+    steps:
+      - name: Verify dedicated runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = "rbridge-ci"
+          test "${RUNNER_NAME}" = "rbridge-debian-ci"
+          test "${GITHUB_REPOSITORY}" = "zbaksa/rbridge-public"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify W1 candidate
+        run: npm run verify
+
+      - name: Public-source scrub
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -n -E '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+-private|/root/|192\.168\.[0-9]+\.[0-9]+' -- src tests README.md AGENTS.md; then
+            echo "PUBLIC_SCRUB=FAIL" >&2
+            exit 1
+          fi
+          echo "PUBLIC_SCRUB=PASS"
+
+      - name: Verify tracked source stayed clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
