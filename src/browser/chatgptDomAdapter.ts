@@ -57,6 +57,11 @@ export function scanAssistantTurns(document:Document):AssistantTurnObservationV1
   return out;
 }
 
+function isHtmlElement(element:Element):element is HTMLElement{
+  const ctor=element.ownerDocument.defaultView?.HTMLElement;
+  return ctor?element instanceof ctor:'style' in element;
+}
+
 function isVisible(element:HTMLElement):boolean{
   if(element.hidden||element.getAttribute('aria-hidden')==='true')return false;
   const inline=element.style;
@@ -93,7 +98,7 @@ function composerElements(document:Document):HTMLElement[]{
   for(const root of allRoots(document)){
     for(const selector of selectors){
       for(const element of root.querySelectorAll(selector)){
-        if(!(element instanceof HTMLElement)||seen.has(element)||!isVisible(element))continue;
+        if(!isHtmlElement(element)||seen.has(element)||!isVisible(element))continue;
         seen.add(element);found.push(element);
       }
     }
@@ -102,7 +107,8 @@ function composerElements(document:Document):HTMLElement[]{
 }
 
 function buttonSemanticScore(element:HTMLElement):number{
-  if(element instanceof HTMLButtonElement&&element.disabled)return -100;
+  const buttonCtor=element.ownerDocument.defaultView?.HTMLButtonElement;
+  if(buttonCtor&&element instanceof buttonCtor&&element.disabled)return -100;
   if(element.getAttribute('aria-disabled')==='true'||!isVisible(element))return -100;
   const testId=(element.getAttribute('data-testid')??'').trim();
   const aria=(element.getAttribute('aria-label')??'').trim();
@@ -144,7 +150,7 @@ export function locateHighConfidenceSendButton(document:Document):SendLocatorRes
   for(const root of allRoots(document)){
     for(const selector of selectors){
       for(const node of root.querySelectorAll(selector)){
-        if(!(node instanceof HTMLElement)||seen.has(node))continue;
+        if(!isHtmlElement(node)||seen.has(node))continue;
         seen.add(node);candidates.push(node);
       }
     }
