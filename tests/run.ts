@@ -9,6 +9,7 @@ import {selectExactBrowserTarget} from '../src/domain/browserInventory.js';
 import {canonicalChatgptProjectId,describeChatgptUrl,requireExactProjectConversationUrl,sameCanonicalChatgptProject} from '../src/browser/chatgptConversationIdentity.js';
 import {assertSafeRolloverCheckpoint,createRolloverProof,quotaEligibleForRouting,validateQuotaObservation} from '../src/domain/browserQuotaRollover.js';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
+import {RbridgeReceiptStoreV1} from '../src/server/rbridgeReceiptStore.js';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
 import {locateHighConfidenceSendButton,scanAssistantTurns,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
@@ -174,6 +175,24 @@ await test('capture observer can defer initial scan and only reacts to child-lis
   dom.window.document.querySelector('main')!.appendChild(article);
   await new Promise(resolve=>dom.window.setTimeout(resolve,5));
   equal(scans,1,'mutation scan');stop();
+});
+
+await test('durable receipt store verifies digest, restart replay and ID collision',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'rbridge-receipts-'));
+  try{
+    const verified=await verifyBinding(prepareBinding(target,new Date(at)),target,new Date(at));
+    const store=new RbridgeReceiptStoreV1({root,maxReceipts:10,maxBytes:65536});
+    const ref=await store.put(verified.receipt);
+    equal(ref.receiptId,verified.receipt.receiptId,'receipt id');equal(ref.receiptSchema,'RBRIDGE_CHAT_BINDING_RECEIPT_V1','receipt schema');
+    const reopened=new RbridgeReceiptStoreV1({root,maxReceipts:10,maxBytes:65536});
+    equal((await reopened.get(ref.receiptId))?.sha256,verified.receipt.sha256,'restart receipt');
+    await rejects(()=>reopened.put({...verified.receipt,projectId:'tampered-project'}),/RECEIPT_DIGEST_INVALID/,'tampered receipt');
+    const body=Object.fromEntries(Object.entries(verified.receipt).filter(([key])=>key!=='sha256')) as Record<string,unknown>;
+    body.observedAt='2026-09-29T17:00:00.001Z';
+    const collision={...body,sha256:await canonicalDigest(body)};
+    await rejects(()=>reopened.put(collision),/REQUEST_ID_COLLISION/,'same receipt id different valid digest');
+    equal((await reopened.put(verified.receipt)).sha256,verified.receipt.sha256,'idempotent receipt replay');
+  }finally{await rm(root,{recursive:true,force:true});}
 });
 
 await test('durable event spool survives restart and preserves replay/collision rules',async()=>{
