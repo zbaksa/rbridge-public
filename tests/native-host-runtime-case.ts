@@ -146,14 +146,14 @@ export async function verifyNativeHostRuntimeFlow():Promise<void>{
 
     scheduled[0]!.fn();
     await sleep();
-    if(handles.length!==2)throw new Error('NATIVE_RUNTIME_RECONNECT_PROCESS_MISSING');
+    if(Number(handles.length)!==2)throw new Error('NATIVE_RUNTIME_RECONNECT_PROCESS_MISSING');
     if(handles[1]!.writes.length!==1)throw new Error('NATIVE_RUNTIME_RECONNECT_HELLO_NOT_FIRST');
 
     handles[1]!.emitData(encodeStdioFrame({...hello,releaseSha:'3'.repeat(40)}));
     await sleep();
     if(!runtime.protocolReady)throw new Error('NATIVE_RUNTIME_RECONNECT_NEGOTIATION_FAILED');
-    if(handles[1]!.writes.length!==2)throw new Error('NATIVE_RUNTIME_RECONNECT_REPLAY_MISSING');
-    if(nativeOutput.length!==2)throw new Error('NATIVE_RUNTIME_RECONNECT_BROWSER_HELLO_MISSING');
+    if(Number(handles[1]!.writes.length)!==2)throw new Error('NATIVE_RUNTIME_RECONNECT_REPLAY_MISSING');
+    if(Number(nativeOutput.length)!==2)throw new Error('NATIVE_RUNTIME_RECONNECT_BROWSER_HELLO_MISSING');
 
     runtime.stop();
     if(runtime.running)throw new Error('NATIVE_RUNTIME_STOP_FAILED');
