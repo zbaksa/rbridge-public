@@ -83,14 +83,16 @@ export class RbridgeChatEventStoreV1{
     await previousQueue;
     try{
       await this.loadUnsafe();
-      const existing=this.byId.get(eventInput.eventId);
+      const event=await validateEventEnvelope(eventInput);
+      const existing=this.byId.get(event.eventId);
       if(existing){
-        if(existing.eventSha256!==eventInput.eventSha256)fail('REQUEST_ID_COLLISION');
+        if(existing.eventSha256!==event.eventSha256)fail('REQUEST_ID_COLLISION');
         return existing;
       }
       if(this.events.length>=this.maxEvents)fail('RBRIDGE_EVENT_STORE_EVENT_LIMIT_EXCEEDED');
       const previous=this.events.at(-1)?.eventSha256??null,nextSequence=this.events.length+1;
-      const event=await validateEventEnvelope(eventInput,previous,nextSequence);
+      if(event.sequence!==nextSequence)fail('RBRIDGE_EVENT_SEQUENCE_GAP');
+      if(event.previousEventSha256!==previous)fail('RBRIDGE_EVENT_CHAIN_MISMATCH');
       if(nextSequence===1&&event.previousEventSha256!==null)fail('RBRIDGE_EVENT_STORE_CHAIN_INVALID');
       const line=canonicalJson(event)+'\n',lineBytes=Buffer.byteLength(line);
       if(this.bytes+lineBytes>this.maxBytes)fail('RBRIDGE_EVENT_STORE_BYTE_LIMIT_EXCEEDED');

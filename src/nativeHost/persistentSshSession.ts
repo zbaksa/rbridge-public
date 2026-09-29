@@ -12,7 +12,7 @@ export interface PersistentSshHooksV1{
 }
 
 export interface SshProcessHandleV1{
-  write(data:Uint8Array):boolean;
+  write(data:Uint8Array):void;
   onData(listener:(chunk:Uint8Array)=>void):void;
   onClose(listener:(code:number|null,signal:string|null)=>void):void;
   onError(listener:(error:Error)=>void):void;
@@ -36,7 +36,7 @@ function defaultFactory():SshProcessFactoryV1{
       const launch=buildSshStdioLaunch(config);
       const child=spawn(launch.command,launch.args,{shell:false,stdio:['pipe','pipe','pipe']});
       return {
-        write(data){return child.stdin.write(data);},
+        write(data){child.stdin.write(data);},
         onData(listener){child.stdout.on('data',(chunk:Buffer)=>listener(new Uint8Array(chunk)));},
         onClose(listener){child.once('close',(code,signal)=>listener(code,signal));},
         onError(listener){child.once('error',listener);},
@@ -81,7 +81,8 @@ export class PersistentSshStdioSessionV1{
 
   send(value:unknown):boolean{
     if(this._state!=='CONNECTED'||!this.process)return false;
-    return this.process.write(encodeStdioFrame(value));
+    this.process.write(encodeStdioFrame(value));
+    return true;
   }
 
   stop():void{

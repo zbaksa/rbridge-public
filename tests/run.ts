@@ -17,6 +17,7 @@ import {join} from 'node:path';
 import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
 import {routeServerToNative} from '../src/nativeHost/nativeHostProtocol.js';
 import {NativeHostRelayV1} from '../src/nativeHost/nativeHostRelay.js';
+import {parseNativeHostInvocation} from '../src/nativeHost/nativeHostInvocation.js';
 import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFactoryV1,type SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
 import {buildRbridgeExtensionManifest} from '../src/extension/extensionManifest.js';
 import {ExtensionNativePortLinkV1,RBRIDGE_NATIVE_HOST_NAME,type ExtensionNativePortV1} from '../src/extension/nativePortServiceWorker.js';
@@ -157,6 +158,7 @@ await test('durable event spool survives restart and preserves replay/collision 
     const loaded=await reopened.load();equal(loaded.length,2,'restart event count');equal(loaded[1]!.previousEventSha256,first.eventSha256,'restart chain');
     equal((await reopened.append(first)).eventSha256,first.eventSha256,'durable replay');
     equal((await reopened.load()).length,2,'replay not duplicated');
+    await rejects(()=>reopened.append({...first,payload:{status:'forged'}}),/EVENT_DIGEST_INVALID/,'forged same-id same-sha payload rejected');
     const other=new RbridgeEventSpoolV1(),conflict=await other.append({...base,payload:{status:'different'}});
     await rejects(()=>reopened.append(conflict),/REQUEST_ID_COLLISION/,'durable collision');
   }finally{await rm(root,{recursive:true,force:true});}
@@ -195,6 +197,14 @@ await test('MV3 extension manifest is minimal and service worker owns native por
   const event=await eventSource.append({eventId:'ext-event-1',eventType:'CAPTURE_ACTIVE',sessionId:session,generation,attemptId:attempt,effectId:effect,observedAt:at,payload:{status:'ok'}});
   await link.sendEvent(event);equal((port.sent.at(-1) as {eventId:string}).eventId,'ext-event-1','event sent');
   link.disconnect();assert(port.disconnected,'disconnect');
+});
+
+await test('Native Host invocation verifies exact Chrome extension origin',async()=>{
+  const extensionId='a'.repeat(32),origin='chrome-extension://'+extensionId+'/';
+  const parsed=parseNativeHostInvocation([origin,'--parent-window=12345'],extensionId);
+  equal(parsed.origin,origin,'origin');equal(parsed.parentWindow,12345,'parent window');
+  await rejects(()=>Promise.resolve(parseNativeHostInvocation(['chrome-extension://'+'b'.repeat(32)+'/'],extensionId)),/NATIVE_ORIGIN_DENIED/,'foreign extension');
+  await rejects(()=>Promise.resolve(parseNativeHostInvocation([origin,'--unexpected=1'],extensionId)),/PARENT_WINDOW_INVALID/,'unexpected second arg');
 });
 
 await test('Native Host manifest and router are strict allowlists',async()=>{
@@ -240,7 +250,7 @@ await test('Native Messaging exact framing and extension origin',async()=>{
 await test('persistent SSH session reconnects with bounded backoff and framed replay callback',async()=>{
   class FakeHandle implements SshProcessHandleV1{
     writes:Uint8Array[]=[];dataListener:(chunk:Uint8Array)=>void=()=>{};closeListener:(code:number|null,signal:string|null)=>void=()=>{};errorListener:(error:Error)=>void=()=>{};killed=false;
-    write(data:Uint8Array){this.writes.push(data);return true;}
+    write(data:Uint8Array){this.writes.push(data);}
     onData(listener:(chunk:Uint8Array)=>void){this.dataListener=listener;}
     onClose(listener:(code:number|null,signal:string|null)=>void){this.closeListener=listener;}
     onError(listener:(error:Error)=>void){this.errorListener=listener;}
