@@ -31,7 +31,8 @@
     "build:extension:content": "vite build --config vite.content.config.ts",
     "build:extension:worker": "vite build --config vite.worker.config.ts",
     "build:extension:manifest": "node scripts/write-extension-manifest.mjs",
-    "build:extension": "npm run build:extension:content && npm run build:extension:worker && npm run build:extension:manifest"
+    "build:extension": "npm run build:extension:content && npm run build:extension:worker && npm run build:extension:manifest && npm run build:extension:verify",
+    "build:extension:verify": "node scripts/verify-extension-artifacts.mjs"
   },
   "type": "module",
   "version": "0.1.0-dev"
