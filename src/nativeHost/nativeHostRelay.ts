@@ -1,18 +1,20 @@
 import {negotiateHello,type NegotiatedHelloV1,type RbridgeChatEventV1,type RbridgeChatHelloV1} from '../domain/rbridgeChatCore.js';
+import type {RbridgeChatCommandResultV1} from '../domain/rbridgeChatCommand.js';
 import {RbridgeChatEventStoreV1} from '../server/rbridgeChatEventStore.js';
 import {routeBrowserToNative,routeServerToNative,type ServerToNativeMessageV1} from './nativeHostProtocol.js';
 
 export interface NativeHostPeerV1{
-  send(value:RbridgeChatHelloV1|RbridgeChatEventV1):Promise<void>;
+  send(value:RbridgeChatHelloV1|RbridgeChatEventV1|RbridgeChatCommandResultV1):Promise<void>;
 }
 
 export type BrowserRelayResultV1=
   |'HELLO_CACHED'
   |'HELLO_FORWARDED'
   |'EVENT_DURABLE_QUEUED'
-  |'EVENT_DURABLE_FORWARDED';
+  |'EVENT_DURABLE_FORWARDED'
+  |'COMMAND_RESULT_FORWARDED';
 
-export interface ServerHelloResultV1{
+export interface ServerRelayResultV1{
   message:ServerToNativeMessageV1;
   negotiated:NegotiatedHelloV1;
   replayedEvents:number;
@@ -53,17 +55,26 @@ export class NativeHostRelayV1{
       return 'HELLO_FORWARDED';
     }
     if(!this.browserHello)throw new Error('RBRIDGE_BROWSER_HELLO_REQUIRED');
+    if(routed.kind==='COMMAND_RESULT'){
+      if(!this.protocolReady)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+      await this.peer.send(routed.value);
+      return 'COMMAND_RESULT_FORWARDED';
+    }
     await this.store.append(routed.value);
     if(!this.protocolReady)return 'EVENT_DURABLE_QUEUED';
     await this.peer.send(routed.value);
     return 'EVENT_DURABLE_FORWARDED';
   }
 
-  async acceptServerMessage(input:unknown):Promise<ServerHelloResultV1>{
+  async acceptServerMessage(input:unknown):Promise<ServerRelayResultV1>{
     if(!this.transportConnected)throw new Error('RBRIDGE_PEER_NOT_CONNECTED');
     if(!this.browserHello)throw new Error('RBRIDGE_BROWSER_HELLO_REQUIRED');
-    this.negotiated=null;
     const message=routeServerToNative(input);
+    if(message.kind==='COMMAND'){
+      if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+      return {message,negotiated:this.negotiated,replayedEvents:0};
+    }
+    this.negotiated=null;
     const negotiated=negotiateHello(this.browserHello,message.value);
     this.negotiated=negotiated;
     try{

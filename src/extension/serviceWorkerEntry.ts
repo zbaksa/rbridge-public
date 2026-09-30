@@ -1,5 +1,14 @@
 import {M0_LIMITS,REQUIRED_RBRIDGE_CAPABILITIES,type RbridgeChatHelloV1} from '../domain/rbridgeChatCore.js';
+import {buildCommandResultV1,type RbridgeChatCommandV1} from '../domain/rbridgeChatCommand.js';
+import {BrowserAuthorityRuntimeV1} from './browserAuthorityRuntime.js';
+import {BrowserAuthorityStoreV1,type ChromeStorageAreaV1} from './browserAuthorityStore.js';
+import {
+  ChromeContentDriverV1,ChromeLiveTargetReaderV1,
+  type ChromeAuthorityScriptingApiV1,type ChromeAuthorityTabsApiV1,
+} from './chromeAuthorityAdapters.js';
+import {ChromeTabsInventoryAdapterV1,type ChromeTabsReadApiV1} from './chromeTabInventory.js';
 import {ExtensionNativePortLinkV1,type ExtensionRuntimeNativeApiV1} from './nativePortServiceWorker.js';
+import {RbridgeChatCommandDispatcherV1} from './rbridgeCommandDispatcher.js';
 
 declare const __RBRIDGE_RELEASE_SHA__:string;
 
@@ -12,6 +21,7 @@ export interface ExtensionBootstrapConfigV1{
 
 export interface ServiceWorkerStorageV1{
   get(key:string):Promise<Record<string,unknown>>;
+  set?(items:Record<string,unknown>):Promise<void>;
 }
 
 export interface ServiceWorkerChromeApiV1{
@@ -19,6 +29,8 @@ export interface ServiceWorkerChromeApiV1{
     connectNative(name:string):ReturnType<ExtensionRuntimeNativeApiV1['connectNative']>;
   };
   storage:{local:ServiceWorkerStorageV1};
+  tabs?:(ChromeAuthorityTabsApiV1&ChromeTabsReadApiV1);
+  scripting?:ChromeAuthorityScriptingApiV1;
 }
 
 const KEY='rbridgeExtensionBootstrapV1';
@@ -33,6 +45,20 @@ export function parseExtensionBootstrapConfigV1(input:unknown):ExtensionBootstra
   return {schema:'RBRIDGE_EXTENSION_BOOTSTRAP_V1',browserInstanceId:row.browserInstanceId as string,browserProfileId:row.browserProfileId as string,nativeHostVersion:row.nativeHostVersion as string};
 }
 
+function commandDispatcher(api:ServiceWorkerChromeApiV1,config:ExtensionBootstrapConfigV1):RbridgeChatCommandDispatcherV1|null{
+  if(!api.tabs||!api.scripting||typeof api.storage.local.set!=='function')return null;
+  const storage:ChromeStorageAreaV1={get:key=>api.storage.local.get(key),set:items=>api.storage.local.set!(items)};
+  const runtime=new BrowserAuthorityRuntimeV1(
+    new BrowserAuthorityStoreV1(storage),
+    new ChromeLiveTargetReaderV1(api.tabs,config.browserInstanceId,config.browserProfileId),
+    new ChromeContentDriverV1(api.tabs,api.scripting),
+  );
+  return new RbridgeChatCommandDispatcherV1(
+    runtime,new ChromeTabsInventoryAdapterV1(api.tabs,config.browserInstanceId,config.browserProfileId),
+    config.browserInstanceId,config.browserProfileId,
+  );
+}
+
 export async function startExtensionServiceWorkerV1(api:ServiceWorkerChromeApiV1,releaseSha:string):Promise<ExtensionNativePortLinkV1>{
   if(!SHA1.test(releaseSha))fail('RBRIDGE_RELEASE_SHA_INVALID');
   const stored=await api.storage.local.get(KEY),config=parseExtensionBootstrapConfigV1(stored[KEY]);
@@ -41,7 +67,14 @@ export async function startExtensionServiceWorkerV1(api:ServiceWorkerChromeApiV1
     capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES],browserInstanceId:config.browserInstanceId,browserProfileId:config.browserProfileId,nativeHostVersion:config.nativeHostVersion,
   };
   const nativeApi:ExtensionRuntimeNativeApiV1={connectNative:name=>api.runtime.connectNative(name)};
-  const link=new ExtensionNativePortLinkV1(nativeApi,hello);
+  const dispatcher=commandDispatcher(api,config);
+  const handleCommand=async(command:RbridgeChatCommandV1)=>{
+    const result=dispatcher
+      ?await dispatcher.execute(command)
+      :buildCommandResultV1(command,{ok:false,errorCode:'RBRIDGE_BROWSER_RUNTIME_UNAVAILABLE'});
+    link.sendCommandResult(result);
+  };
+  const link=new ExtensionNativePortLinkV1(nativeApi,hello,{onServerCommand:handleCommand});
   link.connect();
   return link;
 }

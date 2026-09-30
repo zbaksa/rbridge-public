@@ -288,7 +288,7 @@ await test('MV3 extension manifest is minimal and service worker owns native por
   port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));equal(helloSeen,1,'server hello accepted');assert(link.protocolReady,'extension protocol ready');
   port.onMessage.emit({...hello,capabilities:hello.capabilities.slice(0,-1)});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_CAPABILITY_MISSING'),'missing capability fails closed');equal(link.protocolReady,false,'bad hello clears negotiation');
   port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));assert(link.protocolReady,'protocol restored after valid hello');
-  port.onMessage.emit({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_COMMAND_CONTRACT_UNAVAILABLE'),'unknown command blocked');equal(link.protocolReady,false,'unknown server message clears negotiation');
+  port.onMessage.emit({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'});await new Promise(resolve=>setTimeout(resolve,0));assert(protocolErrors.includes('RBRIDGE_COMMAND_SCHEMA_DENIED'),'unknown command blocked');equal(link.protocolReady,false,'unknown server message clears negotiation');
   port.onMessage.emit(hello);await new Promise(resolve=>setTimeout(resolve,0));assert(link.protocolReady,'protocol renegotiated');
   await link.sendEvent(event);equal((port.sent.at(-1) as {eventId:string}).eventId,'ext-event-1','event sent');
   link.disconnect();assert(port.disconnected,'disconnect');
@@ -308,7 +308,7 @@ await test('Native Host manifest and router are strict allowlists',async()=>{
   equal(manifest.allowed_origins[0],'chrome-extension://'+extensionId+'/','origin');
   await rejects(()=>Promise.resolve(buildNativeHostManifest({executablePath:'relative-host',extensionId})),/HOST_PATH_INVALID/,'absolute host path');
   equal(routeServerToNative(hello).kind,'HELLO','server hello');
-  await rejects(()=>Promise.resolve(routeServerToNative({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'})),/COMMAND_CONTRACT_UNAVAILABLE/,'unknown command denied');
+  await rejects(()=>Promise.resolve(routeServerToNative({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'})),/COMMAND_SCHEMA_DENIED/,'unknown command denied');
 });
 
 await test('Native Host persists event before forwarding and can replay after restart',async()=>{

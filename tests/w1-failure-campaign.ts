@@ -138,5 +138,33 @@ await test('domain can prove FAILED_BEFORE_CLICK only after durable intent',asyn
   equal(tx.state,'SEND_INTENT','campaign fixture intent');
 });
 
+for(const action of ['acquireLeader','activateCapture'] as const){
+  await test(action+' cannot erase durable SEND_INTENT',async()=>{
+    const storage=new MemoryStorage();let clicks=0,captureStarts=0;
+    const reader:BrowserLiveTargetReaderV1={observe:async()=>target};
+    const content=driver(async()=>{clicks++;return {outcome:'CLICKED'};});
+    content.startCapture=async()=>{captureStarts++;return {status:'ACTIVE'};};
+    const runtime=await armedRuntime(storage,reader,content);
+    await runtime.persistSendIntentOnly(new Date(at));
+    const before=await runtime.state(),startsBefore=captureStarts;
+    await rejects(()=>runtime[action](new Date(at)),/RBRIDGE_SEND_ACTIVE_UNRESOLVED/,'authority refresh blocked');
+    equal(JSON.stringify(await runtime.state()),JSON.stringify(before),'durable intent preserved');
+    equal(captureStarts,startsBefore,'no capture mutation before rejection');
+    await runtime.executePersistedSend(new Date(at));
+    equal(clicks,1,'original armed transaction can execute exactly once');
+  });
+  await test(action+' cannot erase UNCERTAIN SEND after channel loss',async()=>{
+    const storage=new MemoryStorage();let clicks=0;
+    const reader:BrowserLiveTargetReaderV1={observe:async()=>target};
+    const content=driver(async()=>{clicks++;throw new Error('MESSAGE_CHANNEL_CLOSED');});
+    const runtime=await armedRuntime(storage,reader,content);
+    await rejects(()=>runtime.sendOnce(new Date(at)),/SEND_UNCERTAIN/,'click outcome uncertain');
+    const before=await runtime.state();
+    await rejects(()=>runtime[action](new Date(at)),/RBRIDGE_SEND_ACTIVE_UNRESOLVED/,'uncertain transaction blocks authority reset');
+    equal(JSON.stringify(await runtime.state()),JSON.stringify(before),'uncertainty preserved');
+    equal(clicks,1,'no repeated click');
+  });
+}
+
 console.log(JSON.stringify({schema:'RBRIDGE_W1_FAILURE_CAMPAIGN_V1',status:failed===0?'PASS':'FAIL',passed,failed}));
 if(failed!==0)throw new Error('W1_FAILURE_CAMPAIGN_FAILED:'+String(failed));
