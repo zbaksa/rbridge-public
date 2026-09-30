@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+*.log
+.worktrees/
+.superpowers/
+dist-extension/
+dist-native-host/
