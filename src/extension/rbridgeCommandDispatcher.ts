@@ -1,4 +1,4 @@
-import {canonicalDigest} from '../domain/rbridgeChatCore.js';
+import {canonicalJson} from '../domain/rbridgeChatCore.js';
 import {selectExactDiscoveredChatgptTarget,type ChromeTabsInventoryAdapterV1} from './chromeTabInventory.js';
 import {BrowserAuthorityRuntimeV1} from './browserAuthorityRuntime.js';
 import {
@@ -35,7 +35,7 @@ export class RbridgeChatCommandDispatcherV1{
 
   async execute(input:unknown,now=new Date()):Promise<RbridgeChatCommandResultV1>{
     const command=structuredClone(parseRbridgeChatCommandV1(input)),at=new Date(now.getTime());
-    const commandFingerprint=await canonicalDigest(command);
+    const commandFingerprint=canonicalJson(command);
     const prior=this.completed.get(command.commandId)??this.pending.get(command.commandId);
     if(prior){
       if(prior.requestDigest!==command.requestDigest||prior.commandFingerprint!==commandFingerprint)fail('REQUEST_ID_COLLISION');
