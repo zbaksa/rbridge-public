@@ -375,6 +375,8 @@ await test('dynamic content injection happens before stage/preflight but never a
   const scripting:ChromeAuthorityScriptingApiV1={executeScript:async details=>{injections++;equal(details.files[0],'contentScript.js','bundle path');}};
   const replies:{[key:string]:unknown}={
     STAGE_PROMPT:{status:'STAGED_VERIFIED',utf8Bytes:5},
+    CAPTURE_START:{status:'ACTIVE'},
+    CAPTURE_STOP:{status:'OFF'},
     SEND_PREFLIGHT:{status:'FOUND'},
     SEND_CLICK:{outcome:'CLICKED'},
   };
@@ -450,13 +452,15 @@ await test('browser authority runtime persists intent before exactly one click',
   const storage=new MemoryStorage(),store=new BrowserAuthorityStoreV1(storage);
   const reader:BrowserLiveTargetReaderV1={observe:async()=>target};
   let clicks=0,intentSeenAtClick='';
+  let captureStarts=0;
   const driver:BrowserContentDriverV1={
+    startCapture:async()=>{captureStarts++;return {status:'ACTIVE'};},stopCapture:async()=>({status:'OFF'}),
     stagePrompt:async(_tab,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),
     preflightSend:async()=>({status:'FOUND'}),
     clickSend:async()=>{clicks++;const snap=await new BrowserAuthorityStoreV1(storage).load();intentSeenAtClick=snap?.activeSend?.state??'';return {outcome:'CLICKED'};},
   };
   const runtime=new BrowserAuthorityRuntimeV1(store,reader,driver);
-  await runtime.prepareAndVerifyBinding(target,new Date(at));await runtime.acquireLeader(new Date(at));await runtime.activateCapture(new Date(at));
+  await runtime.prepareAndVerifyBinding(target,new Date(at));await runtime.acquireLeader(new Date(at));await runtime.activateCapture(new Date(at));equal(captureStarts,1,'capture runtime confirmed once');
   await runtime.stageSend({sessionId:session,generation,attemptId:attempt,effectId:effect,challenge,purpose:'PROMPT',text:'hello'},new Date(at));
   equal((await runtime.state())?.activeSend?.state,'READY_NOT_SENT','staged no click');equal(clicks,0,'stage zero click');
   const sent=await runtime.sendOnce(new Date(at));equal(intentSeenAtClick,'SEND_INTENT','intent durable before click');equal(sent.activeSend?.state,'CLICKED_UNVERIFIED','clicked state');equal(clicks,1,'exactly one click');
@@ -476,12 +480,30 @@ await test('proven pre-click failure terminalizes intent while transport failure
     await runtime.stageSend({sessionId:session,generation,attemptId:attempt,effectId:effect,challenge,purpose:'PROMPT',text:'hello'},new Date(at));
     return runtime;
   };
-  const proven=await make({stagePrompt:async(_t,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),preflightSend:async()=>({status:'FOUND'}),clickSend:async()=>({outcome:'FAILED_BEFORE_CLICK',reason:'SEND_BUTTON_NOT_FOUND'})});
+  const proven=await make({startCapture:async()=>({status:'ACTIVE'}),stopCapture:async()=>({status:'OFF'}),stagePrompt:async(_t,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),preflightSend:async()=>({status:'FOUND'}),clickSend:async()=>({outcome:'FAILED_BEFORE_CLICK',reason:'SEND_BUTTON_NOT_FOUND'})});
   equal((await proven.sendOnce(new Date(at))).activeSend?.state,'FAILED_BEFORE_CLICK','proof terminalizes after intent');
   let uncertainClicks=0;
-  const uncertain=await make({stagePrompt:async(_t,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),preflightSend:async()=>({status:'FOUND'}),clickSend:async()=>{uncertainClicks++;throw new Error('MESSAGE_CHANNEL_CLOSED');}});
+  const uncertain=await make({startCapture:async()=>({status:'ACTIVE'}),stopCapture:async()=>({status:'OFF'}),stagePrompt:async(_t,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),preflightSend:async()=>({status:'FOUND'}),clickSend:async()=>{uncertainClicks++;throw new Error('MESSAGE_CHANNEL_CLOSED');}});
   await rejects(()=>uncertain.sendOnce(new Date(at)),/SEND_UNCERTAIN/,'transport failure uncertain');
   equal((await uncertain.state())?.activeSend?.state,'UNCERTAIN','uncertain durable');await rejects(()=>uncertain.sendOnce(new Date(at)),/SEND_NOT_READY/,'uncertain never re-clicked');equal(uncertainClicks,1,'one uncertain click attempt');
+});
+
+await test('capture authority is persisted only after content runtime confirms ACTIVE',async()=>{
+  class MemoryStorage implements ChromeStorageAreaV1{
+    data:Record<string,unknown>={};
+    async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}
+    async set(items:Record<string,unknown>){Object.assign(this.data,structuredClone(items));}
+  }
+  const storage=new MemoryStorage(),store=new BrowserAuthorityStoreV1(storage);
+  const driver:BrowserContentDriverV1={
+    startCapture:async()=>{throw new Error('CONTENT_CHANNEL_DOWN');},stopCapture:async()=>({status:'OFF'}),
+    stagePrompt:async(_t,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),
+    preflightSend:async()=>({status:'FOUND'}),clickSend:async()=>({outcome:'CLICKED'}),
+  };
+  const runtime=new BrowserAuthorityRuntimeV1(store,{observe:async()=>target},driver);
+  await runtime.prepareAndVerifyBinding(target,new Date(at));await runtime.acquireLeader(new Date(at));
+  await rejects(()=>runtime.activateCapture(new Date(at)),/CONTENT_CHANNEL_DOWN/,'capture start must confirm');
+  equal((await runtime.state())?.capture,null,'no false ACTIVE capture persisted');
 });
 
 await test('browser authority snapshot persists SEND_INTENT across restart and stale CAS fails closed',async()=>{

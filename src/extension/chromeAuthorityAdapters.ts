@@ -57,6 +57,19 @@ export class ChromeContentDriverV1 implements BrowserContentDriverV1{
     return {status:result.status,utf8Bytes:result.utf8Bytes};
   }
 
+  async startCapture(tabId:number,captureToken:string):Promise<{status:'ACTIVE'}>{
+    await this.ensureContentRuntime(tabId);
+    const result=resultObject(await this.call(tabId,'CAPTURE_START',{captureToken}));
+    if(result.status!=='ACTIVE')fail('RBRIDGE_CONTENT_CAPTURE_START_REPLY_INVALID');
+    return {status:'ACTIVE'};
+  }
+
+  async stopCapture(tabId:number):Promise<{status:'OFF'}>{
+    const result=resultObject(await this.call(tabId,'CAPTURE_STOP'));
+    if(result.status!=='OFF')fail('RBRIDGE_CONTENT_CAPTURE_STOP_REPLY_INVALID');
+    return {status:'OFF'};
+  }
+
   async preflightSend(tabId:number):Promise<{status:'FOUND'|'NOT_FOUND'|'AMBIGUOUS'}>{
     await this.ensureContentRuntime(tabId);
     const result=resultObject(await this.call(tabId,'SEND_PREFLIGHT'));
@@ -81,7 +94,7 @@ export class ChromeContentDriverV1 implements BrowserContentDriverV1{
     catch{throw new Error('RBRIDGE_CONTENT_INJECTION_FAILED');}
   }
 
-  private async call(tabId:number,action:'STAGE_PROMPT'|'SEND_PREFLIGHT'|'SEND_CLICK',extra:Record<string,unknown>={}):Promise<unknown>{
+  private async call(tabId:number,action:'STAGE_PROMPT'|'SEND_PREFLIGHT'|'SEND_CLICK'|'CAPTURE_START'|'CAPTURE_STOP',extra:Record<string,unknown>={}):Promise<unknown>{
     if(!Number.isInteger(tabId)||tabId<0)fail('RBRIDGE_TAB_ID_INVALID');
     const requestId='rbridge:'+String(++this.sequence)+':'+action.toLowerCase();
     let response:unknown;

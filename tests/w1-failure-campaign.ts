@@ -39,6 +39,7 @@ class MemoryStorage implements ChromeStorageAreaV1{
 
 function driver(click:()=>Promise<{outcome:'CLICKED'}|{outcome:'FAILED_BEFORE_CLICK';reason:string}|{outcome:'UNCERTAIN';reason:string}>):BrowserContentDriverV1{
   return {
+    startCapture:async()=>({status:'ACTIVE'}),stopCapture:async()=>({status:'OFF'}),
     stagePrompt:async(_tab,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),
     preflightSend:async()=>({status:'FOUND'}),
     clickSend:async()=>await click(),

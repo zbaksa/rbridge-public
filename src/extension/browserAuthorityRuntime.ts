@@ -11,6 +11,8 @@ export interface BrowserLiveTargetReaderV1{
 
 export interface BrowserContentDriverV1{
   stagePrompt(tabId:number,text:string):Promise<{status:'STAGED_VERIFIED'|'ALREADY_PRESENT_IDEMPOTENT';utf8Bytes:number}>;
+  startCapture(tabId:number,captureToken:string):Promise<{status:'ACTIVE'}>;
+  stopCapture(tabId:number):Promise<{status:'OFF'}>;
   preflightSend(tabId:number):Promise<{status:'FOUND'|'NOT_FOUND'|'AMBIGUOUS'}>;
   clickSend(tabId:number):Promise<
     |{outcome:'CLICKED'}
@@ -62,7 +64,15 @@ export class BrowserAuthorityRuntimeV1{
     const current=await this.required();
     if(!current.binding||!current.leader)fail('RBRIDGE_WRITE_LEADER_REQUIRED');
     const capture=activateCapture(current.binding,current.leader,current.capture,now);
-    return await this.store.commit(current.revision,{binding:current.binding,leader:current.leader,capture,activeSend:null},now);
+    const captureToken='capture:'+capture.sessionId+':'+String(capture.epoch);
+    const started=await this.content.startCapture(current.binding.tabId,captureToken);
+    if(started.status!=='ACTIVE')fail('RBRIDGE_CAPTURE_RUNTIME_NOT_ACTIVE');
+    try{
+      return await this.store.commit(current.revision,{binding:current.binding,leader:current.leader,capture,activeSend:null},now);
+    }catch(error){
+      try{await this.content.stopCapture(current.binding.tabId);}catch{}
+      throw error;
+    }
   }
 
   async stageSend(input:StageSendInputV1,now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
