@@ -26,6 +26,7 @@ import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFac
 import {buildRbridgeExtensionManifest} from '../src/extension/extensionManifest.js';
 import {ExtensionNativePortLinkV1,RBRIDGE_NATIVE_HOST_NAME,type ExtensionNativePortV1} from '../src/extension/nativePortServiceWorker.js';
 import {BrowserAuthorityStoreV1,type ChromeStorageAreaV1} from '../src/extension/browserAuthorityStore.js';
+import {BrowserAuthorityRuntimeV1,type BrowserContentDriverV1,type BrowserLiveTargetReaderV1} from '../src/extension/browserAuthorityRuntime.js';
 import {ChromeTabsInventoryAdapterV1,discoverChatgptConversationTabs,selectExactDiscoveredChatgptTarget} from '../src/extension/chromeTabInventory.js';
 import {verifyReplayFailureFailClosed} from './replay-failure-case.js';
 
@@ -364,6 +365,49 @@ await test('Native Host config and process bootstrap fail closed',async()=>{
     equal(stdout.length,0,'no stray native stdout');
     endHandler();errorHandler(new Error('late'));equal(exitCode,70,'fatal remains stable');
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('browser authority runtime persists intent before exactly one click',async()=>{
+  class MemoryStorage implements ChromeStorageAreaV1{
+    data:Record<string,unknown>={};
+    async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}
+    async set(items:Record<string,unknown>){Object.assign(this.data,structuredClone(items));}
+  }
+  const storage=new MemoryStorage(),store=new BrowserAuthorityStoreV1(storage);
+  const reader:BrowserLiveTargetReaderV1={observe:async()=>target};
+  let clicks=0,intentSeenAtClick='';
+  const driver:BrowserContentDriverV1={
+    stagePrompt:async(_tab,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),
+    preflightSend:async()=>({status:'FOUND'}),
+    clickSend:async()=>{clicks++;const snap=await new BrowserAuthorityStoreV1(storage).load();intentSeenAtClick=snap?.activeSend?.state??'';return {outcome:'CLICKED'};},
+  };
+  const runtime=new BrowserAuthorityRuntimeV1(store,reader,driver);
+  await runtime.prepareAndVerifyBinding(target,new Date(at));await runtime.acquireLeader(new Date(at));await runtime.activateCapture(new Date(at));
+  await runtime.stageSend({sessionId:session,generation,attemptId:attempt,effectId:effect,challenge,purpose:'PROMPT',text:'hello'},new Date(at));
+  equal((await runtime.state())?.activeSend?.state,'READY_NOT_SENT','staged no click');equal(clicks,0,'stage zero click');
+  const sent=await runtime.sendOnce(new Date(at));equal(intentSeenAtClick,'SEND_INTENT','intent durable before click');equal(sent.activeSend?.state,'CLICKED_UNVERIFIED','clicked state');equal(clicks,1,'exactly one click');
+  await rejects(()=>runtime.sendOnce(new Date(at)),/SEND_NOT_READY/,'second click blocked');equal(clicks,1,'still one click');
+});
+
+await test('proven pre-click failure terminalizes intent while transport failure becomes UNCERTAIN',async()=>{
+  class MemoryStorage implements ChromeStorageAreaV1{
+    data:Record<string,unknown>={};
+    async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}
+    async set(items:Record<string,unknown>){Object.assign(this.data,structuredClone(items));}
+  }
+  const make=async(driver:BrowserContentDriverV1)=>{
+    const storage=new MemoryStorage(),store=new BrowserAuthorityStoreV1(storage);
+    const runtime=new BrowserAuthorityRuntimeV1(store,{observe:async()=>target},driver);
+    await runtime.prepareAndVerifyBinding(target,new Date(at));await runtime.acquireLeader(new Date(at));await runtime.activateCapture(new Date(at));
+    await runtime.stageSend({sessionId:session,generation,attemptId:attempt,effectId:effect,challenge,purpose:'PROMPT',text:'hello'},new Date(at));
+    return runtime;
+  };
+  const proven=await make({stagePrompt:async(_t,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),preflightSend:async()=>({status:'FOUND'}),clickSend:async()=>({outcome:'FAILED_BEFORE_CLICK',reason:'SEND_BUTTON_NOT_FOUND'})});
+  equal((await proven.sendOnce(new Date(at))).activeSend?.state,'FAILED_BEFORE_CLICK','proof terminalizes after intent');
+  let uncertainClicks=0;
+  const uncertain=await make({stagePrompt:async(_t,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),preflightSend:async()=>({status:'FOUND'}),clickSend:async()=>{uncertainClicks++;throw new Error('MESSAGE_CHANNEL_CLOSED');}});
+  await rejects(()=>uncertain.sendOnce(new Date(at)),/SEND_UNCERTAIN/,'transport failure uncertain');
+  equal((await uncertain.state())?.activeSend?.state,'UNCERTAIN','uncertain durable');await rejects(()=>uncertain.sendOnce(new Date(at)),/SEND_NOT_READY/,'uncertain never re-clicked');equal(uncertainClicks,1,'one uncertain click attempt');
 });
 
 await test('browser authority snapshot persists SEND_INTENT across restart and stale CAS fails closed',async()=>{

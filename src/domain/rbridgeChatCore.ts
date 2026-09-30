@@ -473,7 +473,7 @@ export function markClicked(tx:RbridgeSendTransactionV1,now=new Date()):RbridgeS
 export function markSentVerified(tx:RbridgeSendTransactionV1,now=new Date()):RbridgeSendTransactionV1{return transition(tx,['CLICKED_UNVERIFIED','UNCERTAIN'],'SENT_VERIFIED',{sentVerifiedAt:nowIso(now),reason:null});}
 export function markWaitingResponse(tx:RbridgeSendTransactionV1):RbridgeSendTransactionV1{return transition(tx,['SENT_VERIFIED'],'WAITING_RESPONSE');}
 export function markResponseVerified(tx:RbridgeSendTransactionV1,now=new Date()):RbridgeSendTransactionV1{return transition(tx,['WAITING_RESPONSE','SENT_VERIFIED','UNCERTAIN'],'RESPONSE_VERIFIED',{responseVerifiedAt:nowIso(now),reason:null});}
-export function markFailedBeforeClick(tx:RbridgeSendTransactionV1,reason:string):RbridgeSendTransactionV1{return transition(tx,['PREPARING','READY_NOT_SENT'],'FAILED_BEFORE_CLICK',{reason:assertReason(reason)});}
+export function markFailedBeforeClick(tx:RbridgeSendTransactionV1,reason:string):RbridgeSendTransactionV1{return transition(tx,['PREPARING','READY_NOT_SENT','SEND_INTENT'],'FAILED_BEFORE_CLICK',{reason:assertReason(reason)});}
 export function markSendUncertain(tx:RbridgeSendTransactionV1,reason='SEND_UNCERTAIN'):RbridgeSendTransactionV1{return transition(tx,['SEND_INTENT','CLICKED_UNVERIFIED','SENT_VERIFIED','WAITING_RESPONSE'],'UNCERTAIN',{reason:assertReason(reason)});}
 export function stopSend(tx:RbridgeSendTransactionV1,reason:string):RbridgeSendTransactionV1{
   if(tx.state==='SEND_INTENT'||tx.state==='CLICKED_UNVERIFIED'||tx.state==='UNCERTAIN')fail('SEND_UNCERTAIN');
