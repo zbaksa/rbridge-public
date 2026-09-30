@@ -1,3 +1,8 @@
+import {BrowserAuthorityRuntimeV1} from '../src/extension/browserAuthorityRuntime.js';
+import {BrowserAuthorityStoreV1} from '../src/extension/browserAuthorityStore.js';
+import {ChromeContentDriverV1,ChromeLiveTargetReaderV1} from '../src/extension/chromeAuthorityAdapters.js';
+import {ChromeTabsInventoryAdapterV1} from '../src/extension/chromeTabInventory.js';
+import {RbridgeChatCommandDispatcherV1} from '../src/extension/rbridgeCommandDispatcher.js';
 import {createHash} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -162,5 +167,41 @@ try{
   equal(await relay.acceptBrowserMessage(result),'COMMAND_RESULT_FORWARDED','browser result forwarded to server');
   equal((forwarded.at(-1) as RbridgeChatCommandResultV1).commandId,'cmd-relay','result correlation preserved');
 }finally{await rm(root,{recursive:true,force:true});}
+
+async function isolatedDispatcher(){
+  const data:Record<string,unknown>={};
+  const storage={
+    get:async(key:string)=>key in data?{[key]:structuredClone(data[key])}:{},
+    set:async(items:Record<string,unknown>)=>{Object.assign(data,structuredClone(items));},
+  };
+  const runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),new ChromeLiveTargetReaderV1(tabs,'chrome-main','chatgpt-primary'),new ChromeContentDriverV1(tabs,scripting));
+  const dispatcher=new RbridgeChatCommandDispatcherV1(runtime,new ChromeTabsInventoryAdapterV1(tabs,'chrome-main','chatgpt-primary'),'chrome-main','chatgpt-primary');
+  const bind=command('security-bind','BIND_TARGET',{windowId:10,tabId:20,origin:'https://chatgpt.com',projectId:project,conversationId:conversation,conversationGeneration:1});
+  assert((await dispatcher.execute(bind)).ok,'security binding');
+  return {dispatcher,runtime,bind};
+}
+
+let securityFailures=0;
+try{
+  const {dispatcher,runtime,bind}=await isolatedDispatcher();
+  const before=JSON.stringify(await runtime.state());
+  await rejects(()=>dispatcher.execute({...bind,action:'READ_STATE',payload:{}}),/REQUEST_ID_COLLISION/,'same command id and claimed digest with changed command must fail closed');
+  equal(JSON.stringify(await runtime.state()),before,'collision leaves authority unchanged');
+  console.log('PASS W1_COMMAND_SECURITY claimed digest cannot conceal command collision');
+}catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY collision: '+String(error));}
+try{
+  const {dispatcher}=await isolatedDispatcher();
+  assert((await dispatcher.execute(command('security-leader','ACQUIRE_WRITE_LEADER',{}))).ok,'security leader');
+  assert((await dispatcher.execute(command('security-capture','ACTIVATE_CAPTURE',{}))).ok,'security capture');
+  assert((await dispatcher.execute(command('security-stage','STAGE_PROMPT',{challenge,purpose:'PROMPT',text:'concurrency proof'},true))).ok,'security stage');
+  assert((await dispatcher.execute(command('security-intent','PERSIST_SEND_INTENT',{},true))).ok,'security intent');
+  const before=clicks,execute=command('security-execute','EXECUTE_PERSISTED_SEND',{},true);
+  const results=await Promise.all([dispatcher.execute(execute),dispatcher.execute(execute)]);
+  equal(clicks-before,1,'concurrent duplicate command must click exactly once');
+  assert(results.every(value=>value.ok),'both duplicate callers get the same successful outcome');
+  equal(JSON.stringify(results[0]),JSON.stringify(results[1]),'duplicate result replay exact');
+  console.log('PASS W1_COMMAND_SECURITY concurrent duplicate executes once');
+}catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY concurrent duplicate: '+String(error));}
+if(securityFailures)throw new Error('W1_COMMAND_SECURITY_FAILED:'+String(securityFailures));
 
 console.log('W1_COMMAND_DOWNLINK_ACCEPTANCE=PASS');
