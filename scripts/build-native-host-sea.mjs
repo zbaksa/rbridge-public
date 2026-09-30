@@ -23,7 +23,11 @@ await writeFile(seaConfig,JSON.stringify({
 let run=spawnSync(process.execPath,['--experimental-sea-config',seaConfig],{stdio:'inherit'});
 if(run.status!==0)fail('RBRIDGE_NATIVE_SEA_BLOB_FAILED');
 await copyFile(process.execPath,exe);
-run=spawnSync('npx.cmd',['--yes','postject@1.0.0-alpha.6',exe,'NODE_SEA_BLOB',blob,'--sentinel-fuse','NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'],{stdio:'inherit'});
+const npmExec=process.env.npm_execpath;
+if(typeof npmExec!=='string'||npmExec.length===0)fail('RBRIDGE_NATIVE_SEA_NPM_EXEC_PATH_MISSING');
+const npxCli=join(dirname(npmExec),'npx-cli.js');
+run=spawnSync(process.execPath,[npxCli,'--yes','postject@1.0.0-alpha.6',exe,'NODE_SEA_BLOB',blob,'--sentinel-fuse','NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'],{stdio:'inherit'});
+if(run.error)throw new Error('RBRIDGE_NATIVE_SEA_INJECT_SPAWN_FAILED:'+String(run.error.message||run.error));
 if(run.status!==0)fail('RBRIDGE_NATIVE_SEA_INJECT_FAILED');
 const bytes=await readFile(exe);
 if(bytes.length<1024*1024||bytes[0]!==0x4d||bytes[1]!==0x5a)fail('RBRIDGE_NATIVE_SEA_PE_INVALID');
