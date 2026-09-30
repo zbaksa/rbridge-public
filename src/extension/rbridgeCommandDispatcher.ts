@@ -1,3 +1,4 @@
+import {canonicalDigest} from '../domain/rbridgeChatCore.js';
 import {selectExactDiscoveredChatgptTarget,type ChromeTabsInventoryAdapterV1} from './chromeTabInventory.js';
 import {BrowserAuthorityRuntimeV1} from './browserAuthorityRuntime.js';
 import {
@@ -21,7 +22,8 @@ function sameCorrelation(command:RbridgeChatCommandV1,state:Awaited<ReturnType<B
 }
 
 export class RbridgeChatCommandDispatcherV1{
-  private readonly completed=new Map<string,{requestDigest:string;result:RbridgeChatCommandResultV1}>();
+  private readonly completed=new Map<string,{requestDigest:string;commandFingerprint:string;result:RbridgeChatCommandResultV1}>();
+  private tail:Promise<void>=Promise.resolve();
 
   constructor(
     private readonly runtime:BrowserAuthorityRuntimeV1,
@@ -30,15 +32,18 @@ export class RbridgeChatCommandDispatcherV1{
     private readonly browserProfileId:string,
   ){}
 
-  async execute(input:unknown,now=new Date()):Promise<RbridgeChatCommandResultV1>{
-    let command:RbridgeChatCommandV1;
-    try{command=parseRbridgeChatCommandV1(input);}
-    catch(error){
-      throw error instanceof Error?error:new Error('RBRIDGE_COMMAND_INVALID');
-    }
+  execute(input:unknown,now=new Date()):Promise<RbridgeChatCommandResultV1>{
+    const command=structuredClone(parseRbridgeChatCommandV1(input)),at=new Date(now.getTime());
+    const result=this.tail.then(()=>this.executeOne(command,at));
+    this.tail=result.then(()=>undefined,()=>undefined);
+    return result;
+  }
+
+  private async executeOne(command:RbridgeChatCommandV1,now:Date):Promise<RbridgeChatCommandResultV1>{
+    const commandFingerprint=await canonicalDigest(command);
     const prior=this.completed.get(command.commandId);
     if(prior){
-      if(prior.requestDigest!==command.requestDigest)fail('REQUEST_ID_COLLISION');
+      if(prior.requestDigest!==command.requestDigest||prior.commandFingerprint!==commandFingerprint)fail('REQUEST_ID_COLLISION');
       return structuredClone(prior.result);
     }
     let result:RbridgeChatCommandResultV1;
@@ -48,7 +53,7 @@ export class RbridgeChatCommandDispatcherV1{
     }catch(error){
       result=buildCommandResultV1(command,{ok:false,errorCode:commandErrorCode(error)},now);
     }
-    this.completed.set(command.commandId,{requestDigest:command.requestDigest,result:structuredClone(result)});
+    this.completed.set(command.commandId,{requestDigest:command.requestDigest,commandFingerprint,result:structuredClone(result)});
     return result;
   }
 
