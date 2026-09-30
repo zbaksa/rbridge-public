@@ -106,6 +106,61 @@ function composerElements(document:Document):HTMLElement[]{
   return found;
 }
 
+export interface ComposerLocatorResultV1{
+  status:'FOUND'|'NOT_FOUND'|'AMBIGUOUS';
+  element:HTMLElement|null;
+  count:number;
+}
+
+export interface ComposerStageResultV1{
+  status:'STAGED_VERIFIED'|'ALREADY_PRESENT_IDEMPOTENT';
+  utf8Bytes:number;
+}
+
+export function locateUniqueComposer(document:Document):ComposerLocatorResultV1{
+  const composers=composerElements(document);
+  if(composers.length===0)return {status:'NOT_FOUND',element:null,count:0};
+  if(composers.length!==1)return {status:'AMBIGUOUS',element:null,count:composers.length};
+  return {status:'FOUND',element:composers[0]!,count:1};
+}
+
+function readComposerText(element:HTMLElement):string{
+  return element.tagName==='TEXTAREA'?(element as HTMLTextAreaElement).value:(element.textContent??'');
+}
+
+function dispatchComposerInput(element:HTMLElement,text:string):void{
+  const view=element.ownerDocument.defaultView;
+  if(!view)throw new Error('RBRIDGE_COMPOSER_WINDOW_UNAVAILABLE');
+  element.focus();
+  if(element.tagName==='TEXTAREA'){
+    const ctor=view.HTMLTextAreaElement;
+    const setter=Object.getOwnPropertyDescriptor(ctor.prototype,'value')?.set;
+    if(setter)setter.call(element,text);
+    else (element as HTMLTextAreaElement).value=text;
+  }else{
+    element.textContent=text;
+  }
+  const InputCtor=view.InputEvent;
+  const event=InputCtor?new InputCtor('input',{bubbles:true,inputType:'insertText',data:text}):new view.Event('input',{bubbles:true});
+  element.dispatchEvent(event);
+}
+
+export function stageComposerText(document:Document,text:string,maxUtf8Bytes=48_000):ComposerStageResultV1{
+  if(typeof text!=='string'||text.length===0)throw new Error('RBRIDGE_COMPOSER_TEXT_INVALID');
+  const bytes=encoder.encode(text).byteLength;
+  if(!Number.isInteger(maxUtf8Bytes)||maxUtf8Bytes<1||bytes>maxUtf8Bytes)throw new Error('RBRIDGE_SEND_PAYLOAD_TOO_LARGE');
+  const located=locateUniqueComposer(document);
+  if(located.status==='NOT_FOUND')throw new Error('RBRIDGE_COMPOSER_NOT_FOUND');
+  if(located.status==='AMBIGUOUS')throw new Error('RBRIDGE_COMPOSER_AMBIGUOUS');
+  const element=located.element!;
+  const before=readComposerText(element);
+  if(before===text)return {status:'ALREADY_PRESENT_IDEMPOTENT',utf8Bytes:bytes};
+  if(before.trim().length!==0)throw new Error('RBRIDGE_COMPOSER_NOT_EMPTY');
+  dispatchComposerInput(element,text);
+  if(readComposerText(element)!==text)throw new Error('RBRIDGE_COMPOSER_READBACK_MISMATCH');
+  return {status:'STAGED_VERIFIED',utf8Bytes:bytes};
+}
+
 function buttonSemanticScore(element:HTMLElement):number{
   const buttonCtor=element.ownerDocument.defaultView?.HTMLButtonElement;
   if(buttonCtor&&element instanceof buttonCtor&&element.disabled)return -100;
@@ -168,6 +223,15 @@ export function locateHighConfidenceSendButton(document:Document):SendLocatorRes
   const top=scored[0]!,tied=scored.filter(row=>row.score===top.score);
   if(tied.length!==1)return {status:'AMBIGUOUS',element:null,evidence:{composerCount:composers.length,candidateCount:scored.length,topScore:top.score}};
   return {status:'FOUND',element:top.element,evidence:{composerCount:composers.length,candidateCount:scored.length,topScore:top.score}};
+}
+
+export function clickHighConfidenceSendButton(document:Document):SendLocatorResultV1{
+  const result=locateHighConfidenceSendButton(document);
+  if(result.status==='NOT_FOUND')throw new Error('RBRIDGE_SEND_BUTTON_NOT_FOUND');
+  if(result.status==='AMBIGUOUS')throw new Error('RBRIDGE_SEND_BUTTON_AMBIGUOUS');
+  const element=result.element!;
+  element.click();
+  return {...result,element};
 }
 
 export function startAssistantTurnObserver(document:Document,onScan:(turns:AssistantTurnObservationV1[])=>void,options:AssistantObserverOptionsV1={}):()=>void{

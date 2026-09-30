@@ -12,7 +12,8 @@ import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {RbridgeReceiptStoreV1} from '../src/server/rbridgeReceiptStore.js';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
-import {locateHighConfidenceSendButton,scanAssistantTurns,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
+import {clickHighConfidenceSendButton,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
+import {ChatgptContentRuntimeV1} from '../src/extension/contentRuntime.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
@@ -362,6 +363,30 @@ await test('Native Host config and process bootstrap fail closed',async()=>{
     equal(stdout.length,0,'no stray native stdout');
     endHandler();errorHandler(new Error('late'));equal(exitCode,70,'fatal remains stable');
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('content runtime stages idempotently and guarded Send clicks exactly once',async()=>{
+  const page=new JSDOM('<!doctype html><body><form><textarea id="prompt-textarea"></textarea><button type="submit" data-testid="send-button">Send</button></form></body>',{url:'https://chatgpt.com/'});
+  const document=page.window.document;const button=document.querySelector('button') as HTMLButtonElement;let clicks=0;button.addEventListener('click',event=>{event.preventDefault();clicks++;});
+  equal(stageComposerText(document,'hello').status,'STAGED_VERIFIED','stage');equal((document.querySelector('textarea') as HTMLTextAreaElement).value,'hello','readback');
+  equal(stageComposerText(document,'hello').status,'ALREADY_PRESENT_IDEMPOTENT','idempotent stage');
+  equal(locateHighConfidenceSendButton(document).status,'FOUND','send preflight');clickHighConfidenceSendButton(document);equal(clicks,1,'one click');
+  const emitted:unknown[]=[];const runtime=new ChatgptContentRuntimeV1(document,{emit:frame=>{emitted.push(frame);}});
+  equal((runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'p1',action:'SEND_PREFLIGHT'}) as {status:string}).status,'FOUND','runtime preflight');
+  await rejects(()=>Promise.resolve(runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'p2',action:'STAGE_PROMPT',text:'different'})),/COMPOSER_NOT_EMPTY/,'manual content preserved');
+});
+
+await test('content runtime fails closed on composer/Send ambiguity and captures assistant only',async()=>{
+  const ambiguousComposer=new JSDOM('<!doctype html><body><textarea></textarea><textarea></textarea></body>',{url:'https://chatgpt.com/'});
+  await rejects(()=>Promise.resolve(stageComposerText(ambiguousComposer.window.document,'x')),/COMPOSER_AMBIGUOUS/,'composer ambiguity');
+  const ambiguousSend=new JSDOM('<!doctype html><body><form><textarea></textarea><button type="submit" data-testid="send-button">Send</button><button type="submit" data-testid="send-button">Send</button></form></body>',{url:'https://chatgpt.com/'});
+  let clicks=0;for(const button of ambiguousSend.window.document.querySelectorAll('button'))button.addEventListener('click',event=>{event.preventDefault();clicks++;});
+  equal(locateHighConfidenceSendButton(ambiguousSend.window.document).status,'AMBIGUOUS','send ambiguity');
+  await rejects(()=>Promise.resolve(clickHighConfidenceSendButton(ambiguousSend.window.document)),/SEND_BUTTON_AMBIGUOUS/,'ambiguous click blocked');equal(clicks,0,'zero ambiguous clicks');
+  const capture=new JSDOM('<!doctype html><body><article data-testid="conversation-turn-1"><div data-message-author-role="user">user</div></article><article data-testid="conversation-turn-2"><div data-message-author-role="assistant"><pre><code>{"ok":true}</code></pre>assistant</div></article></body>',{url:'https://chatgpt.com/'});
+  const runtime=new ChatgptContentRuntimeV1(capture.window.document,{emit:()=>{}});
+  const scan=runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'scan1',action:'CAPTURE_SCAN'}) as {turns:{assistantTurnId:string}[]};
+  equal(scan.turns.length,1,'assistant only');equal(scan.turns[0]!.assistantTurnId,'conversation-turn-2','stable assistant id');
 });
 
 await test('Native Messaging exact framing and extension origin',async()=>{
