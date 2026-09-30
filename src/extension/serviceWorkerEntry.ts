@@ -68,14 +68,13 @@ export async function startExtensionServiceWorkerV1(api:ServiceWorkerChromeApiV1
   };
   const nativeApi:ExtensionRuntimeNativeApiV1={connectNative:name=>api.runtime.connectNative(name)};
   const dispatcher=commandDispatcher(api,config);
-  let link!:ExtensionNativePortLinkV1;
   const handleCommand=async(command:RbridgeChatCommandV1)=>{
     const result=dispatcher
       ?await dispatcher.execute(command)
       :buildCommandResultV1(command,{ok:false,errorCode:'RBRIDGE_BROWSER_RUNTIME_UNAVAILABLE'});
     link.sendCommandResult(result);
   };
-  link=new ExtensionNativePortLinkV1(nativeApi,hello,{onServerCommand:handleCommand});
+  const link=new ExtensionNativePortLinkV1(nativeApi,hello,{onServerCommand:handleCommand});
   link.connect();
   return link;
 }
