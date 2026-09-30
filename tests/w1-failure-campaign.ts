@@ -111,6 +111,25 @@ await test('message-channel loss after intent becomes durable UNCERTAIN across r
   equal(attempts,1,'no second click');
 });
 
+await test('content restart after durable SEND_INTENT rehydrates capture before click',async()=>{
+  const storage=new MemoryStorage();let clicks=0,captureStarts=0,listenerAlive=true;
+  const reader:BrowserLiveTargetReaderV1={observe:async()=>target};
+  const content:BrowserContentDriverV1={
+    startCapture:async()=>{captureStarts++;listenerAlive=true;return {status:'ACTIVE'};},
+    stopCapture:async()=>{listenerAlive=false;return {status:'OFF'};},
+    stagePrompt:async(_tab,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),
+    preflightSend:async()=>({status:'FOUND'}),
+    clickSend:async()=>{if(!listenerAlive)throw new Error('CAPTURE_NOT_ACTIVE');clicks++;return {outcome:'CLICKED'};},
+  };
+  const runtime=await armedRuntime(storage,reader,content);
+  await runtime.persistSendIntentOnly(new Date(at));
+  listenerAlive=false;
+  const snapshot=await runtime.executePersistedSend(new Date(at));
+  equal(snapshot.activeSend?.state,'CLICKED_UNVERIFIED','clicked after capture rehydration');
+  equal(clicks,1,'one click');
+  equal(captureStarts>=3,true,'capture revalidated across stage, intent, and click');
+});
+
 await test('domain can prove FAILED_BEFORE_CLICK only after durable intent',async()=>{
   const prepared=prepareBinding(target,new Date(at)),verified=await verifyBinding(prepared,target,new Date(at));
   const leader=acquireWriteLeader(verified.control,null,new Date(at)),capture=activateCapture(verified.control,leader,null,new Date(at));

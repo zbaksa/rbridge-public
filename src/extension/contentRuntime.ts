@@ -68,7 +68,10 @@ export class ChatgptContentRuntimeV1{
       case 'CAPTURE_SCAN':
         return {requestId:request.requestId,action:request.action,turns:scanAssistantTurns(this.document)};
       case 'CAPTURE_START':
-        if(this.stopCapture)fail('RBRIDGE_CAPTURE_ALREADY_ACTIVE');
+        if(this.stopCapture){
+          if(this.captureToken===request.captureToken)return {requestId:request.requestId,action:request.action,status:'ACTIVE',baselineTurns:this.captureBaseline.size};
+          fail('RBRIDGE_CAPTURE_ALREADY_ACTIVE');
+        }
         this.captureToken=request.captureToken!;
         this.captureBaseline=this.snapshot(scanAssistantTurns(this.document));
         this.stopCapture=startAssistantTurnObserver(this.document,turns=>{void this.emitChanged(turns);},{deferInitialScan:true,debounceMs:250});

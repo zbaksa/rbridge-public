@@ -83,6 +83,7 @@ export class BrowserAuthorityRuntimeV1{
     const {binding,leader,capture}=current;
     if(!binding||binding.status!=='VERIFIED'||!leader||leader.status!=='ACTIVE'||!capture||capture.status!=='ACTIVE')fail('RBRIDGE_BROWSER_AUTHORITY_NOT_READY');
     if(current.activeSend&&UNRESOLVED.has(current.activeSend.state))fail('RBRIDGE_SEND_ACTIVE_UNRESOLVED');
+    await this.ensureLiveCapture(binding.tabId,capture);
     const observed=await this.targetReader.observe(binding),fresh=await verifyBinding(binding,observed,now);
     const staged=await this.content.stagePrompt(fresh.control.tabId,input.text);
     const bytes=encoder.encode(input.text).byteLength;
@@ -100,6 +101,7 @@ export class BrowserAuthorityRuntimeV1{
     const current=await this.required(),tx=current.activeSend,{binding,leader,capture}=current;
     if(!tx||tx.state!=='READY_NOT_SENT')fail('RBRIDGE_SEND_NOT_READY');
     if(!binding||binding.status!=='VERIFIED'||!leader||leader.status!=='ACTIVE'||!capture||capture.status!=='ACTIVE')fail('RBRIDGE_BROWSER_AUTHORITY_NOT_READY');
+    await this.ensureLiveCapture(binding.tabId,capture);
     const observed=await this.targetReader.observe(binding),fresh=await verifyBinding(binding,observed,now);
     const preflight=await this.content.preflightSend(fresh.control.tabId);
     if(preflight.status==='AMBIGUOUS')fail('RBRIDGE_SEND_BUTTON_AMBIGUOUS');
@@ -122,6 +124,7 @@ export class BrowserAuthorityRuntimeV1{
 
     let fresh;
     try{
+      await this.ensureLiveCapture(binding.tabId,capture);
       const observed=await this.targetReader.observe(binding);
       fresh=await verifyBinding(binding,observed,now);
       const preflight=await this.content.preflightSend(fresh.control.tabId);
@@ -170,6 +173,12 @@ export class BrowserAuthorityRuntimeV1{
     if(!tx)fail('RBRIDGE_SEND_ACTIVE_MISSING');
     const next=markWaitingResponse(tx);
     return await this.store.commit(current.revision,this.withSend(current,next),now);
+  }
+
+  private async ensureLiveCapture(tabId:number,capture:NonNullable<BrowserAuthoritySnapshotV1['capture']>):Promise<void>{
+    const token='capture:'+capture.sessionId+':'+String(capture.epoch);
+    const started=await this.content.startCapture(tabId,token);
+    if(started.status!=='ACTIVE')fail('RBRIDGE_CAPTURE_RUNTIME_NOT_ACTIVE');
   }
 
   private async required():Promise<BrowserAuthoritySnapshotV1>{
