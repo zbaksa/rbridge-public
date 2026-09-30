@@ -1,7 +1,7 @@
 import {
   REQUIRED_RBRIDGE_CAPABILITIES,RbridgeEventSpoolV1,acquireWriteLeader,activateCapture,canonicalDigest,canonicalJson,captureResponse,
   createSendTransaction,markClicked,markResponseVerified,markSendReady,markSendUncertain,markSentVerified,markWaitingResponse,stopSend,supersedeSend,
-  negotiateHello,persistSendIntent,prepareBinding,projectSendReceipt,validateEventEnvelope,verifyBinding
+  negotiateHello,parseHello,persistSendIntent,prepareBinding,projectSendReceipt,validateEventEnvelope,verifyBinding
 } from '../src/domain/rbridgeChatCore.js';
 import {NativeMessageDecoder,assertApprovedExtensionOrigin,encodeNativeMessage} from '../src/transport/nativeMessaging.js';
 import {StdioFrameDecoder,buildSshStdioLaunch,encodeStdioFrame} from '../src/transport/sshStdio.js';
@@ -9,9 +9,9 @@ import {selectExactBrowserTarget} from '../src/domain/browserInventory.js';
 import {canonicalChatgptProjectId,describeChatgptUrl,requireExactProjectConversationUrl,sameCanonicalChatgptProject} from '../src/browser/chatgptConversationIdentity.js';
 import {assertSafeRolloverCheckpoint,createRolloverProof,quotaEligibleForRouting,validateQuotaObservation} from '../src/domain/browserQuotaRollover.js';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
-import {RbridgeReceiptStoreV1} from '../src/server/rbridgeReceiptStore.js';
+import {RbridgeReceiptStoreV1,validateRbridgeReceiptV1} from '../src/server/rbridgeReceiptStore.js';
 import {createHash} from 'node:crypto';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
 import {attemptHighConfidenceSendClick,clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
 import {ChatgptContentRuntimeV1} from '../src/extension/contentRuntime.js';
@@ -636,6 +636,24 @@ await test('content runtime fails closed on composer/Send ambiguity and captures
   const runtime=new ChatgptContentRuntimeV1(capture.window.document,{emit:()=>{}});
   const scan=runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'scan1',action:'CAPTURE_SCAN'}) as {turns:{assistantTurnId:string}[]};
   equal(scan.turns.length,1,'assistant only');equal(scan.turns[0]!.assistantTurnId,'conversation-turn-2','stable assistant id');
+});
+
+await test('frozen COCWIN-RBridge contract fixture validates exact wire shapes and digest chain',async()=>{
+  const path=join(process.cwd(),'tests','fixtures','rbridge-cocwin-contract-v1.json');
+  const fixture=JSON.parse(await readFile(path,'utf8')) as {
+    schema:string;hello:unknown;bindingReceipt:unknown;sendReceipt:unknown;captureReceipt:unknown;events:unknown[];
+  };
+  equal(fixture.schema,'RBRIDGE_COCWIN_CONTRACT_FIXTURE_V1','fixture schema');
+  equal(parseHello(fixture.hello).schema,'RBRIDGE_CHAT_HELLO_V1','fixture hello');
+  equal((await validateRbridgeReceiptV1(fixture.bindingReceipt)).schema,'RBRIDGE_CHAT_BINDING_RECEIPT_V1','binding receipt');
+  equal((await validateRbridgeReceiptV1(fixture.sendReceipt)).schema,'RBRIDGE_CHAT_SEND_RECEIPT_V1','send receipt');
+  equal((await validateRbridgeReceiptV1(fixture.captureReceipt)).schema,'RBRIDGE_CHAT_CAPTURE_RECEIPT_V1','capture receipt');
+  let previous:string|null=null;
+  for(let index=0;index<fixture.events.length;index++){
+    const event=await validateEventEnvelope(fixture.events[index],previous,index+1);
+    previous=event.eventSha256;
+  }
+  equal(fixture.events.length,4,'fixture event count');
 });
 
 await test('Native Messaging exact framing and extension origin',async()=>{

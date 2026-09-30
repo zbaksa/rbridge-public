@@ -1,0 +1,164 @@
+{
+  "schema": "RBRIDGE_COCWIN_CONTRACT_FIXTURE_V1",
+  "hello": {
+    "schema": "RBRIDGE_CHAT_HELLO_V1",
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "releaseSha": "4444444444444444444444444444444444444444",
+    "maxMessageBytes": 65536,
+    "capabilities": [
+      "CHAT_TARGET_DISCOVERY_V1",
+      "CHAT_BINDING_V1",
+      "CHAT_WRITE_LEADER_V1",
+      "CHAT_CAPTURE_V1",
+      "CHAT_SEND_TX_V1",
+      "CHAT_QUOTA_OBSERVATION_V1",
+      "CHAT_ROLLOVER_V1",
+      "REPLAY_SEQUENCE_V1"
+    ],
+    "browserInstanceId": "chrome-main",
+    "browserProfileId": "chatgpt-primary",
+    "nativeHostVersion": "1.0.0"
+  },
+  "bindingReceipt": {
+    "schema": "RBRIDGE_CHAT_BINDING_RECEIPT_V1",
+    "receiptId": "fixture-binding-1",
+    "sessionId": "exta-11111111111111111111111111111111",
+    "generation": "11111111-1111-4111-8111-111111111111",
+    "browserInstanceId": "chrome-main",
+    "browserProfileId": "chatgpt-primary",
+    "windowId": 10,
+    "tabId": 20,
+    "origin": "https://chatgpt.com",
+    "projectId": "g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-05-cocwin",
+    "conversationId": "6a819823-07fc-83eb-b324-ddf6f474ea29",
+    "conversationGeneration": 1,
+    "ownerSessionId": "exta-11111111111111111111111111111111",
+    "writeLeaderEpoch": 1,
+    "captureEpoch": 1,
+    "observedAt": "2026-09-30T10:00:00.000Z",
+    "sha256": "3bec3f76a76ceca7728408f7a46bea3b9af14ff25b0ac81a260e058702978fc9"
+  },
+  "sendReceipt": {
+    "schema": "RBRIDGE_CHAT_SEND_RECEIPT_V1",
+    "receiptId": "fixture-send-2222222222222222222222222222222222222222222222222222222222222222",
+    "sessionId": "exta-11111111111111111111111111111111",
+    "generation": "11111111-1111-4111-8111-111111111111",
+    "attemptId": "exta-11111111111111111111111111111111:a:1",
+    "effectId": "2222222222222222222222222222222222222222222222222222222222222222",
+    "challenge": "3333333333333333333333333333333333333333333333333333333333333333",
+    "purpose": "PROMPT",
+    "transactionState": "SENT_VERIFIED",
+    "conversationId": "6a819823-07fc-83eb-b324-ddf6f474ea29",
+    "conversationGeneration": 1,
+    "writeLeaderEpoch": 1,
+    "observedAt": "2026-09-30T10:00:01.000Z",
+    "sha256": "14575502f117318f80ea653fe3cdce8c2b17399c229ff71362ccf962c0aa0a79"
+  },
+  "captureReceipt": {
+    "schema": "RBRIDGE_CHAT_CAPTURE_RECEIPT_V1",
+    "receiptId": "fixture-capture-2222222222222222222222222222222222222222222222222222222222222222-turn-1",
+    "sessionId": "exta-11111111111111111111111111111111",
+    "generation": "11111111-1111-4111-8111-111111111111",
+    "attemptId": "exta-11111111111111111111111111111111:a:1",
+    "effectId": "2222222222222222222222222222222222222222222222222222222222222222",
+    "challenge": "3333333333333333333333333333333333333333333333333333333333333333",
+    "conversationId": "6a819823-07fc-83eb-b324-ddf6f474ea29",
+    "conversationGeneration": 1,
+    "assistantTurnId": "conversation-turn-42",
+    "responseUtf8Bytes": 12,
+    "machineBlockSha256": null,
+    "captureEpoch": 1,
+    "observedAt": "2026-09-30T10:00:02.000Z",
+    "sha256": "4b86b04abf6dc3002b41c30ea7534da75d610fc945da69bf794f813bd9672226"
+  },
+  "events": [
+    {
+      "schema": "RBRIDGE_CHAT_EVENT_V1",
+      "eventId": "fixture-event-1",
+      "sequence": 1,
+      "previousEventSha256": null,
+      "eventType": "BINDING_VERIFIED",
+      "sessionId": "exta-11111111111111111111111111111111",
+      "generation": "11111111-1111-4111-8111-111111111111",
+      "attemptId": null,
+      "effectId": null,
+      "observedAt": "2026-09-30T10:00:00.000Z",
+      "payload": {
+        "receipt": {
+          "schema": "COCWIN_RECEIPT_REF_V1",
+          "receiptId": "fixture-binding-1",
+          "receiptSchema": "RBRIDGE_CHAT_BINDING_RECEIPT_V1",
+          "sha256": "3bec3f76a76ceca7728408f7a46bea3b9af14ff25b0ac81a260e058702978fc9"
+        }
+      },
+      "eventSha256": "4c5cea21ad5f14bbd2b7280793e605dc2b7be15f00be4d1f2a213b44307516c3"
+    },
+    {
+      "schema": "RBRIDGE_CHAT_EVENT_V1",
+      "eventId": "fixture-event-2",
+      "sequence": 2,
+      "previousEventSha256": "4c5cea21ad5f14bbd2b7280793e605dc2b7be15f00be4d1f2a213b44307516c3",
+      "eventType": "SEND_INTENT_PERSISTED",
+      "sessionId": "exta-11111111111111111111111111111111",
+      "generation": "11111111-1111-4111-8111-111111111111",
+      "attemptId": "exta-11111111111111111111111111111111:a:1",
+      "effectId": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observedAt": "2026-09-30T10:00:00.500Z",
+      "payload": {
+        "purpose": "PROMPT",
+        "receipt": {
+          "schema": "COCWIN_RECEIPT_REF_V1",
+          "receiptId": "fixture-send-2222222222222222222222222222222222222222222222222222222222222222",
+          "receiptSchema": "RBRIDGE_CHAT_SEND_RECEIPT_V1",
+          "sha256": "14575502f117318f80ea653fe3cdce8c2b17399c229ff71362ccf962c0aa0a79"
+        }
+      },
+      "eventSha256": "d1309cae7b86cc71b5d4f41d1ee352c908ca369be1f8f02182b3708a1946f71a"
+    },
+    {
+      "schema": "RBRIDGE_CHAT_EVENT_V1",
+      "eventId": "fixture-event-3",
+      "sequence": 3,
+      "previousEventSha256": "d1309cae7b86cc71b5d4f41d1ee352c908ca369be1f8f02182b3708a1946f71a",
+      "eventType": "SEND_VERIFIED",
+      "sessionId": "exta-11111111111111111111111111111111",
+      "generation": "11111111-1111-4111-8111-111111111111",
+      "attemptId": "exta-11111111111111111111111111111111:a:1",
+      "effectId": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observedAt": "2026-09-30T10:00:01.000Z",
+      "payload": {
+        "purpose": "PROMPT",
+        "receipt": {
+          "schema": "COCWIN_RECEIPT_REF_V1",
+          "receiptId": "fixture-send-2222222222222222222222222222222222222222222222222222222222222222",
+          "receiptSchema": "RBRIDGE_CHAT_SEND_RECEIPT_V1",
+          "sha256": "14575502f117318f80ea653fe3cdce8c2b17399c229ff71362ccf962c0aa0a79"
+        }
+      },
+      "eventSha256": "36eda548e07644d3668b161ecbe3c85d3b785472e27eebf26086419b2435c77a"
+    },
+    {
+      "schema": "RBRIDGE_CHAT_EVENT_V1",
+      "eventId": "fixture-event-4",
+      "sequence": 4,
+      "previousEventSha256": "36eda548e07644d3668b161ecbe3c85d3b785472e27eebf26086419b2435c77a",
+      "eventType": "RESPONSE_CAPTURED",
+      "sessionId": "exta-11111111111111111111111111111111",
+      "generation": "11111111-1111-4111-8111-111111111111",
+      "attemptId": "exta-11111111111111111111111111111111:a:1",
+      "effectId": "2222222222222222222222222222222222222222222222222222222222222222",
+      "observedAt": "2026-09-30T10:00:02.000Z",
+      "payload": {
+        "captureReceipt": {
+          "schema": "COCWIN_RECEIPT_REF_V1",
+          "receiptId": "fixture-capture-2222222222222222222222222222222222222222222222222222222222222222-turn-1",
+          "receiptSchema": "RBRIDGE_CHAT_CAPTURE_RECEIPT_V1",
+          "sha256": "4b86b04abf6dc3002b41c30ea7534da75d610fc945da69bf794f813bd9672226"
+        },
+        "machineBlockUtf8": null
+      },
+      "eventSha256": "f9b070c0c8dc18675ed0973f0ae43d1710b469d7f2e8512fa5153c05af26b2a2"
+    }
+  ]
+}
