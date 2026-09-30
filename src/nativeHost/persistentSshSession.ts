@@ -105,9 +105,9 @@ export class PersistentSshStdioSessionV1{
         try{
           for(const value of this.decoder.push(chunk))this.invoke(()=>this.hooks.onMessage?.(value));
           this.markHealthy();
-        }catch(error){this.invokeError(error);}
+        }catch(error){this.failActiveConnection(child,error);}
       });
-      child.onError(error=>this.invokeError(error));
+      child.onError(error=>this.failActiveConnection(child,error));
       child.onClose((code,signal)=>this.handleClose(child,code,signal));
       this.invoke(()=>this.hooks.onConnected?.());
     }catch(error){
@@ -115,6 +115,16 @@ export class PersistentSshStdioSessionV1{
       this.invokeError(error);
       this.scheduleReconnect();
     }
+  }
+
+  private failActiveConnection(child:SshProcessHandleV1,cause:unknown):void{
+    if(this.process!==child)return;
+    this.process=null;
+    this.invokeError(cause);
+    this.invoke(()=>this.hooks.onDisconnected?.(null,'PROTOCOL_ERROR'));
+    try{child.kill();}catch{}
+    if(!this.desired){this._state='STOPPED';return;}
+    this.scheduleReconnect();
   }
 
   private handleClose(child:SshProcessHandleV1,code:number|null,signal:string|null):void{

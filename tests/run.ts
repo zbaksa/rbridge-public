@@ -356,16 +356,18 @@ await test('persistent SSH session reconnects with bounded backoff and framed re
     set:(delay,fn)=>{const row={delay,fn,cancelled:false};scheduled.push(row);return row;},
     clear:(handle)=>{(handle as {cancelled:boolean}).cancelled=true;},
   };
-  const messages:unknown[]=[];let connected=0;
+  const messages:unknown[]=[];let connected=0,disconnected=0,transportErrors=0;
   const session=new PersistentSshStdioSessionV1(
     {sshPath:'/usr/bin/ssh',host:'aether-engine',port:22,user:'rbridge',identityFile:'/home/rbridge/.ssh/id_ed25519',knownHostsFile:'/home/rbridge/.ssh/known_hosts'},
-    {onConnected:()=>{connected++;},onMessage:value=>{messages.push(value);}},
+    {onConnected:()=>{connected++;},onMessage:value=>{messages.push(value);},onDisconnected:()=>{disconnected++;},onError:()=>{transportErrors++;}},
     factory,scheduler,
   );
   session.start();equal(session.state,'CONNECTED','connected');equal(connected,1,'connect hook');
   assert(session.send({schema:'PING'})===true,'send accepted');equal(handles[0]!.writes.length,1,'one framed write');
   handles[0]!.emitData(encodeStdioFrame({schema:'PONG'}));equal((messages[0] as {schema:string}).schema,'PONG','decoded');
-  handles[0]!.close(255,null);equal(session.state,'BACKOFF','backoff');equal(scheduled[0]!.delay,100,'first delay');
+  handles[0]!.emitData(new TextEncoder().encode('{bad-json}\n'));
+  equal(session.state,'BACKOFF','malformed frame invalidates session');assert(handles[0]!.killed,'malformed frame kills child');
+  equal(disconnected,1,'disconnect hook');equal(transportErrors,1,'transport error hook');equal(scheduled[0]!.delay,100,'first delay');
   scheduled[0]!.fn();equal(session.state,'CONNECTED','reconnected');equal(connected,2,'second connect');equal(handles.length,2,'second process');
   session.stop();equal(session.state,'STOPPED','stopped');assert(handles[1]!.killed,'active process killed');
 });
