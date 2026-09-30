@@ -1,5 +1,5 @@
 import {M0_LIMITS,REQUIRED_RBRIDGE_CAPABILITIES,type RbridgeChatHelloV1} from '../domain/rbridgeChatCore.js';
-import {ExtensionNativePortLinkV1,type ExtensionRuntimeNativeApiV1,type NativePortEventV1} from './nativePortServiceWorker.js';
+import {ExtensionNativePortLinkV1,type ExtensionRuntimeNativeApiV1} from './nativePortServiceWorker.js';
 
 declare const __RBRIDGE_RELEASE_SHA__:string;
 

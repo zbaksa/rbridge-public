@@ -398,7 +398,7 @@ await test('service-worker bootstrap emits frozen HELLO from strict local config
   const posted:unknown[]=[];
   const port={
     postMessage:(value:unknown)=>posted.push(value),disconnect:()=>{},
-    onMessage:{addListener:(_fn:(value:unknown)=>void)=>{}},onDisconnect:{addListener:(_fn:()=>void)=>{}},
+    onMessage:{addListener:()=>{}},onDisconnect:{addListener:()=>{}},
   };
   const link=await startExtensionServiceWorkerV1(
     {runtime:{connectNative:()=>port},storage:{local:{get:async()=>({rbridgeExtensionBootstrapV1:config})}}},
