@@ -261,7 +261,7 @@ await test('MV3 extension manifest is minimal and service worker owns native por
   const manifest=buildRbridgeExtensionManifest('1.0.0');
   equal(manifest.key,RBRIDGE_EXTENSION_PUBLIC_KEY_B64,'pinned public key');
   const digest=createHash('sha256').update(Buffer.from(manifest.key,'base64')).digest().subarray(0,16),alpha='abcdefghijklmnop';
-  const derivedId=[...digest].map(byte=>alpha[(byte>>4)&15]+alpha[byte&15]).join('');
+  const derivedId=[...digest].map(byte=>alpha[(byte>>4)&15]!+alpha[byte&15]!).join('');
   equal(derivedId,RBRIDGE_EXTENSION_ID,'deterministic extension id');
   equal(RBRIDGE_EXTENSION_ID,'ebibbijpegoankenmggdnehpoadcophk','expected native origin id');
   assert(manifest.permissions.includes('nativeMessaging'),'native messaging permission');
