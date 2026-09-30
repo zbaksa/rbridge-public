@@ -25,6 +25,7 @@ import {parseNativeHostInvocation} from '../src/nativeHost/nativeHostInvocation.
 import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFactoryV1,type SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
 import {buildRbridgeExtensionManifest} from '../src/extension/extensionManifest.js';
 import {ExtensionNativePortLinkV1,RBRIDGE_NATIVE_HOST_NAME,type ExtensionNativePortV1} from '../src/extension/nativePortServiceWorker.js';
+import {BrowserAuthorityStoreV1,type ChromeStorageAreaV1} from '../src/extension/browserAuthorityStore.js';
 import {ChromeTabsInventoryAdapterV1,discoverChatgptConversationTabs,selectExactDiscoveredChatgptTarget} from '../src/extension/chromeTabInventory.js';
 import {verifyReplayFailureFailClosed} from './replay-failure-case.js';
 
@@ -363,6 +364,39 @@ await test('Native Host config and process bootstrap fail closed',async()=>{
     equal(stdout.length,0,'no stray native stdout');
     endHandler();errorHandler(new Error('late'));equal(exitCode,70,'fatal remains stable');
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('browser authority snapshot persists SEND_INTENT across restart and stale CAS fails closed',async()=>{
+  class MemoryStorage implements ChromeStorageAreaV1{
+    data:Record<string,unknown>={};failAfterWrite=false;
+    async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}
+    async set(items:Record<string,unknown>){Object.assign(this.data,structuredClone(items));if(this.failAfterWrite)throw new Error('simulated disconnect');}
+  }
+  const storage=new MemoryStorage(),store=new BrowserAuthorityStoreV1(storage);
+  const verified=await verifyBinding(prepareBinding(target,new Date(at)),target,new Date(at));
+  const leader=acquireWriteLeader(verified.control,null,new Date(at)),capture=activateCapture(verified.control,leader,null,new Date(at));
+  let tx=createSendTransaction({sessionId:session,generation,attemptId:attempt,effectId:effect,challenge,purpose:'PROMPT',payloadUtf8Bytes:17},verified.control,leader,capture,new Date(at));
+  tx=persistSendIntent(markSendReady(tx),new Date(at));
+  const first=await store.commit(0,{binding:verified.control,leader,capture,activeSend:tx},new Date(at));
+  equal(first.revision,1,'first revision');equal(first.activeSend?.state,'SEND_INTENT','intent durable');
+  const reopened=new BrowserAuthorityStoreV1(storage),loaded=await reopened.load();equal(loaded?.activeSend?.effectId,effect,'restart effect');equal(loaded?.activeSend?.state,'SEND_INTENT','restart blocks blind resend');
+  await rejects(()=>reopened.commit(0,{binding:verified.control,leader,capture,activeSend:tx},new Date(at)),/REVISION_MISMATCH/,'stale revision blocked');
+});
+
+await test('authority storage write uncertainty reconciles from durable snapshot',async()=>{
+  class UncertainStorage implements ChromeStorageAreaV1{
+    data:Record<string,unknown>={};fail=false;
+    async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}
+    async set(items:Record<string,unknown>){Object.assign(this.data,structuredClone(items));if(this.fail)throw new Error('after write');}
+  }
+  const storage=new UncertainStorage(),store=new BrowserAuthorityStoreV1(storage);
+  const verified=await verifyBinding(prepareBinding(target,new Date(at)),target,new Date(at));
+  const leader=acquireWriteLeader(verified.control,null,new Date(at)),capture=activateCapture(verified.control,leader,null,new Date(at));
+  let tx=createSendTransaction({sessionId:session,generation,attemptId:attempt,effectId:effect,challenge,purpose:'PROMPT',payloadUtf8Bytes:9},verified.control,leader,capture,new Date(at));
+  tx=persistSendIntent(markSendReady(tx),new Date(at));storage.fail=true;
+  await rejects(()=>store.commit(0,{binding:verified.control,leader,capture,activeSend:tx},new Date(at)),/WRITE_UNCERTAIN/,'caller sees uncertainty');
+  storage.fail=false;const reconciled=await new BrowserAuthorityStoreV1(storage).load();
+  equal(reconciled?.activeSend?.state,'SEND_INTENT','readback proves intent despite uncertain caller result');
 });
 
 await test('content runtime stages idempotently and guarded Send clicks exactly once',async()=>{
