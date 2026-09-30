@@ -308,7 +308,7 @@ await test('Native Host manifest and router are strict allowlists',async()=>{
   equal(manifest.allowed_origins[0],'chrome-extension://'+extensionId+'/','origin');
   await rejects(()=>Promise.resolve(buildNativeHostManifest({executablePath:'relative-host',extensionId})),/HOST_PATH_INVALID/,'absolute host path');
   equal(routeServerToNative(hello).kind,'HELLO','server hello');
-  await rejects(()=>Promise.resolve(routeServerToNative({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'})),/COMMAND_CONTRACT_UNAVAILABLE/,'unknown command denied');
+  await rejects(()=>Promise.resolve(routeServerToNative({schema:'RBRIDGE_CHAT_SEND_COMMAND_V1'})),/COMMAND_SCHEMA_DENIED/,'unknown command denied');
 });
 
 await test('Native Host persists event before forwarding and can replay after restart',async()=>{
