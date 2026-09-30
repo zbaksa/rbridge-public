@@ -376,6 +376,23 @@ await test('content runtime stages idempotently and guarded Send clicks exactly 
   await rejects(()=>Promise.resolve(runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'p2',action:'STAGE_PROMPT',text:'different'})),/COMPOSER_NOT_EMPTY/,'manual content preserved');
 });
 
+await test('capture start baselines stale assistant history and emits only new or changed turns',async()=>{
+  const page=new JSDOM('<!doctype html><body><article data-testid="conversation-turn-1"><div data-message-author-role="assistant">old</div></article></body>',{url:'https://chatgpt.com/'});
+  const emitted:{turns:{assistantTurnId:string;text:string}[]}[]=[];
+  const runtime=new ChatgptContentRuntimeV1(page.window.document,{emit:frame=>{emitted.push(frame as {turns:{assistantTurnId:string;text:string}[]});}});
+  const started=runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'start1',action:'CAPTURE_START',captureToken:'capture-1'}) as {baselineTurns:number};
+  equal(started.baselineTurns,1,'one stale baseline turn');equal(emitted.length,0,'baseline not emitted');
+  const old=page.window.document.querySelector('[data-message-author-role="assistant"]')!;
+  old.textContent='old changed';
+  await new Promise(resolve=>setTimeout(resolve,150));
+  equal(emitted.length,1,'changed turn emitted');equal(emitted[0]!.turns[0]!.text,'old changed','changed text');
+  const article=page.window.document.createElement('article');article.setAttribute('data-testid','conversation-turn-2');
+  article.innerHTML='<div data-message-author-role="assistant">new</div>';page.window.document.body.appendChild(article);
+  await new Promise(resolve=>setTimeout(resolve,150));
+  equal(emitted.length,2,'new turn emitted');equal(emitted[1]!.turns[0]!.assistantTurnId,'conversation-turn-2','new id');
+  runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'stop1',action:'CAPTURE_STOP'});
+});
+
 await test('content runtime fails closed on composer/Send ambiguity and captures assistant only',async()=>{
   const ambiguousComposer=new JSDOM('<!doctype html><body><textarea></textarea><textarea></textarea></body>',{url:'https://chatgpt.com/'});
   await rejects(()=>Promise.resolve(stageComposerText(ambiguousComposer.window.document,'x')),/COMPOSER_AMBIGUOUS/,'composer ambiguity');

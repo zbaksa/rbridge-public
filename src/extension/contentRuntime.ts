@@ -46,6 +46,7 @@ function parse(input:unknown):ContentRequestV1{
 export class ChatgptContentRuntimeV1{
   private stopCapture:(()=>void)|null=null;
   private captureToken:string|null=null;
+  private captureBaseline=new Map<string,string>();
 
   constructor(private readonly document:Document,private readonly emitter:ContentRuntimeEmitterV1){}
 
@@ -69,20 +70,38 @@ export class ChatgptContentRuntimeV1{
       case 'CAPTURE_START':
         if(this.stopCapture)fail('RBRIDGE_CAPTURE_ALREADY_ACTIVE');
         this.captureToken=request.captureToken!;
-        this.stopCapture=startAssistantTurnObserver(this.document,turns=>{void this.emit(turns);});
-        return {requestId:request.requestId,action:request.action,status:'ACTIVE'};
+        this.captureBaseline=this.snapshot(scanAssistantTurns(this.document));
+        this.stopCapture=startAssistantTurnObserver(this.document,turns=>{void this.emitChanged(turns);},{deferInitialScan:true});
+        return {requestId:request.requestId,action:request.action,status:'ACTIVE',baselineTurns:this.captureBaseline.size};
       case 'CAPTURE_STOP':
-        this.stopCapture?.();this.stopCapture=null;this.captureToken=null;
+        this.stopCapture?.();this.stopCapture=null;this.captureToken=null;this.captureBaseline.clear();
         return {requestId:request.requestId,action:request.action,status:'OFF'};
     }
   }
 
   stop():void{
-    this.stopCapture?.();this.stopCapture=null;this.captureToken=null;
+    this.stopCapture?.();this.stopCapture=null;this.captureToken=null;this.captureBaseline.clear();
   }
 
-  private async emit(turns:AssistantTurnObservationV1[]):Promise<void>{
+  private fingerprint(turn:AssistantTurnObservationV1):string{
+    return turn.textUtf8Bytes+'\0'+turn.text+'\0'+turn.codeBlocks.join('\0');
+  }
+
+  private snapshot(turns:AssistantTurnObservationV1[]):Map<string,string>{
+    const out=new Map<string,string>();
+    for(const turn of turns)out.set(turn.assistantTurnId,this.fingerprint(turn));
+    return out;
+  }
+
+  private async emitChanged(turns:AssistantTurnObservationV1[]):Promise<void>{
     const token=this.captureToken;if(!token)return;
-    try{await this.emitter.emit({schema:'RBRIDGE_CONTENT_CAPTURE_V1',captureToken:token,turns});}catch{}
+    const changed:AssistantTurnObservationV1[]=[];
+    for(const turn of turns){
+      const fingerprint=this.fingerprint(turn);
+      if(this.captureBaseline.get(turn.assistantTurnId)!==fingerprint)changed.push(turn);
+      this.captureBaseline.set(turn.assistantTurnId,fingerprint);
+    }
+    if(changed.length===0)return;
+    try{await this.emitter.emit({schema:'RBRIDGE_CONTENT_CAPTURE_V1',captureToken:token,turns:changed});}catch{}
   }
 }
