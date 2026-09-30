@@ -52,17 +52,17 @@ export class NativeHostRuntimeV1 {
       ...(config.maxEventBytes===undefined?{}:{maxBytes:config.maxEventBytes}),
     });
 
-    let session!:PersistentSshStdioSessionV1;
+    const sessionRef:{current:PersistentSshStdioSessionV1|null}={current:null};
     this.relay=new NativeHostRelayV1(store,{
       send:async value=>{
-        if(!session.send(value)){
+        if(!sessionRef.current?.send(value)){
           this.relay.peerDisconnected();
           throw new Error('RBRIDGE_SSH_NOT_CONNECTED');
         }
       },
     });
 
-    session=new PersistentSshStdioSessionV1(
+    const session=new PersistentSshStdioSessionV1(
       config.ssh,
       {
         onConnected:async()=>{await this.relay.peerConnected();},
@@ -80,6 +80,7 @@ export class NativeHostRuntimeV1 {
       dependencies.processFactory,
       dependencies.scheduler,
     );
+    sessionRef.current=session;
     this.ssh=session;
   }
 
