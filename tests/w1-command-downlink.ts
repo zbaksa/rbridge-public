@@ -168,14 +168,14 @@ try{
   equal((forwarded.at(-1) as RbridgeChatCommandResultV1).commandId,'cmd-relay','result correlation preserved');
 }finally{await rm(root,{recursive:true,force:true});}
 
-async function isolatedDispatcher(){
+async function isolatedDispatcher(tabApi=tabs){
   const data:Record<string,unknown>={};
   const storage={
     get:async(key:string)=>key in data?{[key]:structuredClone(data[key])}:{},
     set:async(items:Record<string,unknown>)=>{Object.assign(data,structuredClone(items));},
   };
-  const runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),new ChromeLiveTargetReaderV1(tabs,'chrome-main','chatgpt-primary'),new ChromeContentDriverV1(tabs,scripting));
-  const dispatcher=new RbridgeChatCommandDispatcherV1(runtime,new ChromeTabsInventoryAdapterV1(tabs,'chrome-main','chatgpt-primary'),'chrome-main','chatgpt-primary');
+  const runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),new ChromeLiveTargetReaderV1(tabApi,'chrome-main','chatgpt-primary'),new ChromeContentDriverV1(tabApi,scripting));
+  const dispatcher=new RbridgeChatCommandDispatcherV1(runtime,new ChromeTabsInventoryAdapterV1(tabApi,'chrome-main','chatgpt-primary'),'chrome-main','chatgpt-primary');
   const bind=command('security-bind','BIND_TARGET',{windowId:10,tabId:20,origin:'https://chatgpt.com',projectId:project,conversationId:conversation,conversationGeneration:1});
   assert((await dispatcher.execute(bind)).ok,'security binding');
   return {dispatcher,runtime,bind};
@@ -202,6 +202,54 @@ try{
   equal(JSON.stringify(results[0]),JSON.stringify(results[1]),'duplicate result replay exact');
   console.log('PASS W1_COMMAND_SECURITY concurrent duplicate executes once');
 }catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY concurrent duplicate: '+String(error));}
+
+try{
+  const {dispatcher}=await isolatedDispatcher();
+  const result=dispatcher.execute({});
+  assert(result instanceof Promise,'invalid command must preserve Promise API');
+  await rejects(()=>result,/RBRIDGE_COMMAND_INVALID/,'invalid command rejects asynchronously');
+  console.log('PASS W1_COMMAND_SECURITY malformed input rejects through Promise');
+}catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY Promise API: '+String(error));}
+
+async function withPendingClick(check:(dispatcher:RbridgeChatCommandDispatcherV1,execute:RbridgeChatCommandV1)=>Promise<void>){
+  let release!:()=>void,entered!:()=>void;
+  const clickGate=new Promise<void>(resolve=>{release=resolve;});
+  const clickEntered=new Promise<void>(resolve=>{entered=resolve;});
+  const tabApi={...tabs,sendMessage:async(tabId:number,message:unknown)=>{
+    if((message as {action:string}).action==='SEND_CLICK'){entered();await clickGate;}
+    return await tabs.sendMessage(tabId,message);
+  }};
+  const {dispatcher}=await isolatedDispatcher(tabApi);
+  assert((await dispatcher.execute(command('pending-leader','ACQUIRE_WRITE_LEADER',{}))).ok,'pending leader');
+  assert((await dispatcher.execute(command('pending-capture','ACTIVATE_CAPTURE',{}))).ok,'pending capture');
+  assert((await dispatcher.execute(command('pending-stage','STAGE_PROMPT',{challenge,purpose:'PROMPT',text:'pending click proof'},true))).ok,'pending stage');
+  assert((await dispatcher.execute(command('pending-intent','PERSIST_SEND_INTENT',{},true))).ok,'pending intent');
+  const execute=command('pending-execute','EXECUTE_PERSISTED_SEND',{},true);
+  const pending=dispatcher.execute(execute);
+  await clickEntered;
+  try{await check(dispatcher,execute);}
+  finally{release();await pending;}
+}
+async function whileClickPending<T>(result:Promise<T>):Promise<T>{
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try{return await Promise.race([result,new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(new Error('PENDING_CLICK_BLOCKED_READ_OR_COLLISION')),250);})]);}
+  finally{if(timer!==undefined)clearTimeout(timer);}
+}
+try{
+  await withPendingClick(async dispatcher=>{
+    const result=await whileClickPending(dispatcher.execute(command('pending-read','READ_STATE',{})));
+    assert(result.ok,'durable state remains readable during stalled click');
+    equal((result.result as {activeSend:{state:string}}).activeSend.state,'SEND_INTENT','read observes durable intent without retrying click');
+  });
+  console.log('PASS W1_COMMAND_SECURITY durable state readable while click pending');
+}catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY pending read: '+String(error));}
+try{
+  await withPendingClick(async(dispatcher,execute)=>{
+    await rejects(()=>whileClickPending(dispatcher.execute({...execute,action:'READ_STATE',attemptId:null,effectId:null,payload:{}})),/REQUEST_ID_COLLISION/,'pending command collision rejects before external call settles');
+  });
+  console.log('PASS W1_COMMAND_SECURITY pending command collision rejects immediately');
+}catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY pending collision: '+String(error));}
+
 if(securityFailures)throw new Error('W1_COMMAND_SECURITY_FAILED:'+String(securityFailures));
 
 console.log('W1_COMMAND_DOWNLINK_ACCEPTANCE=PASS');
