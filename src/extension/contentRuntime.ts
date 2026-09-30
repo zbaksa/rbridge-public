@@ -1,5 +1,5 @@
 import {
-  clickHighConfidenceSendButton,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver,
+  clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver,
   type AssistantTurnObservationV1,
 } from '../browser/chatgptDomAdapter.js';
 
@@ -71,7 +71,7 @@ export class ChatgptContentRuntimeV1{
         if(this.stopCapture)fail('RBRIDGE_CAPTURE_ALREADY_ACTIVE');
         this.captureToken=request.captureToken!;
         this.captureBaseline=this.snapshot(scanAssistantTurns(this.document));
-        this.stopCapture=startAssistantTurnObserver(this.document,turns=>{void this.emitChanged(turns);},{deferInitialScan:true});
+        this.stopCapture=startAssistantTurnObserver(this.document,turns=>{void this.emitChanged(turns);},{deferInitialScan:true,debounceMs:250});
         return {requestId:request.requestId,action:request.action,status:'ACTIVE',baselineTurns:this.captureBaseline.size};
       case 'CAPTURE_STOP':
         this.stopCapture?.();this.stopCapture=null;this.captureToken=null;this.captureBaseline.clear();
@@ -95,6 +95,7 @@ export class ChatgptContentRuntimeV1{
 
   private async emitChanged(turns:AssistantTurnObservationV1[]):Promise<void>{
     const token=this.captureToken;if(!token)return;
+    if(!inspectResponseQuiescence(this.document).settled)return;
     const changed:AssistantTurnObservationV1[]=[];
     for(const turn of turns){
       const fingerprint=this.fingerprint(turn);

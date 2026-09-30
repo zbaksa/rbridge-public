@@ -148,7 +148,7 @@ function dispatchComposerInput(element:HTMLElement,text:string):void{
 export function stageComposerText(document:Document,text:string,maxUtf8Bytes=48_000):ComposerStageResultV1{
   if(typeof text!=='string'||text.length===0)throw new Error('RBRIDGE_COMPOSER_TEXT_INVALID');
   const bytes=encoder.encode(text).byteLength;
-  if(!Number.isInteger(maxUtf8Bytes)||maxUtf8Bytes<1||bytes>maxUtf8Bytes)throw new Error('RBRIDGE_SEND_PAYLOAD_TOO_LARGE');
+  if(!Number.isInteger(maxUtf8Bytes)||maxUtf8Bytes<1||maxUtf8Bytes>48_000||bytes>maxUtf8Bytes)throw new Error('RBRIDGE_SEND_PAYLOAD_TOO_LARGE');
   const located=locateUniqueComposer(document);
   if(located.status==='NOT_FOUND')throw new Error('RBRIDGE_COMPOSER_NOT_FOUND');
   if(located.status==='AMBIGUOUS')throw new Error('RBRIDGE_COMPOSER_AMBIGUOUS');
@@ -223,6 +223,35 @@ export function locateHighConfidenceSendButton(document:Document):SendLocatorRes
   const top=scored[0]!,tied=scored.filter(row=>row.score===top.score);
   if(tied.length!==1)return {status:'AMBIGUOUS',element:null,evidence:{composerCount:composers.length,candidateCount:scored.length,topScore:top.score}};
   return {status:'FOUND',element:top.element,evidence:{composerCount:composers.length,candidateCount:scored.length,topScore:top.score}};
+}
+
+export interface ResponseQuiescenceResultV1{
+  settled:boolean;
+  reason:'READY'|'STOP_CONTROL_VISIBLE'|'COMPOSER_NOT_UNIQUE'|'SEND_NOT_READY';
+  sendStatus:'FOUND'|'NOT_FOUND'|'AMBIGUOUS';
+}
+
+function hasVisibleStopControl(document:Document):boolean{
+  const stopWord=/\b(stop|stop generating|zaustavi|prekini)\b/iu;
+  for(const root of allRoots(document)){
+    for(const node of root.querySelectorAll('button,[role="button"]')){
+      if(!isHtmlElement(node)||!isVisible(node))continue;
+      const testId=(node.getAttribute('data-testid')??'').trim();
+      const aria=(node.getAttribute('aria-label')??'').trim();
+      const title=(node.getAttribute('title')??'').trim();
+      if(/stop/iu.test(testId)||stopWord.test((aria+' '+title).trim()))return true;
+    }
+  }
+  return false;
+}
+
+export function inspectResponseQuiescence(document:Document):ResponseQuiescenceResultV1{
+  if(hasVisibleStopControl(document))return {settled:false,reason:'STOP_CONTROL_VISIBLE',sendStatus:'NOT_FOUND'};
+  const composer=locateUniqueComposer(document);
+  if(composer.status!=='FOUND')return {settled:false,reason:'COMPOSER_NOT_UNIQUE',sendStatus:'NOT_FOUND'};
+  const send=locateHighConfidenceSendButton(document);
+  if(send.status!=='FOUND')return {settled:false,reason:'SEND_NOT_READY',sendStatus:send.status};
+  return {settled:true,reason:'READY',sendStatus:'FOUND'};
 }
 
 export function clickHighConfidenceSendButton(document:Document):SendLocatorResultV1{

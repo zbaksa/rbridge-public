@@ -12,7 +12,7 @@ import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {RbridgeReceiptStoreV1} from '../src/server/rbridgeReceiptStore.js';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
-import {clickHighConfidenceSendButton,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
+import {clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
 import {ChatgptContentRuntimeV1} from '../src/extension/contentRuntime.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -377,20 +377,39 @@ await test('content runtime stages idempotently and guarded Send clicks exactly 
 });
 
 await test('capture start baselines stale assistant history and emits only new or changed turns',async()=>{
-  const page=new JSDOM('<!doctype html><body><article data-testid="conversation-turn-1"><div data-message-author-role="assistant">old</div></article></body>',{url:'https://chatgpt.com/'});
+  const page=new JSDOM('<!doctype html><body><article data-testid="conversation-turn-1"><div data-message-author-role="assistant">old</div></article><form><textarea id="prompt-textarea"></textarea><button data-testid="send-button" type="submit">Send</button></form></body>',{url:'https://chatgpt.com/'});
   const emitted:{turns:{assistantTurnId:string;text:string}[]}[]=[];
   const runtime=new ChatgptContentRuntimeV1(page.window.document,{emit:frame=>{emitted.push(frame as {turns:{assistantTurnId:string;text:string}[]});}});
   const started=runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'start1',action:'CAPTURE_START',captureToken:'capture-1'}) as {baselineTurns:number};
   equal(started.baselineTurns,1,'one stale baseline turn');equal(emitted.length,0,'baseline not emitted');
   const old=page.window.document.querySelector('[data-message-author-role="assistant"]')!;
   old.textContent='old changed';
-  await new Promise(resolve=>setTimeout(resolve,150));
+  await new Promise(resolve=>setTimeout(resolve,300));
   equal(emitted.length,1,'changed turn emitted');equal(emitted[0]!.turns[0]!.text,'old changed','changed text');
   const article=page.window.document.createElement('article');article.setAttribute('data-testid','conversation-turn-2');
   article.innerHTML='<div data-message-author-role="assistant">new</div>';page.window.document.body.appendChild(article);
-  await new Promise(resolve=>setTimeout(resolve,150));
+  await new Promise(resolve=>setTimeout(resolve,300));
   equal(emitted.length,2,'new turn emitted');equal(emitted[1]!.turns[0]!.assistantTurnId,'conversation-turn-2','new id');
   runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'stop1',action:'CAPTURE_STOP'});
+});
+
+await test('capture waits for terminal UI quiescence before emitting response',async()=>{
+  const page=new JSDOM('<!doctype html><body><article data-testid="conversation-turn-1"><div data-message-author-role="assistant">old</div></article><form><textarea id="prompt-textarea"></textarea><button data-testid="stop-button" aria-label="Stop generating" type="button">Stop</button></form></body>',{url:'https://chatgpt.com/'});
+  const emitted:unknown[]=[];const runtime=new ChatgptContentRuntimeV1(page.window.document,{emit:frame=>{emitted.push(frame);}});
+  runtime.handle({schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId:'qs1',action:'CAPTURE_START',captureToken:'capture-q'});
+  const article=page.window.document.createElement('article');article.setAttribute('data-testid','conversation-turn-2');article.innerHTML='<div data-message-author-role="assistant">partial</div>';page.window.document.body.insertBefore(article,page.window.document.querySelector('form'));
+  await new Promise(resolve=>setTimeout(resolve,300));
+  equal(inspectResponseQuiescence(page.window.document).settled,false,'streaming UI not settled');equal(emitted.length,0,'partial response suppressed');
+  const stop=page.window.document.querySelector('[data-testid="stop-button"]')!;const send=page.window.document.createElement('button');send.setAttribute('data-testid','send-button');send.setAttribute('type','submit');send.textContent='Send';stop.replaceWith(send);
+  article.querySelector('[data-message-author-role="assistant"]')!.textContent='final';
+  await new Promise(resolve=>setTimeout(resolve,300));
+  equal(inspectResponseQuiescence(page.window.document).settled,true,'terminal UI settled');equal(emitted.length,1,'final response emitted');
+  runtime.stop();
+});
+
+await test('composer byte ceiling cannot be raised above frozen M0 limit',async()=>{
+  const page=new JSDOM('<!doctype html><body><textarea id="prompt-textarea"></textarea></body>');
+  await rejects(()=>Promise.resolve(stageComposerText(page.window.document,'x'.repeat(48_001),100_000)),/SEND_PAYLOAD_TOO_LARGE/,'caller cannot raise frozen cap');
 });
 
 await test('content runtime fails closed on composer/Send ambiguity and captures assistant only',async()=>{
