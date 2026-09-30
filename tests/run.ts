@@ -15,7 +15,8 @@ import {JSDOM} from 'jsdom';
 import {attemptHighConfidenceSendClick,clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
 import {ChatgptContentRuntimeV1} from '../src/extension/contentRuntime.js';
 import {installContentMessageBridgeV1} from '../src/extension/contentMessageBridge.js';
-import {ChromeContentDriverV1,ChromeLiveTargetReaderV1,type ChromeAuthorityTabsApiV1} from '../src/extension/chromeAuthorityAdapters.js';
+import {ChromeContentDriverV1,ChromeLiveTargetReaderV1,type ChromeAuthorityScriptingApiV1,type ChromeAuthorityTabsApiV1} from '../src/extension/chromeAuthorityAdapters.js';
+import {parseExtensionBootstrapConfigV1,startExtensionServiceWorkerV1} from '../src/extension/serviceWorkerEntry.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
@@ -367,6 +368,44 @@ await test('Native Host config and process bootstrap fail closed',async()=>{
     equal(stdout.length,0,'no stray native stdout');
     endHandler();errorHandler(new Error('late'));equal(exitCode,70,'fatal remains stable');
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('dynamic content injection happens before stage/preflight but never as click recovery',async()=>{
+  let injections=0;
+  const scripting:ChromeAuthorityScriptingApiV1={executeScript:async details=>{injections++;equal(details.files[0],'contentScript.js','bundle path');}};
+  const replies:{[key:string]:unknown}={
+    STAGE_PROMPT:{status:'STAGED_VERIFIED',utf8Bytes:5},
+    SEND_PREFLIGHT:{status:'FOUND'},
+    SEND_CLICK:{outcome:'CLICKED'},
+  };
+  const tabs:ChromeAuthorityTabsApiV1={
+    get:async id=>({id,windowId:1,url:'https://chatgpt.com/'}),
+    sendMessage:async(_tab,message)=>{
+      const req=message as {requestId:string;action:string};
+      return {schema:'RBRIDGE_CONTENT_REPLY_V1',requestId:req.requestId,ok:true,result:replies[req.action]};
+    },
+  };
+  const driver=new ChromeContentDriverV1(tabs,scripting);
+  await driver.stagePrompt(1,'hello');equal(injections,1,'stage inject');
+  await driver.preflightSend(1);equal(injections,2,'preflight inject');
+  await driver.clickSend(1);equal(injections,2,'click never reinjects after intent');
+});
+
+await test('service-worker bootstrap emits frozen HELLO from strict local config',async()=>{
+  const config={schema:'RBRIDGE_EXTENSION_BOOTSTRAP_V1' as const,browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',nativeHostVersion:'1.0.0'};
+  equal(parseExtensionBootstrapConfigV1(config).browserProfileId,'chatgpt-primary','bootstrap parse');
+  await rejects(()=>Promise.resolve(parseExtensionBootstrapConfigV1({...config,extra:true})),/BOOTSTRAP_INVALID/,'strict config');
+  const posted:unknown[]=[];
+  const port={
+    postMessage:(value:unknown)=>posted.push(value),disconnect:()=>{},
+    onMessage:{addListener:(_fn:(value:unknown)=>void)=>{}},onDisconnect:{addListener:(_fn:()=>void)=>{}},
+  };
+  const link=await startExtensionServiceWorkerV1(
+    {runtime:{connectNative:()=>port},storage:{local:{get:async()=>({rbridgeExtensionBootstrapV1:config})}}},
+    '1'.repeat(40),
+  );
+  equal(link.connected,true,'native link connected');equal((posted[0] as {schema:string}).schema,'RBRIDGE_CHAT_HELLO_V1','hello first');equal((posted[0] as {releaseSha:string}).releaseSha,'1'.repeat(40),'release bound');
+  link.disconnect();
 });
 
 await test('content message bridge and Chrome driver preserve pre-click proof vs channel uncertainty',async()=>{

@@ -27,7 +27,11 @@
     "lint": "eslint .",
     "test": "npm run build:server && node dist/tests/run.js && node dist/tests/native-host-runtime-runner.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "verify": "npm run typecheck && npm test && npm run lint && npm run build:server"
+    "verify": "npm run typecheck && npm test && npm run lint && npm run build:server && npm run build:extension",
+    "build:extension:content": "vite build --config vite.content.config.ts",
+    "build:extension:worker": "vite build --config vite.worker.config.ts",
+    "build:extension:manifest": "node scripts/write-extension-manifest.mjs",
+    "build:extension": "npm run build:extension:content && npm run build:extension:worker && npm run build:extension:manifest"
   },
   "type": "module",
   "version": "0.1.0-dev"
