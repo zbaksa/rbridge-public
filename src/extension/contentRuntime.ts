@@ -1,5 +1,5 @@
 import {
-  clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver,
+  attemptHighConfidenceSendClick,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver,
   type AssistantTurnObservationV1,
 } from '../browser/chatgptDomAdapter.js';
 
@@ -62,8 +62,8 @@ export class ChatgptContentRuntimeV1{
         return {requestId:request.requestId,action:request.action,status:result.status,evidence:result.evidence};
       }
       case 'SEND_CLICK':{
-        const result=clickHighConfidenceSendButton(this.document);
-        return {requestId:request.requestId,action:request.action,status:result.status,evidence:result.evidence,clicked:true};
+        const result=attemptHighConfidenceSendClick(this.document);
+        return {requestId:request.requestId,action:request.action,...result};
       }
       case 'CAPTURE_SCAN':
         return {requestId:request.requestId,action:request.action,turns:scanAssistantTurns(this.document)};

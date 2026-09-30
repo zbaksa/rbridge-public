@@ -254,13 +254,25 @@ export function inspectResponseQuiescence(document:Document):ResponseQuiescenceR
   return {settled:true,reason:'READY',sendStatus:'FOUND'};
 }
 
+export type SendClickAttemptV1=
+  |{outcome:'CLICKED'}
+  |{outcome:'FAILED_BEFORE_CLICK';reason:'RBRIDGE_SEND_BUTTON_NOT_FOUND'|'RBRIDGE_SEND_BUTTON_AMBIGUOUS'}
+  |{outcome:'UNCERTAIN';reason:'SEND_UNCERTAIN'};
+
+export function attemptHighConfidenceSendClick(document:Document):SendClickAttemptV1{
+  const result=locateHighConfidenceSendButton(document);
+  if(result.status==='NOT_FOUND')return {outcome:'FAILED_BEFORE_CLICK',reason:'RBRIDGE_SEND_BUTTON_NOT_FOUND'};
+  if(result.status==='AMBIGUOUS')return {outcome:'FAILED_BEFORE_CLICK',reason:'RBRIDGE_SEND_BUTTON_AMBIGUOUS'};
+  try{result.element!.click();return {outcome:'CLICKED'};}
+  catch{return {outcome:'UNCERTAIN',reason:'SEND_UNCERTAIN'};}
+}
+
 export function clickHighConfidenceSendButton(document:Document):SendLocatorResultV1{
   const result=locateHighConfidenceSendButton(document);
-  if(result.status==='NOT_FOUND')throw new Error('RBRIDGE_SEND_BUTTON_NOT_FOUND');
-  if(result.status==='AMBIGUOUS')throw new Error('RBRIDGE_SEND_BUTTON_AMBIGUOUS');
-  const element=result.element!;
-  element.click();
-  return {...result,element};
+  const attempt=attemptHighConfidenceSendClick(document);
+  if(attempt.outcome==='FAILED_BEFORE_CLICK')throw new Error(attempt.reason);
+  if(attempt.outcome==='UNCERTAIN')throw new Error('SEND_UNCERTAIN');
+  return result;
 }
 
 export function startAssistantTurnObserver(document:Document,onScan:(turns:AssistantTurnObservationV1[])=>void,options:AssistantObserverOptionsV1={}):()=>void{

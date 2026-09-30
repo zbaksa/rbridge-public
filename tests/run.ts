@@ -12,8 +12,10 @@ import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {RbridgeReceiptStoreV1} from '../src/server/rbridgeReceiptStore.js';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
-import {clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
+import {attemptHighConfidenceSendClick,clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
 import {ChatgptContentRuntimeV1} from '../src/extension/contentRuntime.js';
+import {installContentMessageBridgeV1} from '../src/extension/contentMessageBridge.js';
+import {ChromeContentDriverV1,ChromeLiveTargetReaderV1,type ChromeAuthorityTabsApiV1} from '../src/extension/chromeAuthorityAdapters.js';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
@@ -365,6 +367,39 @@ await test('Native Host config and process bootstrap fail closed',async()=>{
     equal(stdout.length,0,'no stray native stdout');
     endHandler();errorHandler(new Error('late'));equal(exitCode,70,'fatal remains stable');
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('content message bridge and Chrome driver preserve pre-click proof vs channel uncertainty',async()=>{
+  const page=new JSDOM('<!doctype html><body><form><textarea id="prompt-textarea"></textarea><button data-testid="send-button" type="submit">Send</button></form></body>',{url:'https://chatgpt.com/'});
+  const runtime=new ChatgptContentRuntimeV1(page.window.document,{emit:()=>{}});
+  let listener:((message:unknown,sender:unknown,sendResponse:(response:unknown)=>void)=>boolean|void)|null=null;
+  installContentMessageBridgeV1({onMessage:{addListener:fn=>{listener=fn;}}},runtime);
+  const api:ChromeAuthorityTabsApiV1={
+    get:async id=>({id,windowId:1,url:'https://chatgpt.com/'}),
+    sendMessage:async(_tab,message)=>await new Promise(resolve=>{listener!(message,{},resolve);}),
+  };
+  const driver=new ChromeContentDriverV1(api);
+  equal((await driver.stagePrompt(7,'hello')).status,'STAGED_VERIFIED','driver stage');equal((await driver.preflightSend(7)).status,'FOUND','driver preflight');
+  equal((await driver.clickSend(7)).outcome,'CLICKED','driver clicked');
+  page.window.document.querySelector('button')!.remove();const pre=await driver.clickSend(7);equal(pre.outcome,'FAILED_BEFORE_CLICK','no button proves no click');
+  const broken=new ChromeContentDriverV1({get:api.get,sendMessage:async()=>{throw new Error('port closed');}});
+  await rejects(()=>broken.clickSend(7),/SEND_UNCERTAIN/,'channel failure uncertain');
+});
+
+await test('guarded DOM click reports click exception as UNCERTAIN',()=>{
+  const page=new JSDOM('<!doctype html><body><form><textarea></textarea><button data-testid="send-button" type="submit">Send</button></form></body>');
+  const button=page.window.document.querySelector('button') as HTMLButtonElement;
+  button.click=()=>{throw new Error('simulated click exception');};
+  equal(attemptHighConfidenceSendClick(page.window.document).outcome,'UNCERTAIN','click exception uncertain');
+});
+
+await test('Chrome live target reader re-observes exact project conversation before send',async()=>{
+  const project='g-p-'+'a'.repeat(32)+'-05-cocwin',conversation='6a819823-07fc-83eb-b324-ddf6f474ea29';
+  const liveTarget={sessionId:session,generation,browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',windowId:9,tabId:12,origin:'https://chatgpt.com',projectId:project,conversationId:conversation,conversationGeneration:1,ownerSessionId:session};
+  const prepared=prepareBinding(liveTarget,new Date(at));
+  const tabs:ChromeAuthorityTabsApiV1={get:async id=>({id,windowId:9,url:'https://chatgpt.com/g/'+project+'/c/'+conversation}),sendMessage:async()=>({})};
+  const reader=new ChromeLiveTargetReaderV1(tabs,'chrome-main','chatgpt-primary');
+  const observed=await reader.observe(prepared);equal(observed.conversationId,conversation,'exact conversation');equal((await verifyBinding(prepared,observed,new Date(at))).control.status,'VERIFIED','live verify');
 });
 
 await test('browser authority runtime persists intent before exactly one click',async()=>{

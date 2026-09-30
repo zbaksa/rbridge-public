@@ -15,6 +15,7 @@ export interface BrowserContentDriverV1{
   clickSend(tabId:number):Promise<
     |{outcome:'CLICKED'}
     |{outcome:'FAILED_BEFORE_CLICK';reason:string}
+    |{outcome:'UNCERTAIN';reason:string}
   >;
 }
 
@@ -99,6 +100,7 @@ export class BrowserAuthorityRuntimeV1{
         const failed=markFailedBeforeClick(intent,outcome.reason);
         return await this.store.commit(intentSnapshot.revision,{binding:fresh.control,leader,capture,activeSend:failed},new Date());
       }
+      if(outcome.outcome==='UNCERTAIN')throw new Error('SEND_UNCERTAIN');
       const clicked=markClicked(intent,new Date());
       return await this.store.commit(intentSnapshot.revision,{binding:fresh.control,leader,capture,activeSend:clicked},new Date());
     }catch(error){
