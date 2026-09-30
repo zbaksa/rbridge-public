@@ -93,12 +93,22 @@ inbound.emit(serverHello);await drain();
 assert(link.protocolReady,'HELLO must negotiate before commands');
 
 async function send(commandValue:RbridgeChatCommandV1):Promise<RbridgeChatCommandResultV1>{
-  inbound.emit(commandValue);await drain();
-  const value=posted.at(-1) as RbridgeChatCommandResultV1;
-  equal(value.schema,'RBRIDGE_CHAT_COMMAND_RESULT_V1','command result schema');
-  equal(value.commandId,commandValue.commandId,'command correlation');
-  equal(value.requestDigest,commandValue.requestDigest,'request digest correlation');
-  return value;
+  const start=posted.length;
+  inbound.emit(commandValue);
+  for(let i=0;i<50;i++){
+    await drain();
+    const match=posted.slice(start).find(value=>{
+      if(value===null||typeof value!=='object'||Array.isArray(value))return false;
+      const row=value as Record<string,unknown>;
+      return row.schema==='RBRIDGE_CHAT_COMMAND_RESULT_V1'&&row.commandId===commandValue.commandId;
+    });
+    if(match){
+      const value=match as RbridgeChatCommandResultV1;
+      equal(value.requestDigest,commandValue.requestDigest,'request digest correlation');
+      return value;
+    }
+  }
+  throw new Error('command result timeout: '+commandValue.commandId);
 }
 
 const discovered=await send(command('cmd-discover','DISCOVER_TARGET',{canonicalProjectId:canonicalProject,conversationId:conversation}));
