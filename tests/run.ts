@@ -10,6 +10,7 @@ import {canonicalChatgptProjectId,describeChatgptUrl,requireExactProjectConversa
 import {assertSafeRolloverCheckpoint,createRolloverProof,quotaEligibleForRouting,validateQuotaObservation} from '../src/domain/browserQuotaRollover.js';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {RbridgeReceiptStoreV1} from '../src/server/rbridgeReceiptStore.js';
+import {createHash} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
 import {attemptHighConfidenceSendClick,clickHighConfidenceSendButton,inspectResponseQuiescence,locateHighConfidenceSendButton,scanAssistantTurns,stageComposerText,startAssistantTurnObserver} from '../src/browser/chatgptDomAdapter.js';
@@ -26,7 +27,7 @@ import {routeServerToNative} from '../src/nativeHost/nativeHostProtocol.js';
 import {NativeHostRelayV1} from '../src/nativeHost/nativeHostRelay.js';
 import {parseNativeHostInvocation} from '../src/nativeHost/nativeHostInvocation.js';
 import {PersistentSshStdioSessionV1,type ReconnectSchedulerV1,type SshProcessFactoryV1,type SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
-import {buildRbridgeExtensionManifest} from '../src/extension/extensionManifest.js';
+import {buildRbridgeExtensionManifest,RBRIDGE_EXTENSION_ID,RBRIDGE_EXTENSION_PUBLIC_KEY_B64} from '../src/extension/extensionManifest.js';
 import {ExtensionNativePortLinkV1,RBRIDGE_NATIVE_HOST_NAME,type ExtensionNativePortV1} from '../src/extension/nativePortServiceWorker.js';
 import {BrowserAuthorityStoreV1,type ChromeStorageAreaV1} from '../src/extension/browserAuthorityStore.js';
 import {BrowserAuthorityRuntimeV1,type BrowserContentDriverV1,type BrowserLiveTargetReaderV1} from '../src/extension/browserAuthorityRuntime.js';
@@ -258,6 +259,11 @@ await test('Chrome native framing uses platform native byte order',()=>{
 
 await test('MV3 extension manifest is minimal and service worker owns native port',async()=>{
   const manifest=buildRbridgeExtensionManifest('1.0.0');
+  equal(manifest.key,RBRIDGE_EXTENSION_PUBLIC_KEY_B64,'pinned public key');
+  const digest=createHash('sha256').update(Buffer.from(manifest.key,'base64')).digest().subarray(0,16),alpha='abcdefghijklmnop';
+  const derivedId=[...digest].map(byte=>alpha[(byte>>4)&15]+alpha[byte&15]).join('');
+  equal(derivedId,RBRIDGE_EXTENSION_ID,'deterministic extension id');
+  equal(RBRIDGE_EXTENSION_ID,'ebibbijpegoankenmggdnehpoadcophk','expected native origin id');
   assert(manifest.permissions.includes('nativeMessaging'),'native messaging permission');
   assert(!manifest.permissions.includes('debugger' as 'tabs'),'no debugger permission');
   assert(!('content_scripts' in manifest),'no static content-script authority');
