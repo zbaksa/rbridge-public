@@ -250,6 +250,30 @@ try{
   console.log('PASS W1_COMMAND_SECURITY pending command collision rejects immediately');
 }catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY pending collision: '+String(error));}
 
+
+try{
+  const {dispatcher,runtime}=await isolatedDispatcher();
+  assert((await dispatcher.execute(command('order-leader','ACQUIRE_WRITE_LEADER',{}))).ok,'ordered leader');
+  assert((await dispatcher.execute(command('order-capture','ACTIVATE_CAPTURE',{}))).ok,'ordered capture');
+  let release!:()=>void,first=true;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const original=globalThis.crypto.subtle.digest;
+  globalThis.crypto.subtle.digest=async function(algorithm,data){
+    if(first){first=false;await gate;}
+    return await original.call(this,algorithm,data);
+  };
+  try{
+    const staged=dispatcher.execute(command('order-stage','STAGE_PROMPT',{challenge,purpose:'PROMPT',text:'causal order proof'},true));
+    const intent=dispatcher.execute(command('order-intent','PERSIST_SEND_INTENT',{},true));
+    await drain();await drain();
+    release();
+    const results=await Promise.all([staged,intent]);
+    assert(results.every(value=>value.ok),'mutating commands preserve arrival order across delayed crypto');
+    equal((await runtime.state())?.activeSend?.state,'SEND_INTENT','ordered commands persist intent after staging');
+  }finally{release();globalThis.crypto.subtle.digest=original;}
+  console.log('PASS W1_COMMAND_SECURITY mutation order survives delayed digest');
+}catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY mutation order: '+String(error));}
+
 if(securityFailures)throw new Error('W1_COMMAND_SECURITY_FAILED:'+String(securityFailures));
 
 console.log('W1_COMMAND_DOWNLINK_ACCEPTANCE=PASS');
