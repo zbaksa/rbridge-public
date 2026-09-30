@@ -36,6 +36,8 @@ const UNRESOLVED=new Set(['PREPARING','READY_NOT_SENT','SEND_INTENT','CLICKED_UN
 function fail(code:string):never{throw new Error(code);}
 
 export class BrowserAuthorityRuntimeV1{
+  private armedSend:{effectId:string;revision:number}|null=null;
+
   constructor(
     private readonly store:BrowserAuthorityStoreV1,
     private readonly targetReader:BrowserLiveTargetReaderV1,
@@ -76,6 +78,7 @@ export class BrowserAuthorityRuntimeV1{
   }
 
   async stageSend(input:StageSendInputV1,now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+    this.armedSend=null;
     const current=await this.required();
     const {binding,leader,capture}=current;
     if(!binding||binding.status!=='VERIFIED'||!leader||leader.status!=='ACTIVE'||!capture||capture.status!=='ACTIVE')fail('RBRIDGE_BROWSER_AUTHORITY_NOT_READY');
@@ -92,7 +95,8 @@ export class BrowserAuthorityRuntimeV1{
     return await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:tx},now);
   }
 
-  async sendOnce(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+  async persistSendIntentOnly(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+    this.armedSend=null;
     const current=await this.required(),tx=current.activeSend,{binding,leader,capture}=current;
     if(!tx||tx.state!=='READY_NOT_SENT')fail('RBRIDGE_SEND_NOT_READY');
     if(!binding||binding.status!=='VERIFIED'||!leader||leader.status!=='ACTIVE'||!capture||capture.status!=='ACTIVE')fail('RBRIDGE_BROWSER_AUTHORITY_NOT_READY');
@@ -100,24 +104,58 @@ export class BrowserAuthorityRuntimeV1{
     const preflight=await this.content.preflightSend(fresh.control.tabId);
     if(preflight.status==='AMBIGUOUS')fail('RBRIDGE_SEND_BUTTON_AMBIGUOUS');
     if(preflight.status!=='FOUND')fail('RBRIDGE_SEND_BUTTON_NOT_FOUND');
-
     const intent=persistSendIntent(tx,now);
-    const intentSnapshot=await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:intent},now);
+    const snapshot=await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:intent},now);
+    this.armedSend={effectId:intent.effectId,revision:snapshot.revision};
+    return snapshot;
+  }
 
+  async executePersistedSend(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+    const current=await this.required(),tx=current.activeSend,{binding,leader,capture}=current;
+    if(!tx||tx.state!=='SEND_INTENT')fail('RBRIDGE_SEND_NOT_INTENT');
+    const armed=this.armedSend;
+    if(!armed||armed.effectId!==tx.effectId||armed.revision!==current.revision)fail('RBRIDGE_SEND_RECONCILE_REQUIRED');
+    if(!binding||binding.status!=='VERIFIED'||!leader||leader.status!=='ACTIVE'||!capture||capture.status!=='ACTIVE'){
+      this.armedSend=null;
+      fail('RBRIDGE_BROWSER_AUTHORITY_NOT_READY');
+    }
+
+    let fresh;
+    try{
+      const observed=await this.targetReader.observe(binding);
+      fresh=await verifyBinding(binding,observed,now);
+      const preflight=await this.content.preflightSend(fresh.control.tabId);
+      if(preflight.status!=='FOUND'){
+        this.armedSend=null;
+        const reason=preflight.status==='AMBIGUOUS'?'RBRIDGE_SEND_BUTTON_AMBIGUOUS':'RBRIDGE_SEND_BUTTON_NOT_FOUND';
+        const failed=markFailedBeforeClick(tx,reason);
+        return await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:failed},now);
+      }
+    }catch(error){
+      this.armedSend=null;
+      throw error;
+    }
+
+    this.armedSend=null;
     try{
       const outcome=await this.content.clickSend(fresh.control.tabId);
       if(outcome.outcome==='FAILED_BEFORE_CLICK'){
-        const failed=markFailedBeforeClick(intent,outcome.reason);
-        return await this.store.commit(intentSnapshot.revision,{binding:fresh.control,leader,capture,activeSend:failed},new Date());
+        const failed=markFailedBeforeClick(tx,outcome.reason);
+        return await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:failed},new Date());
       }
       if(outcome.outcome==='UNCERTAIN')throw new Error('SEND_UNCERTAIN');
-      const clicked=markClicked(intent,new Date());
-      return await this.store.commit(intentSnapshot.revision,{binding:fresh.control,leader,capture,activeSend:clicked},new Date());
+      const clicked=markClicked(tx,new Date());
+      return await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:clicked},new Date());
     }catch(error){
-      const uncertain=markSendUncertain(intent,'SEND_UNCERTAIN');
-      try{await this.store.commit(intentSnapshot.revision,{binding:fresh.control,leader,capture,activeSend:uncertain},new Date());}catch{}
+      const uncertain=markSendUncertain(tx,'SEND_UNCERTAIN');
+      try{await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:uncertain},new Date());}catch{}
       throw error instanceof Error&&error.message==='SEND_UNCERTAIN'?error:new Error('SEND_UNCERTAIN');
     }
+  }
+
+  async sendOnce(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+    await this.persistSendIntentOnly(now);
+    return await this.executePersistedSend(now);
   }
 
   async markDeliveryVerified(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{

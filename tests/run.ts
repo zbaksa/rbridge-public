@@ -443,6 +443,39 @@ await test('Chrome live target reader re-observes exact project conversation bef
   const observed=await reader.observe(prepared);equal(observed.conversationId,conversation,'exact conversation');equal((await verifyBinding(prepared,observed,new Date(at))).control.status,'VERIFIED','live verify');
 });
 
+await test('S8 SEND_INTENT is a separately provable no-click checkpoint and S9 requires same-runtime arm',async()=>{
+  class MemoryStorage implements ChromeStorageAreaV1{
+    data:Record<string,unknown>={};
+    async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}
+    async set(items:Record<string,unknown>){Object.assign(this.data,structuredClone(items));}
+  }
+  const make=async()=>{
+    const storage=new MemoryStorage();let clicks=0;
+    const driver:BrowserContentDriverV1={
+      startCapture:async()=>({status:'ACTIVE'}),stopCapture:async()=>({status:'OFF'}),
+      stagePrompt:async(_tab,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),
+      preflightSend:async()=>({status:'FOUND'}),
+      clickSend:async()=>{clicks++;return {outcome:'CLICKED'};},
+    };
+    const runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),{observe:async()=>target},driver);
+    await runtime.prepareAndVerifyBinding(target,new Date(at));await runtime.acquireLeader(new Date(at));await runtime.activateCapture(new Date(at));
+    await runtime.stageSend({sessionId:session,generation,attemptId:attempt,effectId:effect,challenge,purpose:'PROMPT',text:'s8-s9'},new Date(at));
+    return {storage,runtime,driver,getClicks:()=>clicks};
+  };
+
+  const same=await make();
+  const s8=await same.runtime.persistSendIntentOnly(new Date(at));
+  equal(s8.activeSend?.state,'SEND_INTENT','S8 durable intent');equal(same.getClicks(),0,'S8 zero click');
+  const s9=await same.runtime.executePersistedSend(new Date(at));
+  equal(s9.activeSend?.state,'CLICKED_UNVERIFIED','S9 clicked');equal(same.getClicks(),1,'S9 one click');
+
+  const restartedCase=await make();
+  await restartedCase.runtime.persistSendIntentOnly(new Date(at));equal(restartedCase.getClicks(),0,'restart fixture zero click');
+  const restarted=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(restartedCase.storage),{observe:async()=>target},restartedCase.driver);
+  await rejects(()=>restarted.executePersistedSend(new Date(at)),/SEND_RECONCILE_REQUIRED/,'restart loses ephemeral click arm');
+  equal((await restarted.state())?.activeSend?.state,'SEND_INTENT','restart preserves intent for reconcile');equal(restartedCase.getClicks(),0,'restart never clicks');
+});
+
 await test('browser authority runtime persists intent before exactly one click',async()=>{
   class MemoryStorage implements ChromeStorageAreaV1{
     data:Record<string,unknown>={};
