@@ -8,7 +8,7 @@ const entry=fileURLToPath(entryUrl);
 const info=await stat(entryUrl).catch(()=>fail('RBRIDGE_NATIVE_BUNDLE_MISSING'));
 if(!info.isFile()||info.size<1024||info.size>2*1024*1024)fail('RBRIDGE_NATIVE_BUNDLE_SIZE_INVALID');
 const source=await readFile(entryUrl,'utf8');
-for(const required of ['RBRIDGE_NATIVE_CONFIG_ENV_REQUIRED','RBRIDGE_NATIVE_BOOTSTRAP','com.cocwin.rbridge_chat_v1']){
+for(const required of ['RBRIDGE_NATIVE_CONFIG_ENV_REQUIRED','RBRIDGE_NATIVE_BOOTSTRAP','RBRIDGE_NATIVE_PROTOCOL']){
   if(!source.includes(required))fail('RBRIDGE_NATIVE_BUNDLE_MISSING:'+required);
 }
 const syntax=spawnSync(process.execPath,['--check',entry],{encoding:'utf8'});
