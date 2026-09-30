@@ -16,6 +16,8 @@ import {locateHighConfidenceSendButton,scanAssistantTurns,startAssistantTurnObse
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buildNativeHostManifest} from '../src/nativeHost/nativeHostManifest.js';
+import {loadNativeHostConfigV1,parseNativeHostConfigV1} from '../src/nativeHost/nativeHostConfig.js';
+import {startNativeHostMainV1,type NativeHostMainIoV1} from '../src/nativeHost/nativeHostMain.js';
 import {routeServerToNative} from '../src/nativeHost/nativeHostProtocol.js';
 import {NativeHostRelayV1} from '../src/nativeHost/nativeHostRelay.js';
 import {parseNativeHostInvocation} from '../src/nativeHost/nativeHostInvocation.js';
@@ -328,6 +330,37 @@ await test('Native Host persists event before forwarding and can replay after re
     equal(await relay.acceptBrowserMessage(queued),'EVENT_DURABLE_QUEUED','event queues during ssh outage');
     equal(await relay.peerConnected(),'HELLO_SENT','hello replayed after reconnect');
     const acceptedAgain=await relay.acceptServerMessage(hello);equal(acceptedAgain.replayedEvents,2,'full durable chain replayed after renegotiation');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+await test('Native Host config and process bootstrap fail closed',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'rbridge-native-main-'));
+  try{
+    const configPath=join(root,'host.json'),events=join(root,'events');
+    const config={schema:'RBRIDGE_NATIVE_HOST_CONFIG_V1' as const,expectedExtensionId:'a'.repeat(32),eventStoreRoot:events,
+      ssh:{sshPath:'/usr/bin/ssh',host:'aether-engine',port:22,user:'rbridge' as const,identityFile:'/home/rbridge/.ssh/id_ed25519',knownHostsFile:'/home/rbridge/.ssh/known_hosts'}};
+    await import('node:fs/promises').then(fs=>fs.writeFile(configPath,JSON.stringify(config),{mode:0o600}));
+    equal((await loadNativeHostConfigV1(configPath)).ssh.user,'rbridge','config load');
+    await rejects(()=>Promise.resolve(parseNativeHostConfigV1({...config,unexpected:true})),/CONFIG_FIELDS_INVALID/,'unknown config field');
+    class FakeHandle implements SshProcessHandleV1{
+      writes:Uint8Array[]=[];dataListener:(chunk:Uint8Array)=>void=()=>{};closeListener:(code:number|null,signal:string|null)=>void=()=>{};errorListener:(error:Error)=>void=()=>{};killed=false;
+      write(data:Uint8Array){this.writes.push(data);} onData(listener:(chunk:Uint8Array)=>void){this.dataListener=listener;}
+      onClose(listener:(code:number|null,signal:string|null)=>void){this.closeListener=listener;} onError(listener:(error:Error)=>void){this.errorListener=listener;} kill(){this.killed=true;}
+    }
+    const handles:FakeHandle[]=[];const factory:SshProcessFactoryV1={launch:()=>{const h=new FakeHandle();handles.push(h);return h;}};
+    let dataHandler:(chunk:Uint8Array)=>void=()=>{},endHandler:()=>void=()=>{},errorHandler:(error:Error)=>void=()=>{},exitCode=0;
+    const stdout:Uint8Array[]=[],stderr:string[]=[];
+    const io:NativeHostMainIoV1={
+      onData:fn=>{dataHandler=fn;},onEnd:fn=>{endHandler=fn;},onError:fn=>{errorHandler=fn;},
+      writeStdout:data=>stdout.push(data),writeStderr:value=>stderr.push(value),setExitCode:code=>{exitCode=code;},
+    };
+    const runtime=await startNativeHostMainV1(['chrome-extension://'+'a'.repeat(32)+'/'],{RBRIDGE_NATIVE_HOST_CONFIG:configPath},io,{processFactory:factory});
+    equal(runtime.running,true,'runtime started');equal(handles.length,1,'ssh launched');
+    dataHandler(encodeNativeMessage(hello));await new Promise(resolve=>setTimeout(resolve,0));equal(handles[0]!.writes.length,1,'browser hello forwarded');
+    dataHandler(new Uint8Array([1,0,0,0,0xff]));await new Promise(resolve=>setTimeout(resolve,0));
+    equal(runtime.running,false,'malformed browser frame stops runtime');equal(exitCode,70,'fatal exit code');assert(stderr.some(line=>line.includes('RBRIDGE_NATIVE_FATAL=')),'fatal stderr only');
+    equal(stdout.length,0,'no stray native stdout');
+    endHandler();errorHandler(new Error('late'));equal(exitCode,70,'fatal remains stable');
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
