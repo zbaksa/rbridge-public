@@ -35,7 +35,7 @@ for(const required of ['RBRIDGE_CONTENT_REQUEST_V1','RBRIDGE_CONTENT_CAPTURE_V1'
   if(!contentScript.includes(required))fail('RBRIDGE_CONTENT_BUNDLE_MISSING:'+required);
 }
 
-for(const forbidden of ['prompt-textarea','data-message-author-role','MutationObserver','RBRIDGE_CONTENT_REQUEST_V1']){
+for(const forbidden of ['prompt-textarea','data-message-author-role','MutationObserver','document.querySelector','document.createElement']){
   if(serviceWorker.includes(forbidden))fail('RBRIDGE_WORKER_BUNDLE_DOM_LEAK:'+forbidden);
 }
 for(const required of ['RBRIDGE_CHAT_HELLO_V1','com.cocwin.rbridge_chat_v1',expectedSha]){
