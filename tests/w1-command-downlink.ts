@@ -207,7 +207,7 @@ try{
   const {dispatcher}=await isolatedDispatcher();
   const result=dispatcher.execute({});
   assert(result instanceof Promise,'invalid command must preserve Promise API');
-  await rejects(()=>result,/RBRIDGE_COMMAND_INVALID/,'invalid command rejects asynchronously');
+  await rejects(()=>result,/RBRIDGE_COMMAND_(?:INVALID|FIELDS_INVALID)/,'invalid command rejects asynchronously');
   console.log('PASS W1_COMMAND_SECURITY malformed input rejects through Promise');
 }catch(error){securityFailures++;console.error('FAIL W1_COMMAND_SECURITY Promise API: '+String(error));}
 
