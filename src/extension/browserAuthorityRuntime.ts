@@ -57,6 +57,7 @@ export class BrowserAuthorityRuntimeV1{
 
   async acquireLeader(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
     const current=await this.required();
+    if(current.activeSend&&UNRESOLVED.has(current.activeSend.state))fail('RBRIDGE_SEND_ACTIVE_UNRESOLVED');
     if(!current.binding)fail('RBRIDGE_BINDING_REQUIRED');
     const leader=acquireWriteLeader(current.binding,current.leader,now);
     return await this.store.commit(current.revision,{binding:current.binding,leader,capture:null,activeSend:null},now);
@@ -64,6 +65,7 @@ export class BrowserAuthorityRuntimeV1{
 
   async activateCapture(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
     const current=await this.required();
+    if(current.activeSend&&UNRESOLVED.has(current.activeSend.state))fail('RBRIDGE_SEND_ACTIVE_UNRESOLVED');
     if(!current.binding||!current.leader)fail('RBRIDGE_WRITE_LEADER_REQUIRED');
     const capture=activateCapture(current.binding,current.leader,current.capture,now);
     const captureToken='capture:'+capture.sessionId+':'+String(capture.epoch);
