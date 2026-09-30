@@ -23,6 +23,7 @@ function sameCorrelation(command:RbridgeChatCommandV1,state:Awaited<ReturnType<B
 
 export class RbridgeChatCommandDispatcherV1{
   private readonly completed=new Map<string,{requestDigest:string;commandFingerprint:string;result:RbridgeChatCommandResultV1}>();
+  private readonly pending=new Map<string,{requestDigest:string;commandFingerprint:string;result:Promise<RbridgeChatCommandResultV1>}>();
   private tail:Promise<void>=Promise.resolve();
 
   constructor(
@@ -32,29 +33,35 @@ export class RbridgeChatCommandDispatcherV1{
     private readonly browserProfileId:string,
   ){}
 
-  execute(input:unknown,now=new Date()):Promise<RbridgeChatCommandResultV1>{
+  async execute(input:unknown,now=new Date()):Promise<RbridgeChatCommandResultV1>{
     const command=structuredClone(parseRbridgeChatCommandV1(input)),at=new Date(now.getTime());
-    const result=this.tail.then(()=>this.executeOne(command,at));
-    this.tail=result.then(()=>undefined,()=>undefined);
-    return result;
+    const commandFingerprint=await canonicalDigest(command);
+    const prior=this.completed.get(command.commandId)??this.pending.get(command.commandId);
+    if(prior){
+      if(prior.requestDigest!==command.requestDigest||prior.commandFingerprint!==commandFingerprint)fail('REQUEST_ID_COLLISION');
+      return structuredClone(await prior.result);
+    }
+    const readOnly=command.action==='READ_STATE'||command.action==='DISCOVER_TARGET';
+    const invoke=()=>this.executeOne(command,at);
+    const result=readOnly?invoke():this.tail.then(invoke);
+    if(!readOnly)this.tail=result.then(()=>undefined,()=>undefined);
+    this.pending.set(command.commandId,{requestDigest:command.requestDigest,commandFingerprint,result});
+    try{
+      const value=await result;
+      this.completed.set(command.commandId,{requestDigest:command.requestDigest,commandFingerprint,result:structuredClone(value)});
+      return structuredClone(value);
+    }finally{
+      this.pending.delete(command.commandId);
+    }
   }
 
   private async executeOne(command:RbridgeChatCommandV1,now:Date):Promise<RbridgeChatCommandResultV1>{
-    const commandFingerprint=await canonicalDigest(command);
-    const prior=this.completed.get(command.commandId);
-    if(prior){
-      if(prior.requestDigest!==command.requestDigest||prior.commandFingerprint!==commandFingerprint)fail('REQUEST_ID_COLLISION');
-      return structuredClone(prior.result);
-    }
-    let result:RbridgeChatCommandResultV1;
     try{
       const value=await this.dispatch(command,now);
-      result=buildCommandResultV1(command,{ok:true,result:value},now);
+      return buildCommandResultV1(command,{ok:true,result:value},now);
     }catch(error){
-      result=buildCommandResultV1(command,{ok:false,errorCode:commandErrorCode(error)},now);
+      return buildCommandResultV1(command,{ok:false,errorCode:commandErrorCode(error)},now);
     }
-    this.completed.set(command.commandId,{requestDigest:command.requestDigest,commandFingerprint,result:structuredClone(result)});
-    return result;
   }
 
   private async dispatch(command:RbridgeChatCommandV1,now:Date):Promise<unknown>{
