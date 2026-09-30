@@ -1,4 +1,5 @@
 import {negotiateHello,parseHello,type NegotiatedHelloV1,type RbridgeChatEventV1,type RbridgeChatHelloV1,validateEventEnvelope} from '../domain/rbridgeChatCore.js';
+import {parseRbridgeChatCommandResultV1,type RbridgeChatCommandResultV1,type RbridgeChatCommandV1} from '../domain/rbridgeChatCommand.js';
 import {routeServerToNative} from '../nativeHost/nativeHostProtocol.js';
 
 export const RBRIDGE_NATIVE_HOST_NAME='com.cocwin.rbridge_chat_v1';
@@ -20,6 +21,7 @@ export interface ExtensionRuntimeNativeApiV1{
 
 export interface ExtensionNativeLinkHooksV1{
   onServerHello?:(hello:RbridgeChatHelloV1,negotiated:NegotiatedHelloV1)=>void|Promise<void>;
+  onServerCommand?:(command:RbridgeChatCommandV1)=>void|Promise<void>;
   onDisconnected?:()=>void|Promise<void>;
   onProtocolError?:(error:Error)=>void|Promise<void>;
 }
@@ -67,6 +69,13 @@ export class ExtensionNativePortLinkV1{
     port.postMessage(validated);
   }
 
+  sendCommandResult(result:unknown):void{
+    const port=this.port;if(!port)throw new Error('RBRIDGE_NATIVE_PORT_DISCONNECTED');
+    if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+    const validated:RbridgeChatCommandResultV1=parseRbridgeChatCommandResultV1(result);
+    port.postMessage(validated);
+  }
+
   private async handleInbound(value:unknown):Promise<void>{
     try{
       const routed=routeServerToNative(value);
@@ -74,7 +83,10 @@ export class ExtensionNativePortLinkV1{
         const negotiated=negotiateHello(this.localHello,routed.value);
         this.negotiated=negotiated;
         await this.hooks.onServerHello?.(routed.value,negotiated);
+        return;
       }
+      if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+      await this.hooks.onServerCommand?.(routed.value);
     }catch(error){
       this.negotiated=null;
       await this.hooks.onProtocolError?.(normalizeError(error));
