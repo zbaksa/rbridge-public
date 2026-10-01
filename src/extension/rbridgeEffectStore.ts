@@ -74,7 +74,14 @@ async function validateLedger(input:unknown):Promise<Ledger>{
   for(const record of commands){
     const effect=effects.find(value=>value.effectId===record.command.request.effectId);
     if(record.command.action==='EXECUTE'&&!effect)fail('RBRIDGE_EFFECT_LEDGER_INVALID');
-    if(effect){const original=commands.find(value=>value.command.commandId===effect.executeCommandId)!;if(!same(original.command.request,record.command.request))fail('RBRIDGE_EFFECT_LEDGER_INVALID');}
+    if(effect){
+      const original=commands.find(value=>value.command.commandId===effect.executeCommandId)!;
+      // A read reserved before any EXECUTE owns only its command identity.
+      // Missing or interrupted read observations cannot bind the future effect.
+      const independentRead=record.command.action==='RECONCILE'&&(record.result===null||
+        (record.result.state==='BLOCKED'&&record.result.reason==='RBRIDGE_EFFECT_NOT_FOUND'&&record.result.receipt===null));
+      if(!same(original.command.request,record.command.request)&&!independentRead)fail('RBRIDGE_EFFECT_LEDGER_INVALID');
+    }
   }
   const body={schema:'RBRIDGE_EFFECT_LEDGER_V1' as const,revision:row.revision,commands,effects};
   if(await canonicalDigest(body)!==row.sha256)fail('RBRIDGE_EFFECT_LEDGER_INVALID');return {...body,sha256:row.sha256};
@@ -155,6 +162,8 @@ export class RbridgeEffectStoreV1{
     const revision=(current?.revision??0)+1;if(!Number.isSafeInteger(revision))fail('RBRIDGE_EFFECT_LEDGER_FULL');
     const body={schema:'RBRIDGE_EFFECT_LEDGER_V1' as const,revision,commands,effects},next:Ledger={...body,sha256:await canonicalDigest(body)};
     if(new TextEncoder().encode(canonicalJson(next)).byteLength>LEDGER_BYTES)fail('RBRIDGE_EFFECT_LEDGER_FULL');
+    // Reject an invalid transition before publishing any durable bytes.
+    await validateLedger(next);this.assertMutationAvailable();
     try{
       await this.storage.set({[KEY]:snapshotEffectData(next)});
       const readback=await this.storage.get(KEY);if(!same(readback[KEY],next))fail('RBRIDGE_EFFECT_WRITE_UNCERTAIN');
