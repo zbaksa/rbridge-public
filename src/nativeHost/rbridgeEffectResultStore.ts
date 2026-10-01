@@ -2,7 +2,7 @@ import {constants} from 'node:fs';
 import {lstat,mkdir,open,realpath,rename,unlink} from 'node:fs/promises';
 import {randomBytes} from 'node:crypto';
 import {isAbsolute,join,resolve} from 'node:path';
-import {canonicalDigest,canonicalJson,parseEffectCommand,parseEffectResult,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope} from '../domain/rbridgeEffectProtocol.js';
+import {canonicalDigest,canonicalJson,parseEffectCommand,parseEffectResult,parseV3Scope,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope} from '../domain/rbridgeEffectProtocol.js';
 
 export interface RbridgeEffectResultStoreOptionsV3 {
   eventStoreRoot:string;
@@ -62,28 +62,32 @@ export class RbridgeEffectResultStoreV3 {
 
   constructor(options:RbridgeEffectResultStoreOptionsV3){
     if(typeof options.eventStoreRoot!=='string'||!isAbsolute(options.eventStoreRoot)||resolve(options.eventStoreRoot)!==options.eventStoreRoot||/[\0\r\n]/.test(options.eventStoreRoot))fail('RBRIDGE_NATIVE_RESULT_ROOT_INVALID');
-    this.scope=snapshot(options.scope) as V3Scope;
-    const scope=exact(this.scope,['appId','baseSha','sessionId','generation']);
-    if(typeof scope.appId!=='string'||!/^[-a-z0-9_]{1,64}$/.test(scope.appId)||typeof scope.baseSha!=='string'||! /^[0-9a-f]{40}$/.test(scope.baseSha)||typeof scope.sessionId!=='string'||!/^exta-[0-9a-f]{32}$/.test(scope.sessionId)||typeof scope.generation!=='string'||! /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(scope.generation))fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');
+    try{this.scope=parseV3Scope(options.scope);}catch{fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');}
     this.ceiling=options.maxMessageBytes;this.maxRecords=options.maxRecords??4096;this.maxBytes=options.maxBytes??8*1024*1024;
     if(!Number.isSafeInteger(this.ceiling)||this.ceiling<4096||this.ceiling>65536||!Number.isSafeInteger(this.maxRecords)||this.maxRecords<1||this.maxRecords>4096||!Number.isSafeInteger(this.maxBytes)||this.maxBytes<4096||this.maxBytes>64*1024*1024)fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');
     this.parent=options.eventStoreRoot;this.root=join(this.parent,'v3-results');
   }
 
   private async directory(path:string,create:boolean):Promise<void>{
-    if(create)await mkdir(path,{recursive:path===this.parent,mode:0o700}).catch(error=>{if(errno(error)!=='EEXIST')throw error;});
+    if(create)await mkdir(path,{mode:0o700}).catch(error=>{if(errno(error)!=='EEXIST')throw error;});
     const info=await lstat(path);
     if(!info.isDirectory()||info.isSymbolicLink()||!privateMode(info.mode)||(currentUid()!==undefined&&info.uid!==currentUid())||!samePath(await realpath(path),path))fail('RBRIDGE_NATIVE_RESULT_ROOT_INVALID');
   }
-  private async ensureRoot():Promise<void>{await this.directory(this.parent,true);await this.directory(this.root,true);}
-  private async syncRoot():Promise<void>{
+  private async ensureRoot():Promise<void>{
+    // The established V1 event root is a prerequisite. Do not create untracked ancestors.
+    await this.directory(this.parent,false);await this.directory(this.root,true);
+    // Always repeat the containing-directory barrier, including after a failed first attempt.
+    await this.syncDirectory(this.parent);
+  }
+  private async syncDirectory(path:string):Promise<void>{
     if(process.platform==='win32')return;
-    const handle=await open(this.root,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+    const handle=await open(path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
     try{await handle.sync();}finally{await handle.close();}
   }
+  private async syncRoot():Promise<void>{await this.syncDirectory(this.root);}
   private async file(name:string):Promise<string|null>{
     let handle;
-    try{handle=await open(join(this.root,name),constants.O_RDONLY|constants.O_NOFOLLOW);}
+    try{handle=await open(join(this.root,name),constants.O_RDONLY|constants.O_NOFOLLOW|(process.platform==='win32'?0:constants.O_NONBLOCK));}
     catch(error){if(errno(error)==='ENOENT')return null;fail('RBRIDGE_NATIVE_RESULT_READ_FAILED');}
     try{
       const before=await handle.stat();
@@ -145,6 +149,13 @@ export class RbridgeEffectResultStoreV3 {
     }catch{this.faulted=true;fail('RBRIDGE_NATIVE_RESULT_WRITE_UNCERTAIN');}
     finally{await unlink(path).catch(error=>{if(errno(error)!=='ENOENT')this.faulted=true;});}
   }
+  private requireResultHeadroom(journal:Journal):void{
+    // A validated result's complete canonical JSON is <= the negotiated wire ceiling.
+    // Reserve that upper bound for every unresolved result, including revision digit growth.
+    const maximum={schema:journal.schema,appId:journal.appId,revision:Number.MAX_SAFE_INTEGER,entries:journal.entries,sha256:'0'.repeat(64)};
+    const remaining=journal.entries.filter(entry=>entry.result===null).length*(this.ceiling-4);
+    if(Buffer.byteLength(canonicalJson(maximum)+'\n')+remaining>this.maxBytes)fail('RBRIDGE_NATIVE_RESULT_BYTE_LIMIT');
+  }
   private async exclusive<T>(fn:()=>Promise<T>):Promise<T>{
     const key=process.platform==='win32'?this.root.toLowerCase():this.root;
     const previous=queues.get(key)??Promise.resolve();let release!:()=>void;
@@ -175,7 +186,7 @@ export class RbridgeEffectResultStoreV3 {
       const journal=await this.load(),existing=journal.entries.find(row=>row.command.commandId===command.commandId);
       if(existing){if(canonicalJson(existing.command)!==canonicalJson(command))fail('REQUEST_ID_COLLISION');return structuredClone(existing.command);}
       if(journal.entries.length>=this.maxRecords)fail('RBRIDGE_NATIVE_RESULT_RECORD_LIMIT');
-      journal.entries.push({command,result:null});await this.persist(journal);return structuredClone(command);
+      journal.entries.push({command,result:null});this.requireResultHeadroom(journal);await this.persist(journal);return structuredClone(command);
     });
   }
   async record(input:unknown):Promise<RbridgeChatEffectResultV1>{
