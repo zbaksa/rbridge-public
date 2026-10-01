@@ -9,7 +9,7 @@ export type BrowserEffectKind = 'RBRIDGE_BIND' | 'RBRIDGE_SEND' | 'RBRIDGE_RESUL
 export interface V3Scope {appId: string; baseSha: string; sessionId: string; generation: string}
 export interface ExactBrowserTargetV1 {
   browserInstanceId: string; browserProfileId: string; windowId: number; tabId: number;
-  origin: string; canonicalProjectId: string; projectId: string; conversationId: string; conversationGeneration: number;
+  origin: 'https://chatgpt.com'; canonicalProjectId: string; projectId: string; conversationId: string; conversationGeneration: number;
 }
 interface RequestBase extends V3Scope {
   schema: 'COCWIN_RBRIDGE_EFFECT_REQUEST_V1'; attemptId: string; effectId: string;

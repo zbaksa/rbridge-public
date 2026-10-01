@@ -300,4 +300,53 @@ await contractCase('maximum bounded IDs, UTF8 payloads, epochs and sequence rema
   await denied(() => api.parseEffectRequest(signed(noncanonical, 'requestDigest'), 65536));
 });
 
+await contractCase('PROMPT and RESULT, inherited ID bounds, exact project forms and full negative evidence', async () => {
+  for (const index of [1, 2]) {
+    for (const [size, accept] of [[48000, true], [48001, false]] as const) {
+      const req = requestOf(index); wire(req.payload).text = 'x'.repeat(size); const candidate = signed(req, 'requestDigest');
+      if (accept) await api.parseEffectRequest(candidate, 65536); else await denied(() => api.parseEffectRequest(candidate, 65536));
+    }
+  }
+  for (const [field, max] of [['browserInstanceId', 128], ['browserProfileId', 128], ['conversationId', 256]] as const) {
+    for (const [size, accept] of [[max, true], [max + 1, false]] as const) {
+      const req = requestOf(); wire(wire(req.payload).target)[field] = 'x'.repeat(size); const candidate = signed(req, 'requestDigest');
+      if (accept) await api.parseEffectRequest(candidate, 65536); else await denied(() => api.parseEffectRequest(candidate, 65536));
+    }
+    const req = requestOf(); wire(wire(req.payload).target)[field] = 'Ž'.repeat(max / 2);
+    await api.parseEffectRequest(signed(req, 'requestDigest'), 65536);
+    wire(wire(req.payload).target)[field] += 'Ž'; await denied(() => api.parseEffectRequest(signed(req, 'requestDigest'), 65536));
+  }
+  const component = String(wire(wire(requestOf().payload).target).canonicalProjectId);
+  for (const [projectId, canonicalProjectId, accept] of [
+    [component, component, true],
+    [component + '-project-05', component, true],
+    [component + '-' + 'x'.repeat(256 - component.length - 1), component, true],
+    [component + '-' + 'x'.repeat(257 - component.length - 1), component, false],
+    ['g-p-short', 'g-p-short', true],
+    ['g-p-' + 'x'.repeat(252), 'g-p-' + 'x'.repeat(252), true],
+    ['g-p-' + 'x'.repeat(253), 'g-p-' + 'x'.repeat(253), false],
+    [component + 'arbitrary-prefix', component, false],
+    [component + '-bad/path', component, false],
+  ] as const) {
+    const req = requestOf(); Object.assign(wire(wire(req.payload).target), {projectId, canonicalProjectId}); const candidate = signed(req, 'requestDigest');
+    if (accept) await api.parseEffectRequest(candidate, 65536); else await denied(() => api.parseEffectRequest(candidate, 65536));
+  }
+  for (const index of [0, 1, 2, 3]) {
+    const result = resultOf(index); wire(result.receipt).receiptId = 'x'.repeat(512);
+    result.receipt = signed(wire(result.receipt), 'sha256'); await api.parseEffectResult(signed(result, 'resultSha256'), commandOf(index), 65536);
+    wire(result.receipt).receiptId = 'x'.repeat(513); result.receipt = signed(wire(result.receipt), 'sha256');
+    await denied(() => api.parseEffectResult(signed(result, 'resultSha256'), commandOf(index), 65536));
+    await denied(() => api.parseEffectResult(signed({...resultOf(index), extra: true}, 'resultSha256'), commandOf(index), 65536));
+  }
+  const negative = resultOf(); negative.state = 'UNCERTAIN'; negative.reason = 'SEND_UNCERTAIN';
+  wire(negative.receipt).transactionState = 'UNCERTAIN'; negative.receipt = signed(wire(negative.receipt), 'sha256');
+  const verifiedNegative = signed(negative, 'resultSha256');
+  assert.deepEqual(await api.parseEffectResult(verifiedNegative, commandOf(), 65536), verifiedNegative);
+  const worstEscaping = copy(wire(golden.maximumRejectedEvent)); const receipt = wire(wire(worstEscaping.payload).captureReceipt);
+  receipt.conversationId = '"'.repeat(256); receipt.responseUtf8Bytes = Number.MAX_SAFE_INTEGER;
+  wire(worstEscaping.payload).captureReceipt = signed(receipt, 'sha256');
+  const rejection = signed(worstEscaping, 'eventSha256'); assert.ok(Buffer.byteLength(JSON.stringify(rejection)) <= 4096);
+  await api.validateCaptureEventV3(rejection, 4096);
+});
+
 console.log('V3_CONTRACT_PASS '+passed);
