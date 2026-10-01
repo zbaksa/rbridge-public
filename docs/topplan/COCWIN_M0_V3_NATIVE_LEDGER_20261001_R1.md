@@ -20,3 +20,44 @@ Pre-flight: Task1 supplies strictrequest/command/result/captureevent parsers and
 - Timestamps are canonical UTC and digest-bound. No cross-host clock ordering assumption is imposed on independently observed receipts.
 - Required catalogs are mirrored byte-for-byte in RBridge documentation so both consumers can inspect the same pending contract; this adds no runtime route or capability advertisement.
 - The fixtures remain the independent fixed Python outputs, SHA-256 8c77656e4783ecda0067417f3cd795bee667cdc39445f30028afb40cbbf02f2c.
+
+## Task 5 continuation — browser effect source
+
+- Status: IN_PROGRESS; isolated source branch starts at the qualified binding foundation `3a79d6d331e158f7f4b229d4eec1ba9b2064dcce`. Existing production checkout is outside this worktree.
+- RED first: independent effect tests cover durable baseline-before-intent/click, exact new user-turn digest, observed delivery before VERIFIED, historical/mismatched/multiple turn rejection, document reload, every target dimension, storage/readback failure, replay/restart, and rollover scope/quiescence/overflow.
+- Ruling: T5-A — trusted fixed adapter ports are construction-time dependencies, never request-supplied callbacks, scripts, URLs or selectors. Existing V1 wiring and advertised capabilities remain gated by later feasibility and activation work. Cost if wrong: rework trusted adapter construction before opt-in.
+- Ruling: T5-B — delivery uses a conservative public user-message DOM observation with exact UTF-8 text digest. DOM normalization or unavailable/ambiguous message identity is UNAVAILABLE; it is never assistant Markdown capture. Assistant original Markdown acquisition remains Task 6. Cost if wrong: legitimate delivery stays UNCERTAIN until the real representation is qualified.
+- Ruling: T5-C — unsupported rollover acquisition is BLOCKED before navigation. A trusted site driver must prove support and quiescence; candidate URL alone never authorizes a positive binding receipt. Cost if wrong: rollover availability is delayed, without navigation.
+- Ruling: T5-D — unknown click acknowledgement remains UNCERTAIN in this increment even if another observation appears; no guessed click timestamp or legacy caller-claimed verification. Durable late reconciliation remains Task 8. Cost if wrong: a delivered request can remain blocked pending its original evidence; no reclick.
+- Owner boundary: one owning service worker and one authority store; no claim of distributed CAS or independent process exclusion. Source fixtures prove source behavior only, not live browser acceptance.
+- Final branch review: required after implementation and full application verification; inherited deferred items stay visible.
+
+## Task 6 — lossless acquisition availability gate
+
+- Task 5 initial complete app verification: #12805 at source `e4c76339431bb4b0f38af31119268a8d6854f593`, UID/GID 1027, Node 22.23.2: 20 effect cases, 7 real-content fixture cases, full verify PASS. Live acceptance NOT_RUN; final whole-branch review and exact final CI remain required.
+- Ruling: T6 — no validated site-provided exact-turn lossless representation is available through the authorized automated browser route. Implement the plan's explicit UNAVAILABLE/UI_PROTOCOL_CHANGED branch. A DOM Copy button, textContent, code-block reconstruction, private site state, and global clipboard cannot be used to claim original Markdown. Cost if wrong: positive lossless functionality remains unavailable until a genuine site representation is validated.
+- The full positive lossless matrix is BLOCKED until a genuine site representation and exact provenance are established. Negative fixtures cover original Unicode/CRLF/fences, changed/user/tool roots and unrelated token; they prove fail-closed behavior only. No fake CAPTURED fixture is presented as a functioning site operation.
+- This source fallback adds no capability advertisement, no V3 activation and no human/browser canary. Tasks 7–12 and real delivery/rollover feasibility remain pending.
+
+## One final branch review and combined fix pass
+
+- Fresh read-only review of `3a79d6d331e158f7f4b229d4eec1ba9b2064dcce..4a1eb9f1971c265077dbc5411b41747d2a05291b`: no Critical, three Important, no new Minor. Exact-head initial app verify #12807 and dedicated Linux/Windows CI 36871280901 / 36871280767 passed; source tests alone did not reveal these gaps.
+- Actual RED #12812 at `fa1bd3a9ff5ace1f61643c2f7e547ee73a16cc98`, UID/GID1027: 20 PASS / 4 FAIL. Reproduces stale original live rollover target, effect-ledger poison during quiescence, same-owning-store generation drift at staging handoff, and analogous BIND phase drift.
+- Combined fix pass: independently verify the original live target and authority after quiescence; retain a synchronous final authority/effect-ledger gate before navigation; pass expected snapshots through BIND, staging, intent and click; verify transactions against the immutable request before persisting intent. GREEN #12813 at source `2423a0bb84478bbb6ae2ed327004a10401f3b9b1`: 24/24 effects, 7/7 delivery content, 4/4 Markdown-unavailable; full npm verify PASS, UID/GID1027 Node22.23.2. No re-review requested.
+- Inherited minor (deferred): trusted onServerHello hook receives the retained mutable negotiated object; current worker installs no such hook. Task 8 must deliver an immutable callback snapshot and retain sticky V3 authority.
+- Inherited minor (deferred): exhaustive BIND successful-write followed by failed/missing/corrupt/superseded authority-readback fault cases. New delivery journal tests cover its prewrite/readback and post-click evidence-write failure; they do not pretend to cover every BIND backend fault.
+- Final: fixed original-live rollover validation — `rollover_checks_original_live_target_before_navigation` RED→GREEN, full suite PASS.
+- Final: fixed effect-ledger admission before navigation — `rollover_rechecks_ledger_admission_after_quiescence` RED→GREEN, full suite PASS.
+- Final: fixed authority snapshot/request handoff — `staging_handoff_carries_original_authority_before_composer_mutation` and `binding_phase_handoff_carries_original_authority` RED→GREEN, full suite PASS.
+- Final: Ruling: real ChatGPT DOM normalization/selectors/timing and delivery acceptance remain Task11 proof gates, because fixtures cannot prove a live session. Cost if wrong: live delivery remains unavailable and V3 is not enabled.
+- Final: Ruling: functional site rollover acquisition stays unavailable until a trusted real route is proved. Cost if wrong: rollover remains BLOCKED before navigation.
+- Final: Ruling: positive lossless export/provenance remains blocked by missing validated representation; negative tests are the allowed Task6 fallback. Cost if wrong: no original Markdown can qualify until corrected.
+- Final: Ruling: late outcome reconciliation remains Task8; uncertain immutable effects are retained without reclicking. Cost if wrong: legitimate delivery may stay unresolved pending its real evidence.
+- Final: Ruling: production V3 wiring, authenticated peer and response-event integration remain Tasks7–10, then acceptance/activation gates. Cost if wrong: the source cannot become an operational fallback.
+- Final: Ruling: retained V1 caller-claimed verification/DOM assistant capture is compatibility history and cannot qualify V3. Cost if wrong: the new route must stay disabled until legacy isolation is proved.
+- Final: Ruling: independent stores/workers/distributed CAS remain outside the one-worker/one-authority-store model. Cost if wrong: concurrent owners require stronger coordination before deployment.
+- Final: Ruling: storage/OS crash durability remains a real backend/platform proof obligation; source verifies validation/readback only. Cost if wrong: interrupted effects remain uncertain and cannot authorize retry.
+- Final: Ruling: Windows install/browser canaries remain NOT_RUN; CI artifacts prove build/staging only. Cost if wrong: source success cannot be promoted to live acceptance.
+
+- Task5 source boundary: executor, observed delivery and conservative rollover source qualified; real delivery/site rollover acceptance NOT_RUN. Task6 negative fallback qualified; positive acquisition BLOCKED. Tasks7–10 implementation and Tasks11–12 live gates remain pending, not silently complete.
+- Code-qualified log SHA256: effects `6524de283ad281d5eee3062167bd90173dbd80fab555a3751b60ee07da3b0c5f`, delivery `12952fe589b0c1244889d16a1b81a6094ebc026a29574ddbf1d1f5b881ac2da6`, Markdown `cb71da0d74d2435d9fcad5cef6c94da0b2be5f2c8b899f550700de39d8b7a4ae`, full verify `644501e193fc04b649f035b610d57785193581a482a5a552d42a9c736c46e791`. Final documentation-only source and CI qualification is recorded in the PR and paired continuation checkpoint, avoiding a self-referential source SHA in this file.
