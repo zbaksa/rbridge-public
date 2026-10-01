@@ -76,7 +76,12 @@ export class BrowserAuthorityRuntimeV1{
     const readback=await this.store.load();
     if(!readback||readback.revision!==snapshot.revision||readback.sha256!==snapshot.sha256)fail('RBRIDGE_BINDING_RECEIPT_READBACK_UNCERTAIN');
     await verifyBinding(verified.control,await this.targetReader.observe(verified.control),now);
-    return {snapshot:readback,receipt:verified.receipt};
+    const preCaptureFence=this.store.mutationFence(),preCapture=await this.store.load();
+    if(this.store.mutationFence()!==preCaptureFence||!preCapture||preCapture.revision!==snapshot.revision||preCapture.sha256!==snapshot.sha256)fail('RBRIDGE_BINDING_RECEIPT_READBACK_UNCERTAIN');
+    await this.ensureLiveCapture(binding.tabId,capture);
+    const finalFence=this.store.mutationFence(),finalReadback=await this.store.load();
+    if(this.store.mutationFence()!==finalFence||!finalReadback||finalReadback.revision!==snapshot.revision||finalReadback.sha256!==snapshot.sha256)fail('RBRIDGE_BINDING_RECEIPT_READBACK_UNCERTAIN');
+    return {snapshot:finalReadback,receipt:verified.receipt};
   }
 
   async activateCapture(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{

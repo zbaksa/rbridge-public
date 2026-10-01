@@ -152,6 +152,11 @@ export async function validateBrowserAuthoritySnapshotV1(input:unknown):Promise<
 
 export class BrowserAuthorityStoreV1{
   private queue:Promise<void>=Promise.resolve();
+  private writeAdmission=Symbol();
+
+  // The owning runtime can fence an awaited read against any intervening
+  // mutation admitted to this store, including a queued or failed write.
+  mutationFence():symbol{return this.writeAdmission;}
   constructor(private readonly storage:ChromeStorageAreaV1){}
 
   async load():Promise<BrowserAuthoritySnapshotV1|null>{
@@ -161,6 +166,7 @@ export class BrowserAuthorityStoreV1{
   }
 
   async commit(expectedRevision:number,state:BrowserAuthorityStateV1,now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+    this.writeAdmission=Symbol();
     let release!:()=>void;const prior=this.queue;this.queue=new Promise<void>(resolve=>{release=resolve;});await prior;
     try{
       if(!Number.isInteger(expectedRevision)||expectedRevision<0)fail('RBRIDGE_AUTHORITY_REVISION_INVALID');
