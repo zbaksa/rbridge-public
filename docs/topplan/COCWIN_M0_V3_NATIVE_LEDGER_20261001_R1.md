@@ -31,3 +31,10 @@ Pre-flight: Task1 supplies strictrequest/command/result/captureevent parsers and
 - Ruling T5-D: unknown click acknowledgement remains UNCERTAIN in this increment even if another observation appears; no guessed click timestamp or legacy caller-claimed verification. Durable late reconciliation remains Task 8.
 - Owner boundary: one owning service worker and one authority store; no claim of distributed CAS or independent process exclusion. Source fixtures prove source behavior only, not live browser acceptance.
 - Final branch review: required after implementation and full application verification; inherited deferred items stay visible.
+
+## Task 6 — lossless acquisition availability gate
+
+- Task 5 initial complete app verification: #12805 at source `e4c76339431bb4b0f38af31119268a8d6854f593`, UID/GID 1027, Node 22.23.2: 20 effect cases, 7 real-content fixture cases, full verify PASS. Live acceptance NOT_RUN; final whole-branch review and exact final CI remain required.
+- Task 6 ruling: no validated site-provided exact-turn lossless representation is available through the authorized automated browser route. Implement the plan's explicit UNAVAILABLE/UI_PROTOCOL_CHANGED branch. A DOM Copy button, textContent, code-block reconstruction, private site state, and global clipboard cannot be used to claim original Markdown.
+- The full positive lossless matrix is BLOCKED until a genuine site representation and exact provenance are established. Negative fixtures cover original Unicode/CRLF/fences, changed/user/tool roots and unrelated token; they prove fail-closed behavior only. No fake CAPTURED fixture is presented as a functioning site operation.
+- This source fallback adds no capability advertisement, no V3 activation and no human/browser canary. Tasks 7–12 and real delivery/rollover feasibility remain pending.
