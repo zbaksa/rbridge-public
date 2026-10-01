@@ -63,6 +63,27 @@ export class BrowserAuthorityRuntimeV1{
     return await this.store.commit(current.revision,{binding:current.binding,leader,capture:null,activeSend:null},now);
   }
 
+  async finalizeBindingReceipt(now=new Date()):Promise<{snapshot:BrowserAuthoritySnapshotV1;receipt:RbridgeChatBindingReceiptV1}>{
+    const current=await this.required(),{binding,leader,capture}=current;
+    if(current.activeSend&&UNRESOLVED.has(current.activeSend.state))fail('RBRIDGE_SEND_ACTIVE_UNRESOLVED');
+    if(!binding||binding.status!=='VERIFIED'||!leader||leader.status!=='ACTIVE'||!capture||capture.status!=='ACTIVE'||leader.epoch<1||capture.epoch<1)fail('RBRIDGE_BROWSER_AUTHORITY_NOT_READY');
+    await this.ensureLiveCapture(binding.tabId,capture);
+    const observed=await this.targetReader.observe(binding);
+    const verified=await verifyBinding({...binding,writeLeaderEpoch:leader.epoch,captureEpoch:capture.epoch},observed,now);
+    const snapshot=await this.store.commit(current.revision,{binding:verified.control,leader,capture,activeSend:current.activeSend},now);
+    // A positive receipt is emitted only after the exact committed authority
+    // has been observed from storage, with a final live target confirmation.
+    const readback=await this.store.load();
+    if(!readback||readback.revision!==snapshot.revision||readback.sha256!==snapshot.sha256)fail('RBRIDGE_BINDING_RECEIPT_READBACK_UNCERTAIN');
+    await verifyBinding(verified.control,await this.targetReader.observe(verified.control),now);
+    const preCaptureFence=this.store.mutationFence(),preCapture=await this.store.load();
+    if(this.store.mutationFence()!==preCaptureFence||!preCapture||preCapture.revision!==snapshot.revision||preCapture.sha256!==snapshot.sha256)fail('RBRIDGE_BINDING_RECEIPT_READBACK_UNCERTAIN');
+    await this.ensureLiveCapture(binding.tabId,capture);
+    const finalFence=this.store.mutationFence(),finalReadback=await this.store.load();
+    if(this.store.mutationFence()!==finalFence||!finalReadback||finalReadback.revision!==snapshot.revision||finalReadback.sha256!==snapshot.sha256)fail('RBRIDGE_BINDING_RECEIPT_READBACK_UNCERTAIN');
+    return {snapshot:finalReadback,receipt:verified.receipt};
+  }
+
   async activateCapture(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
     const current=await this.required();
     if(current.activeSend&&UNRESOLVED.has(current.activeSend.state))fail('RBRIDGE_SEND_ACTIVE_UNRESOLVED');
