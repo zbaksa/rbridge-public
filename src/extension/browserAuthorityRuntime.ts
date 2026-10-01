@@ -4,6 +4,7 @@ import {
   type BrowserBindingControlV1,type BrowserTargetObservationV1,type RbridgeChatBindingReceiptV1,type SendPurpose,
 } from '../domain/rbridgeChatCore.js';
 import {BrowserAuthorityStoreV1,type BrowserAuthoritySnapshotV1,type BrowserAuthorityStateV1} from './browserAuthorityStore.js';
+import type {DeliveryClickGuardV3} from '../browser/chatgptDeliveryAdapter.js';
 
 export interface BrowserLiveTargetReaderV1{
   observe(binding:BrowserBindingControlV1):Promise<BrowserTargetObservationV1>;
@@ -14,7 +15,7 @@ export interface BrowserContentDriverV1{
   startCapture(tabId:number,captureToken:string):Promise<{status:'ACTIVE'}>;
   stopCapture(tabId:number):Promise<{status:'OFF'}>;
   preflightSend(tabId:number):Promise<{status:'FOUND'|'NOT_FOUND'|'AMBIGUOUS'}>;
-  clickSend(tabId:number):Promise<
+  clickSend(tabId:number,guard?:DeliveryClickGuardV3):Promise<
     |{outcome:'CLICKED'}
     |{outcome:'FAILED_BEFORE_CLICK';reason:string}
     |{outcome:'UNCERTAIN';reason:string}
@@ -45,6 +46,11 @@ export class BrowserAuthorityRuntimeV1{
   ){}
 
   async state():Promise<BrowserAuthoritySnapshotV1|null>{return await this.store.load();}
+
+  async assertSnapshot(expected:BrowserAuthoritySnapshotV1):Promise<void>{
+    const fence=this.store.mutationFence(),current=await this.store.load();
+    if(this.store.mutationFence()!==fence||!current||current.revision!==expected.revision||current.sha256!==expected.sha256)fail('RBRIDGE_BROWSER_AUTHORITY_CHANGED');
+  }
 
   async prepareAndVerifyBinding(target:BrowserTargetObservationV1,now=new Date()):Promise<{snapshot:BrowserAuthoritySnapshotV1;receipt:RbridgeChatBindingReceiptV1}>{
     const current=await this.store.load();
@@ -135,7 +141,7 @@ export class BrowserAuthorityRuntimeV1{
     return snapshot;
   }
 
-  async executePersistedSend(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+  async executePersistedSend(now=new Date(),options?:{guard:DeliveryClickGuardV3;beforeClick:()=>void}):Promise<BrowserAuthoritySnapshotV1>{
     const current=await this.required(),tx=current.activeSend,{binding,leader,capture}=current;
     if(!tx||tx.state!=='SEND_INTENT')fail('RBRIDGE_SEND_NOT_INTENT');
     const armed=this.armedSend;
@@ -162,9 +168,11 @@ export class BrowserAuthorityRuntimeV1{
       throw error;
     }
 
+    try{await this.assertSnapshot(current);}catch(error){this.armedSend=null;throw error;}
     this.armedSend=null;
     try{
-      const outcome=await this.content.clickSend(fresh.control.tabId);
+      options?.beforeClick();
+      const outcome=await this.content.clickSend(fresh.control.tabId,options?.guard);
       if(outcome.outcome==='FAILED_BEFORE_CLICK'){
         const failed=markFailedBeforeClick(tx,outcome.reason);
         return await this.store.commit(current.revision,{binding:fresh.control,leader,capture,activeSend:failed},new Date());
@@ -189,6 +197,17 @@ export class BrowserAuthorityRuntimeV1{
     if(!tx)fail('RBRIDGE_SEND_ACTIVE_MISSING');
     const next=markSentVerified(tx,now);
     return await this.store.commit(current.revision,this.withSend(current,next),now);
+  }
+
+  async markObservedDeliveryVerified(expected:BrowserAuthoritySnapshotV1,now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+    await this.assertSnapshot(expected);
+    if(expected.activeSend?.state!=='CLICKED_UNVERIFIED')fail('RBRIDGE_SEND_OBSERVED_CLICK_REQUIRED');
+    const binding=expected.binding,capture=expected.capture;
+    if(!binding||!capture||capture.status!=='ACTIVE')fail('RBRIDGE_BROWSER_AUTHORITY_NOT_READY');
+    await this.ensureLiveCapture(binding.tabId,capture);
+    await verifyBinding(binding,await this.targetReader.observe(binding),now);
+    await this.assertSnapshot(expected);
+    return await this.store.commit(expected.revision,this.withSend(expected,markSentVerified(expected.activeSend,now)),now);
   }
 
   async waitForResponse(now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
