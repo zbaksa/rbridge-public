@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {chmod,link,lstat,mkdtemp,readFile,rm,symlink,unlink,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdtemp,readFile,realpath,rm,symlink,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -24,7 +24,11 @@ function store(root:string,extra:Partial<Options>={}):ResultStore {
   assert.ok(implementation?.RbridgeEffectResultStoreV3,'RBRIDGE_NATIVE_V3_RESULT_STORE_NOT_IMPLEMENTED');
   return new implementation.RbridgeEffectResultStoreV3({eventStoreRoot:root,scope:structuredClone(scope),maxMessageBytes:65536,...extra});
 }
-async function withRoot(fn:(root:string)=>Promise<void>):Promise<void>{const root=await mkdtemp(join(tmpdir(),'rbridge-native-v3-result-'));try{await fn(root);}finally{await rm(root,{recursive:true,force:true});}}
+let pathDiagnostic=false;
+async function withRoot(fn:(root:string)=>Promise<void>):Promise<void>{const root=await mkdtemp(join(tmpdir(),'rbridge-native-v3-result-'));try{
+  if(process.platform==='win32'&&!pathDiagnostic){pathDiagnostic=true;const info=await lstat(root);console.log('V3_RESULT_WINDOWS_ROOT_DIAGNOSTIC '+JSON.stringify({root,actual:await realpath(root),directory:info.isDirectory(),symlink:info.isSymbolicLink(),mode:info.mode,uid:info.uid,processUid:typeof process.getuid==='function'?process.getuid():null}));}
+  await fn(root);
+}finally{await rm(root,{recursive:true,force:true});}}
 async function changedCommand(source:RbridgeChatEffectCommandV1):Promise<RbridgeChatEffectCommandV1>{const {commandSha256,...body}=structuredClone(source);void commandSha256;body.issuedAt='2026-10-01T21:00:00.000Z';return {...body,commandSha256:await canonicalDigest(body)};}
 async function changedResult(source:RbridgeChatEffectResultV1):Promise<RbridgeChatEffectResultV1>{const {resultSha256,...body}=structuredClone(source);void resultSha256;body.state='BLOCKED';body.receipt=null;body.reason='TEST_DIFFERENT_OUTCOME';return {...body,resultSha256:await canonicalDigest(body)};}
 let passed=0,failed=0,skipped=0;
