@@ -125,6 +125,9 @@ export class RbridgeEffectStoreV1{
     if(!same(record.command,command))fail('REQUEST_ID_COLLISION');return snapshotEffectData(record);
   }
   // These process-local gates never release a remote mutation on timeout.
+  assertMutationAvailable():void{
+    if(this.authority.poisoned)fail('RBRIDGE_EFFECT_STORAGE_UNAVAILABLE');
+  }
   enqueueMutation<T>(run:()=>Promise<T>):Promise<T>{
     const result=this.authority.mutations.then(run);this.authority.mutations=result.then(()=>undefined,()=>undefined);return result;
   }

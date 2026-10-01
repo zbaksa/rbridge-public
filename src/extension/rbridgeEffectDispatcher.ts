@@ -17,6 +17,9 @@ export class RbridgeEffectDispatcherV1{
       const observed=await this.store.read(request.effectId,request.requestDigest);
       outcome=observed?.outcome??{state:'BLOCKED',receipt:null,reason:'RBRIDGE_EFFECT_NOT_FOUND'};
     }else{
+      // A concurrent RECONCILE/read can poison storage during the last await.
+      // Keep this admission and the executor call in the same synchronous turn.
+      this.store.assertMutationAvailable();
       try{outcome=snapshotEffectData(await this.execute(snapshotEffectData(request)));}
       catch{outcome=pendingEffectOutcome(request);}
     }
