@@ -1,0 +1,1246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cocwin:rbridge:m0:contract:v3",
+  "title": "COCWIN_BROWSER_FALLBACK_M0_SCHEMA_CATALOG_V3",
+  "x-freeze-state": "FREEZE_PENDING_IMPLEMENTATION",
+  "x-design-sha": "01ef343c0a232d22cff5163e77abad78739a5d3b",
+  "x-fixture-sha256": "8c77656e4783ecda0067417f3cd795bee667cdc39445f30028afb40cbbf02f2c",
+  "x-protocol": {
+    "major": 1,
+    "minor": 1,
+    "minMessageBytes": 4096,
+    "maxMessageBytes": 65536,
+    "requiredCapabilities": [
+      "CHAT_TARGET_DISCOVERY_V1",
+      "CHAT_BINDING_V1",
+      "CHAT_WRITE_LEADER_V1",
+      "CHAT_CAPTURE_V1",
+      "CHAT_SEND_TX_V1",
+      "CHAT_QUOTA_OBSERVATION_V1",
+      "CHAT_ROLLOVER_V1",
+      "REPLAY_SEQUENCE_V1",
+      "CHAT_EFFECT_REQUEST_V1",
+      "CHAT_ASSISTANT_TURN_CAPTURE_V2"
+    ]
+  },
+  "x-sharedReasonCodes": [
+    "PROTOCOL_MAJOR_MISMATCH",
+    "RBRIDGE_CAPABILITY_MISSING",
+    "BROWSER_BINDING_STALE",
+    "SEND_UNCERTAIN",
+    "NO_COMMAND_OBSERVED",
+    "AMBIGUOUS_MACHINE_RESPONSE",
+    "MALFORMED_MACHINE_RESPONSE",
+    "MACHINE_RESPONSE_TOO_LARGE",
+    "OUTPUT_BUDGET_EXCEEDED",
+    "AGENT_RESPONSE_CORRELATION_MISMATCH",
+    "CONTEXT_HANDLE_STALE",
+    "CLOUD_EXPORT_BLOCKED",
+    "CHANGESET_INVALID",
+    "CHANGESET_OPERATION_CONFLICT",
+    "VERIFICATION_PROFILE_UNAVAILABLE",
+    "VERIFICATION_UNCERTAIN",
+    "COMMIT_UNCERTAIN",
+    "CANONICAL_MOVED",
+    "PROMOTION_UNCERTAIN",
+    "PROVIDER_QUOTA_EXHAUSTED",
+    "PROVIDER_UNAVAILABLE",
+    "STALE_GENERATION",
+    "REQUEST_ID_COLLISION",
+    "OWNER_ACTION_REQUIRED",
+    "EXTERNAL_AGENT_EFFECT_OUTCOME_UNCERTAIN",
+    "EXTERNAL_AGENT_RECONCILIATION_UNAVAILABLE",
+    "UI_PROTOCOL_CHANGED"
+  ],
+  "x-semanticConstraints": [
+    "Validators, not schema shape alone, recompute Canonical JSON V1 digests excluding only the respective self digest field.",
+    "Effect identity is SHA256 UTF8(session NUL generation NUL attempt NUL kind NUL decimal ordinal).",
+    "Payload variant must match effectKind; rollover next generation equals current+1 within 2147483647.",
+    "Exact project component uses the existing ChatGPT URL parser semantics; arbitrary prefix matching is forbidden.",
+    "Request AND command AND result AND complete event serialized JSON UTF8 bytes each fit the negotiated 4096..65536 ceiling including escaping.",
+    "Text limits count UTF8 bytes: prompt/result 48000, full assistant turn 16384; no normalization, truncation or selected fence.",
+    "Result validates the supplied full command independently and all seven command/request correlations.",
+    "VERIFIED requires full matching receipt and reason null. Binding leader/capture and verified SEND leader epochs are positive. Other states require a stable reason and may carry a matching negative SEND receipt.",
+    "Rollover receipt matches old request; nested new binding retains exact browser/profile/project/owner, uses successor generation and a different conversation ID.",
+    "CAPTURED validates receipt digest, full raw-text count/hash, envelope/receipt correlations and event digest. Capture request/conversation/epoch/peer and stream sequence are additionally checked at ingress.",
+    "REJECTED omits text: MACHINE_RESPONSE_TOO_LARGE iff count>16384, otherwise OUTPUT_BUDGET_EXCEEDED. The omitted original text cannot be independently reconstructed from a rejection receipt.",
+    "HELLO major 1 is authenticated and pinned before constructing VerifiedPeerV3; minor>=1 and all ten capabilities are required for V3. No implicit downgrade.",
+    "Plain JSON data is snapshotted before asynchronous digests; unknown/missing keys, accessors, symbols and non-data prototypes are rejected.",
+    "Legacy V1 readers retain their meanings and cannot authorize the V3 parser lane. No runtime capability is advertised by this contract-only work."
+  ],
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CocwinRbridgeEffectRequestV1"
+    },
+    {
+      "$ref": "#/$defs/RbridgeChatEffectCommandV1"
+    },
+    {
+      "$ref": "#/$defs/RbridgeChatEffectResultV1"
+    },
+    {
+      "$ref": "#/$defs/RbridgeChatEventV1"
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "minLength": 40,
+      "maxLength": 40
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^exta-[0-9a-f]{32}$",
+      "minLength": 37,
+      "maxLength": 37
+    },
+    "generation": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "attemptId": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "[\\u0000-\\u001f\\u007f]"
+      },
+      "maxLength": 256,
+      "x-maxUtf8Bytes": 256,
+      "pattern": "^exta-[0-9a-f]{32}:a:[1-9][0-9]*$",
+      "x-validation": "suffix is a canonical positive safe integer and session prefix must match"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1,
+      "x-validation": "Date.parse finite and new Date(ms).toISOString() equals input"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "[\\u0000-\\u001f\\u007f]"
+      },
+      "maxLength": 128,
+      "x-maxUtf8Bytes": 128,
+      "pattern": "^[A-Z][A-Z0-9_:-]{0,127}$"
+    },
+    "appId": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "[\\u0000-\\u001f\\u007f]"
+      },
+      "maxLength": 96,
+      "x-maxUtf8Bytes": 96,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,95}$"
+    },
+    "ExactBrowserTargetV1": {
+      "type": "object",
+      "properties": {
+        "browserInstanceId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 128,
+          "x-maxUtf8Bytes": 128
+        },
+        "browserProfileId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 128,
+          "x-maxUtf8Bytes": 128
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "tabId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "origin": {
+          "const": "https://chatgpt.com"
+        },
+        "canonicalProjectId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "conversationGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "browserInstanceId",
+        "browserProfileId",
+        "windowId",
+        "tabId",
+        "origin",
+        "canonicalProjectId",
+        "projectId",
+        "conversationId",
+        "conversationGeneration"
+      ],
+      "additionalProperties": false
+    },
+    "RBRIDGE_BIND_Request": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "COCWIN_RBRIDGE_EFFECT_REQUEST_V1"
+        },
+        "appId": {
+          "$ref": "#/$defs/appId"
+        },
+        "baseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectOrdinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "createdAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectKind": {
+          "const": "RBRIDGE_BIND"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "$ref": "#/$defs/ExactBrowserTargetV1"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "appId",
+        "baseSha",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "effectOrdinal",
+        "createdAt",
+        "requestDigest",
+        "effectKind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "RBRIDGE_SEND_Request": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "COCWIN_RBRIDGE_EFFECT_REQUEST_V1"
+        },
+        "appId": {
+          "$ref": "#/$defs/appId"
+        },
+        "baseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectOrdinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "createdAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectKind": {
+          "const": "RBRIDGE_SEND"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "$ref": "#/$defs/ExactBrowserTargetV1"
+            },
+            "challenge": {
+              "$ref": "#/$defs/sha256"
+            },
+            "purpose": {
+              "const": "PROMPT"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48000,
+              "not": {
+                "pattern": "\\u0000"
+              },
+              "x-maxUtf8Bytes": 48000
+            }
+          },
+          "required": [
+            "target",
+            "challenge",
+            "purpose",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "appId",
+        "baseSha",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "effectOrdinal",
+        "createdAt",
+        "requestDigest",
+        "effectKind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "RBRIDGE_RESULT_SEND_Request": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "COCWIN_RBRIDGE_EFFECT_REQUEST_V1"
+        },
+        "appId": {
+          "$ref": "#/$defs/appId"
+        },
+        "baseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectOrdinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "createdAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectKind": {
+          "const": "RBRIDGE_RESULT_SEND"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "$ref": "#/$defs/ExactBrowserTargetV1"
+            },
+            "challenge": {
+              "$ref": "#/$defs/sha256"
+            },
+            "purpose": {
+              "const": "RESULT"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 48000,
+              "not": {
+                "pattern": "\\u0000"
+              },
+              "x-maxUtf8Bytes": 48000
+            }
+          },
+          "required": [
+            "target",
+            "challenge",
+            "purpose",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "appId",
+        "baseSha",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "effectOrdinal",
+        "createdAt",
+        "requestDigest",
+        "effectKind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "RBRIDGE_ROLLOVER_Request": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "COCWIN_RBRIDGE_EFFECT_REQUEST_V1"
+        },
+        "appId": {
+          "$ref": "#/$defs/appId"
+        },
+        "baseSha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectOrdinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "createdAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effectKind": {
+          "const": "RBRIDGE_ROLLOVER"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "$ref": "#/$defs/ExactBrowserTargetV1"
+            },
+            "nextConversationGeneration": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "required": [
+            "target",
+            "nextConversationGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "appId",
+        "baseSha",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "effectOrdinal",
+        "createdAt",
+        "requestDigest",
+        "effectKind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "CocwinRbridgeEffectRequestV1": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RBRIDGE_BIND_Request"
+        },
+        {
+          "$ref": "#/$defs/RBRIDGE_SEND_Request"
+        },
+        {
+          "$ref": "#/$defs/RBRIDGE_RESULT_SEND_Request"
+        },
+        {
+          "$ref": "#/$defs/RBRIDGE_ROLLOVER_Request"
+        }
+      ]
+    },
+    "RbridgeChatEffectCommandV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_EFFECT_COMMAND_V1"
+        },
+        "commandId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 192,
+          "x-maxUtf8Bytes": 192,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "action": {
+          "enum": [
+            "EXECUTE",
+            "RECONCILE"
+          ]
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "request": {
+          "$ref": "#/$defs/CocwinRbridgeEffectRequestV1"
+        },
+        "commandSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "schema",
+        "commandId",
+        "action",
+        "issuedAt",
+        "request",
+        "commandSha256"
+      ],
+      "additionalProperties": false
+    },
+    "RbridgeChatBindingReceiptV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_BINDING_RECEIPT_V1"
+        },
+        "receiptId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 512,
+          "x-maxUtf8Bytes": 512
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "browserInstanceId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 128,
+          "x-maxUtf8Bytes": 128
+        },
+        "browserProfileId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 128,
+          "x-maxUtf8Bytes": 128
+        },
+        "windowId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "tabId": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "origin": {
+          "const": "https://chatgpt.com"
+        },
+        "projectId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "conversationGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "ownerSessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "writeLeaderEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "captureEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "schema",
+        "receiptId",
+        "sessionId",
+        "generation",
+        "browserInstanceId",
+        "browserProfileId",
+        "windowId",
+        "tabId",
+        "origin",
+        "projectId",
+        "conversationId",
+        "conversationGeneration",
+        "ownerSessionId",
+        "writeLeaderEpoch",
+        "captureEpoch",
+        "observedAt",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "RbridgeChatSendReceiptV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_SEND_RECEIPT_V1"
+        },
+        "receiptId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 512,
+          "x-maxUtf8Bytes": 512
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "challenge": {
+          "$ref": "#/$defs/sha256"
+        },
+        "purpose": {
+          "enum": [
+            "PROMPT",
+            "RESULT"
+          ]
+        },
+        "transactionState": {
+          "enum": [
+            "FAILED_BEFORE_CLICK",
+            "UNCERTAIN",
+            "SENT_VERIFIED",
+            "STOPPED",
+            "SUPERSEDED"
+          ]
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "conversationGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "writeLeaderEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "schema",
+        "receiptId",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "challenge",
+        "purpose",
+        "transactionState",
+        "conversationId",
+        "conversationGeneration",
+        "writeLeaderEpoch",
+        "observedAt",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "RolloverReceiptV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_ROLLOVER_RECEIPT_V1"
+        },
+        "receiptId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 512,
+          "x-maxUtf8Bytes": 512
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "previousConversationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "previousConversationGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "bindingReceipt": {
+          "$ref": "#/$defs/RbridgeChatBindingReceiptV1"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "schema",
+        "receiptId",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "requestDigest",
+        "previousConversationId",
+        "previousConversationGeneration",
+        "bindingReceipt",
+        "observedAt",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "RbridgeChatCaptureReceiptV2": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_CAPTURE_RECEIPT_V2"
+        },
+        "receiptId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "challenge": {
+          "$ref": "#/$defs/sha256"
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256
+        },
+        "conversationGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "assistantTurnId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 256,
+          "x-maxUtf8Bytes": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "captureEncoding": {
+          "const": "SITE_ASSISTANT_MARKDOWN_V1"
+        },
+        "responseUtf8Bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "assistantTurnSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "captureEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "schema",
+        "receiptId",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "challenge",
+        "conversationId",
+        "conversationGeneration",
+        "assistantTurnId",
+        "captureEncoding",
+        "responseUtf8Bytes",
+        "assistantTurnSha256",
+        "captureEpoch",
+        "observedAt",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "RbridgeChatEffectResultV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_EFFECT_RESULT_V1"
+        },
+        "commandId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 192,
+          "x-maxUtf8Bytes": 192,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "commandSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "state": {
+          "enum": [
+            "VERIFIED",
+            "FAILED_SAFE",
+            "BLOCKED",
+            "UNCERTAIN",
+            "APPLIED_UNVERIFIED"
+          ]
+        },
+        "receipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RbridgeChatBindingReceiptV1"
+            },
+            {
+              "$ref": "#/$defs/RbridgeChatSendReceiptV1"
+            },
+            {
+              "$ref": "#/$defs/RolloverReceiptV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resultSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "schema",
+        "commandId",
+        "commandSha256",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "requestDigest",
+        "completedAt",
+        "state",
+        "receipt",
+        "reason",
+        "resultSha256"
+      ],
+      "additionalProperties": false
+    },
+    "ASSISTANT_TURN_CAPTURED_V2": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_EVENT_V1"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 192,
+          "x-maxUtf8Bytes": 192,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "previousEventSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "eventSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "eventType": {
+          "const": "ASSISTANT_TURN_CAPTURED_V2"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "captureReceipt": {
+              "$ref": "#/$defs/RbridgeChatCaptureReceiptV2"
+            },
+            "assistantTurnUtf8": {
+              "type": "string",
+              "maxLength": 16384,
+              "x-maxUtf8Bytes": 16384
+            }
+          },
+          "required": [
+            "captureReceipt",
+            "assistantTurnUtf8"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "eventId",
+        "sequence",
+        "previousEventSha256",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "observedAt",
+        "eventSha256",
+        "eventType",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "ASSISTANT_TURN_REJECTED_V2": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_CHAT_EVENT_V1"
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          "maxLength": 192,
+          "x-maxUtf8Bytes": 192,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "previousEventSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "effectId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "eventSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "eventType": {
+          "const": "ASSISTANT_TURN_REJECTED_V2"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "captureReceipt": {
+              "$ref": "#/$defs/RbridgeChatCaptureReceiptV2"
+            },
+            "reason": {
+              "enum": [
+                "MACHINE_RESPONSE_TOO_LARGE",
+                "OUTPUT_BUDGET_EXCEEDED"
+              ]
+            }
+          },
+          "required": [
+            "captureReceipt",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "eventId",
+        "sequence",
+        "previousEventSha256",
+        "sessionId",
+        "generation",
+        "attemptId",
+        "effectId",
+        "observedAt",
+        "eventSha256",
+        "eventType",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "RbridgeChatEventV1": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ASSISTANT_TURN_CAPTURED_V2"
+        },
+        {
+          "$ref": "#/$defs/ASSISTANT_TURN_REJECTED_V2"
+        }
+      ]
+    }
+  }
+}

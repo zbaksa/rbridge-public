@@ -1,3 +1,5 @@
+import {validateCaptureEventV3} from './rbridgeEffectProtocol.js';
+
 export const M0_LIMITS = Object.freeze({
   maxPromptUtf8Bytes: 48_000,
   maxRbridgeControlMessageUtf8Bytes: 65_536,
@@ -362,7 +364,7 @@ export function negotiateHello(localInput:unknown,peerInput:unknown):NegotiatedH
   return {
     schema:'RBRIDGE_CHAT_NEGOTIATED_HELLO_V1',protocolMajor:1,protocolMinor:Math.min(local.protocolMinor,peer.protocolMinor),
     maxMessageBytes:Math.min(local.maxMessageBytes,peer.maxMessageBytes,M0_LIMITS.maxRbridgeControlMessageUtf8Bytes),
-    capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES],localReleaseSha:local.releaseSha,peerReleaseSha:peer.releaseSha,
+    capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES,...(Math.min(local.protocolMinor,peer.protocolMinor)>=1?['CHAT_EFFECT_REQUEST_V1','CHAT_ASSISTANT_TURN_CAPTURE_V2'].filter(capability=>localCaps.has(capability)&&peerCaps.has(capability)):[])],localReleaseSha:local.releaseSha,peerReleaseSha:peer.releaseSha,
   };
 }
 
@@ -529,22 +531,32 @@ export class RbridgeEventSpoolV1{
     const eventId=assertIdentity(input.eventId,192,'RBRIDGE_EVENT_ID_INVALID'),sessionId=assertSession(input.sessionId),generation=assertGeneration(input.generation);
     const attemptId=input.attemptId===null?null:assertAttempt(input.attemptId,sessionId),effectId=input.effectId===null?null:assertEffect(input.effectId),observedAt=assertIso(input.observedAt);
     const eventType=assertIdentity(input.eventType,128,'RBRIDGE_EVENT_TYPE_INVALID');
-    const payload=validateFrozenEventPayload(eventType,input.payload);
+    const v3=eventType==='ASSISTANT_TURN_CAPTURED_V2'||eventType==='ASSISTANT_TURN_REJECTED_V2';
+    const payload=v3?input.payload:validateFrozenEventPayload(eventType,input.payload);
     const existing=this.byId.get(eventId);
     if(existing){
       const replayWithoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence:existing.sequence,previousEventSha256:existing.previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload};
-      if(await canonicalDigest(replayWithoutSha)!==existing.eventSha256)fail('REQUEST_ID_COLLISION');
+      const replaySha=await canonicalDigest(replayWithoutSha);
+      if(v3)await validateCaptureEventV3({...replayWithoutSha,eventSha256:replaySha},M0_LIMITS.maxRbridgeControlMessageUtf8Bytes);
+      if(replaySha!==existing.eventSha256)fail('REQUEST_ID_COLLISION');
       return cloneEventValue(existing);
     }
     const sequence=this.events.length+1,previousEventSha256=this.events.at(-1)?.eventSha256??null;
     const withoutSha={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId,sequence,previousEventSha256,eventType,sessionId,generation,attemptId,effectId,observedAt,payload};
-    const eventSha256=await canonicalDigest(withoutSha),candidate:RbridgeChatEventV1={...withoutSha,eventSha256};
+    const eventSha256=await canonicalDigest(withoutSha);
+    const candidate:RbridgeChatEventV1=v3?await validateCaptureEventV3({...withoutSha,eventSha256},M0_LIMITS.maxRbridgeControlMessageUtf8Bytes):{...withoutSha,eventSha256};
     this.events.push(candidate);this.byId.set(eventId,candidate);return cloneEventValue(candidate);
   }
 }
 
 export async function validateEventEnvelope(input:unknown,expectedPreviousSha:string|null=null,expectedSequence:number|null=null):Promise<RbridgeChatEventV1>{
   const row=ownObject(input,'RBRIDGE_EVENT_INVALID');
+  if(row.eventType==='ASSISTANT_TURN_CAPTURED_V2'||row.eventType==='ASSISTANT_TURN_REJECTED_V2'){
+    const event=await validateCaptureEventV3(input,M0_LIMITS.maxRbridgeControlMessageUtf8Bytes);
+    if(expectedSequence!==null&&event.sequence!==expectedSequence)fail('RBRIDGE_EVENT_SEQUENCE_GAP');
+    if(expectedPreviousSha!==null&&event.previousEventSha256!==expectedPreviousSha)fail('RBRIDGE_EVENT_CHAIN_MISMATCH');
+    return event;
+  }
   exactKeys(row,['schema','eventId','sequence','previousEventSha256','eventType','sessionId','generation','attemptId','effectId','observedAt','payload','eventSha256'],'RBRIDGE_EVENT_FIELDS_INVALID');
   if(row.schema!=='RBRIDGE_CHAT_EVENT_V1')fail('RBRIDGE_EVENT_SCHEMA_INVALID');
   const sessionId=assertSession(row.sessionId),sequence=integer(row.sequence,1,Number.MAX_SAFE_INTEGER,'RBRIDGE_EVENT_SEQUENCE_INVALID');
