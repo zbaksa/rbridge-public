@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {BrowserAuthorityRuntimeV1,type BrowserContentDriverV1} from '../src/extension/browserAuthorityRuntime.js';
 import {BrowserAuthorityStoreV1,type ChromeStorageAreaV1} from '../src/extension/browserAuthorityStore.js';
 import {RbridgeEffectStoreV1} from '../src/extension/rbridgeEffectStore.js';
-import {RbridgeCaptureEgressV3,captureTokenV3,type ContentCaptureNotificationV3,type ChromeCaptureSenderV3} from '../src/extension/rbridgeCaptureEgress.js';
+import {RbridgeCaptureEgressV3,captureTokenV3,installCaptureMessageBridgeV3,type ContentCaptureNotificationV3,type ChromeCaptureSenderV3,type CaptureMessageApiV3} from '../src/extension/rbridgeCaptureEgress.js';
 import {DurableCaptureNotifierV3} from '../src/extension/contentMessageBridge.js';
 import {canonicalJson,type RbridgeChatEffectCommandV1} from '../src/domain/rbridgeEffectProtocol.js';
 import type {BrowserTargetObservationV1} from '../src/domain/rbridgeChatCore.js';
@@ -106,5 +106,38 @@ await test('token_binds_request_generation_effect_and_capture_epoch',async()=>{
 await test('corrupt_disappearing_or_cross_owner_outbox_fails_closed',async()=>{
   const h=await setup();await h.egress.accept(h.notification(),sender);h.storage.data.rbridgeCaptureOutboxV3={invalid:true};
   await assert.rejects(()=>h.egress.accept(h.notification('two','assistant-2'),sender),/CAPTURE/);
+});
+await test('content_restart_duplicate_pending_and_invalid_acks_preserve_baseline',async()=>{
+  const h=await setup(),n=h.notification();let sends=0;
+  const notifier=new DurableCaptureNotifierV3(async value=>{sends++;return await h.egress.accept(value,sender);});
+  const [one,two]=await Promise.all([notifier.notify(n),notifier.notify(n)]);assert.deepEqual(one,two);assert.equal(sends,1);
+  const restarted=new DurableCaptureNotifierV3(value=>h.egress.accept(value,sender));assert.deepEqual(await restarted.notify(n),one);assert.equal((await h.egress.events()).length,1);
+  for(const ack of [{durable:false,eventId:one.eventId,eventSha256:one.eventSha256},{...one,forged:true},{...one,eventSha256:'invalid'}]){
+    const invalid=new DurableCaptureNotifierV3(async()=>ack);await assert.rejects(()=>invalid.notify(n),/CAPTURE/);assert.equal(invalid.hasAcknowledged(n),false);
+  }
+});
+await test('installed_chrome_listener_uses_browser_sender_and_minor0_is_closed',async()=>{
+  const h=await setup();let listener:Parameters<CaptureMessageApiV3['onMessage']['addListener']>[0]|undefined;
+  const api:CaptureMessageApiV3={onMessage:{addListener:value=>{listener=value;}}};
+  installCaptureMessageBridgeV3(api,h.egress);
+  const chromeSender={id:sender.id,tab:{id:sender.tabId},frameId:0,url:sender.url};
+  const ack=await new Promise<unknown>(resolve=>{assert.equal(listener!(h.notification(),chromeSender,resolve),true);});assert.equal((ack as {durable:boolean}).durable,true);
+  const forged=await new Promise<unknown>(resolve=>{listener!({...h.notification(),tabId:sender.tabId},chromeSender,resolve);});assert.deepEqual(forged,{errorCode:'RBRIDGE_CAPTURE_REJECTED'});
+  installCaptureMessageBridgeV3(api,null);
+  const blocked=await new Promise<unknown>(resolve=>{listener!(h.notification(),chromeSender,resolve);});assert.deepEqual(blocked,{errorCode:'RBRIDGE_CAPTURE_V3_UNAVAILABLE'});
+});
+await test('historical_event_chain_is_retained_and_wrong_history_or_owner_is_closed',async()=>{
+  const h=await setup();await h.egress.accept({...h.notification(),observation:{kind:'UNAVAILABLE',reason:'UI_PROTOCOL_CHANGED'}},sender);
+  const history=[...(await h.egress.events())],storage=new MemoryStorage();
+  const seeded=new RbridgeCaptureEgressV3({...h.options,storage,initialHistory:history});await seeded.accept(h.notification('next','assistant-next'),sender);
+  const next=(await seeded.events())[0]!;assert.equal(next.sequence,2);assert.equal(next.previousEventSha256,history[0]!.eventSha256);
+  const wrapper:ChromeStorageAreaV1={get:key=>storage.get(key),set:items=>storage.set(items)};
+  await assert.rejects(()=>new RbridgeCaptureEgressV3({...h.options,storage:wrapper,initialHistory:[]}).events(),/CAPTURE/);
+  const other:ChromeStorageAreaV1={get:key=>storage.get(key),set:items=>storage.set(items)};
+  await assert.rejects(()=>new RbridgeCaptureEgressV3({...h.options,storage:other,initialHistory:history,ownerAppId:'other'}).events(),/CAPTURE/);
+});
+await test('same_turn_changed_bytes_and_disappearing_outbox_are_closed',async()=>{
+  const h=await setup();await h.egress.accept(h.notification(),sender);await assert.rejects(()=>h.egress.accept(h.notification('changed'),sender),/CAPTURE/);
+  delete h.storage.data.rbridgeCaptureOutboxV3;await assert.rejects(()=>h.egress.accept(h.notification('next','assistant-next'),sender),/CAPTURE/);
 });
 console.log(JSON.stringify({suite:'W1_V3_CAPTURE_EGRESS',passed,failed,liveAcceptance:'NOT_RUN'}));if(failed)process.exitCode=1;
