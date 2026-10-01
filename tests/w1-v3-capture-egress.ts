@@ -35,7 +35,7 @@ let passed=0,failed=0;
 async function test(name:string,fn:()=>Promise<void>){try{await fn();passed++;console.log('PASS V3_CAPTURE '+name);}catch(error){failed++;console.error('FAIL V3_CAPTURE '+name+': '+String(error));}}
 await test('capture_retries_until_durable_ack_without_second_event',async()=>{
   const h=await setup(),n=h.notification();let loseAck=true;
-  const notifier=new DurableCaptureNotifierV3(async value=>{const ack=await h.egress.accept(value,sender);if(loseAck){loseAck=false;throw Error('lost reply');}return ack;});
+  const notifier=new DurableCaptureNotifierV3(async(value:unknown)=>{const ack=await h.egress.accept(value,sender);if(loseAck){loseAck=false;throw Error('lost reply');}return ack;});
   await assert.rejects(()=>notifier.notify(n),/lost reply/);assert.equal(notifier.hasAcknowledged(n),false);
   const first=await h.egress.events();assert.equal(first.length,1);assert.equal(h.storage.order[0],'PERSIST_EVENT');
   const ack=await notifier.notify(n);assert.equal(ack.durable,true);assert.equal(notifier.hasAcknowledged(n),true);
