@@ -26,7 +26,7 @@ class MemoryStorage implements ChromeStorageAreaV1{
   }
 }
 async function command(source=bind.command,id=source.commandId,action: 'EXECUTE'|'RECONCILE'=source.action):Promise<RbridgeChatEffectCommandV1>{
-  const {commandSha256:_,...body}=structuredClone(source);body.commandId=id;body.action=action;
+  const {commandSha256,...body}=structuredClone(source);void commandSha256;body.commandId=id;body.action=action;
   return {...body,commandSha256:await canonicalDigest(body)};
 }
 function deferred(){let resolve!:()=>void;const promise=new Promise<void>(r=>{resolve=r;});return {promise,resolve};}
@@ -90,7 +90,7 @@ await test('pending_restart_never_reclicks_or_unblocks_later_effect',async()=>{
 await test('changed_request_with_same_effect_cannot_replace_original',async()=>{
   const storage=new MemoryStorage(),store=new RbridgeEffectStoreV1(storage);await store.reserve(send.command);
   const changed=structuredClone(send.command);if(changed.request.effectKind!=='RBRIDGE_SEND')throw Error('fixture kind');
-  changed.request.payload.text+=' changed';const {requestDigest:_,...body}=changed.request;changed.request.requestDigest=await canonicalDigest(body);
+  changed.request.payload.text+=' changed';const {requestDigest,...body}=changed.request;void requestDigest;changed.request.requestDigest=await canonicalDigest(body);
   const collision=await command(changed,'changed-request');await assert.rejects(()=>store.reserve(collision),/REQUEST_ID_COLLISION/);
   const preserved=await store.read(send.command.request.effectId,send.command.request.requestDigest);assert.deepEqual(preserved?.request,send.command.request);
 });
