@@ -254,4 +254,50 @@ await contractCase('core validates new capture, retains chain checks, and reject
   const invalidNew = {...tampered, eventId: 'new-invalid'}; await assert.rejects(() => spool.append(invalidNew as unknown as Parameters<RbridgeEventSpoolV1['append']>[0]));
   assert.equal(spool.size, 1);
 });
+await contractCase('catalog field, capability and reason sets match the independent golden objects', async () => {
+  const catalog = wire(JSON.parse(readFileSync('docs/topplan/COCWIN_BROWSER_FALLBACK_M0_SCHEMA_CATALOG_V3.json', 'utf8')));
+  assert.equal(catalog['x-freeze-state'], 'FREEZE_PENDING_IMPLEMENTATION');
+  assert.deepEqual(wire(catalog['x-protocol']).requiredCapabilities, peer().capabilities);
+  const definitions = wire(catalog.$defs);
+  const fields = (name: string, value: unknown) => {
+    const definition = wire(definitions[name]); assert.equal(definition.additionalProperties, false);
+    assert.deepEqual((definition.required as string[]).slice().sort(), Object.keys(wire(value)).sort());
+    assert.deepEqual(Object.keys(wire(definition.properties)).sort(), Object.keys(wire(value)).sort());
+  };
+  for (const vector of vectors) {
+    const request = wire(vector.request); fields(String(request.effectKind) + '_Request', request);
+    fields('ExactBrowserTargetV1', wire(request.payload).target);
+    const payload = wire(wire(wire(definitions[String(request.effectKind) + '_Request']).properties).payload);
+    assert.deepEqual((payload.required as string[]).slice().sort(), Object.keys(wire(request.payload)).sort());
+    fields('RbridgeChatEffectCommandV1', vector.command); fields('RbridgeChatEffectResultV1', vector.result);
+    const receipt = wire(wire(vector.result).receipt);
+    fields(receipt.schema === 'RBRIDGE_CHAT_BINDING_RECEIPT_V1' ? 'RbridgeChatBindingReceiptV1' : receipt.schema === 'RBRIDGE_CHAT_SEND_RECEIPT_V1' ? 'RbridgeChatSendReceiptV1' : 'RolloverReceiptV1', receipt);
+    if (receipt.bindingReceipt) fields('RbridgeChatBindingReceiptV1', receipt.bindingReceipt);
+  }
+  fields('ASSISTANT_TURN_CAPTURED_V2', golden.capturedEvent);
+  fields('ASSISTANT_TURN_REJECTED_V2', golden.maximumRejectedEvent);
+  fields('RbridgeChatCaptureReceiptV2', wire(wire(golden.capturedEvent).payload).captureReceipt);
+  for (const reason of ['MACHINE_RESPONSE_TOO_LARGE', 'OUTPUT_BUDGET_EXCEEDED', 'SEND_UNCERTAIN', 'EXTERNAL_AGENT_EFFECT_OUTCOME_UNCERTAIN', 'EXTERNAL_AGENT_RECONCILIATION_UNAVAILABLE', 'UI_PROTOCOL_CHANGED']) assert.ok((catalog['x-sharedReasonCodes'] as string[]).includes(reason));
+});
+await contractCase('maximum bounded IDs, UTF8 payloads, epochs and sequence remain precise', async () => {
+  const command = commandOf(); command.commandId = 'x'.repeat(192);
+  await api.parseEffectCommand(signed(command, 'commandSha256'), 65536);
+  command.commandId = 'x'.repeat(193); await denied(() => api.parseEffectCommand(signed(command, 'commandSha256'), 65536));
+  const req = requestOf(); wire(req.payload).text = 'Ž'.repeat(24000);
+  await api.parseEffectRequest(signed(req, 'requestDigest'), 65536);
+  wire(req.payload).text = 'Ž'.repeat(24001); await denied(() => api.parseEffectRequest(signed(req, 'requestDigest'), 65536));
+  const event = copy(wire(golden.capturedEvent)); const receipt = wire(wire(event.payload).captureReceipt);
+  receipt.receiptId = 'x'.repeat(256); receipt.assistantTurnId = 'y'.repeat(256);
+  receipt.captureEpoch = Number.MAX_SAFE_INTEGER; event.sequence = Number.MAX_SAFE_INTEGER;
+  wire(event.payload).captureReceipt = signed(receipt, 'sha256');
+  await api.validateCaptureEventV3(signed(event, 'eventSha256'), 65536);
+  for (const [key, value] of [['receiptId', 'x'.repeat(257)], ['assistantTurnId', 'y'.repeat(257)], ['captureEpoch', Number.MAX_SAFE_INTEGER + 1], ['responseUtf8Bytes', Number.MAX_SAFE_INTEGER + 1]] as const) {
+    const bad = copy(event); const inner = wire(wire(bad.payload).captureReceipt); inner[key] = value;
+    wire(bad.payload).captureReceipt = signed(inner, 'sha256'); await denied(() => api.validateCaptureEventV3(signed(bad, 'eventSha256'), 65536));
+  }
+  const badSequence = {...event, sequence: Number.MAX_SAFE_INTEGER + 1}; await denied(() => api.validateCaptureEventV3(signed(badSequence, 'eventSha256'), 65536));
+  const noncanonical = requestOf(); noncanonical.sessionId = String(noncanonical.sessionId) + '\n';
+  await denied(() => api.parseEffectRequest(signed(noncanonical, 'requestDigest'), 65536));
+});
+
 console.log('V3_CONTRACT_PASS '+passed);
