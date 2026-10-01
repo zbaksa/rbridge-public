@@ -9,6 +9,7 @@ import {
 import {ChromeTabsInventoryAdapterV1,type ChromeTabsReadApiV1} from './chromeTabInventory.js';
 import {ExtensionNativePortLinkV1,type ExtensionRuntimeNativeApiV1} from './nativePortServiceWorker.js';
 import {RbridgeChatCommandDispatcherV1} from './rbridgeCommandDispatcher.js';
+import {installCaptureMessageBridgeV3,type CaptureMessageApiV3} from './rbridgeCaptureEgress.js';
 
 declare const __RBRIDGE_RELEASE_SHA__:string;
 
@@ -27,6 +28,7 @@ export interface ServiceWorkerStorageV1{
 export interface ServiceWorkerChromeApiV1{
   runtime:{
     connectNative(name:string):ReturnType<ExtensionRuntimeNativeApiV1['connectNative']>;
+    onMessage?:CaptureMessageApiV3['onMessage'];
   };
   storage:{local:ServiceWorkerStorageV1};
   tabs?:(ChromeAuthorityTabsApiV1&ChromeTabsReadApiV1);
@@ -62,6 +64,9 @@ function commandDispatcher(api:ServiceWorkerChromeApiV1,config:ExtensionBootstra
 export async function startExtensionServiceWorkerV1(api:ServiceWorkerChromeApiV1,releaseSha:string):Promise<ExtensionNativePortLinkV1>{
   if(!SHA1.test(releaseSha))fail('RBRIDGE_RELEASE_SHA_INVALID');
   const stored=await api.storage.local.get(KEY),config=parseExtensionBootstrapConfigV1(stored[KEY]);
+  // Upgrade requires authenticated V3 negotiation, historical chain ownership and site acquisition.
+  // Minor-0 bootstrap has none of these authorities and must never accept a V3 notification.
+  if(api.runtime.onMessage)installCaptureMessageBridgeV3({onMessage:api.runtime.onMessage},null);
   const hello:RbridgeChatHelloV1={
     schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1,protocolMinor:0,releaseSha,maxMessageBytes:M0_LIMITS.maxRbridgeControlMessageUtf8Bytes,
     capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES],browserInstanceId:config.browserInstanceId,browserProfileId:config.browserProfileId,nativeHostVersion:config.nativeHostVersion,

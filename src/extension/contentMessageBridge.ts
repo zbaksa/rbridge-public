@@ -1,4 +1,7 @@
 import {ChatgptContentRuntimeV1} from './contentRuntime.js';
+import {canonicalJson} from '../domain/rbridgeEffectProtocol.js';
+import {parseContentCaptureNotificationV3,type CaptureAckV3} from './rbridgeCaptureEgress.js';
+import {snapshotEffectData} from './rbridgeEffectStore.js';
 
 export interface ContentMessageEventV1{
   addListener(listener:(message:unknown,sender:unknown,sendResponse:(response:unknown)=>void)=>boolean|void):void;
@@ -30,4 +33,26 @@ export function installContentMessageBridgeV1(api:ContentMessageRuntimeApiV1,run
     );
     return true;
   });
+}
+
+// The observer may advance its baseline only after this notifier has a durable worker ack.
+export class DurableCaptureNotifierV3{
+  private readonly acknowledged=new Map<string,CaptureAckV3>();
+  private readonly pending=new Map<string,Promise<CaptureAckV3>>();
+  constructor(private readonly send:(notification:unknown)=>Promise<unknown>){}
+  hasAcknowledged(input:unknown):boolean{return this.acknowledged.has(canonicalJson(parseContentCaptureNotificationV3(input)));}
+  async notify(input:unknown):Promise<CaptureAckV3>{
+    const notification=parseContentCaptureNotificationV3(input),key=canonicalJson(notification),prior=this.acknowledged.get(key);
+    if(prior)return snapshotEffectData(prior);
+    const pending=this.pending.get(key);if(pending)return snapshotEffectData(await pending);
+    const work=Promise.resolve().then(async()=>{
+      const value=snapshotEffectData(await this.send(notification));
+      if(value===null||typeof value!=='object'||Array.isArray(value))throw Error('RBRIDGE_CAPTURE_ACK_INVALID');
+      const row=value as Record<string,unknown>;
+      if(Object.keys(row).length!==3||Object.keys(row).some(name=>!['eventId','eventSha256','durable'].includes(name))||row.durable!==true||typeof row.eventId!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/.test(row.eventId)||typeof row.eventSha256!=='string'||!/^[0-9a-f]{64}$/.test(row.eventSha256))throw Error('RBRIDGE_CAPTURE_ACK_INVALID');
+      const ack=row as unknown as CaptureAckV3;this.acknowledged.set(key,ack);return ack;
+    });
+    this.pending.set(key,work);
+    try{return snapshotEffectData(await work);}finally{this.pending.delete(key);}
+  }
 }

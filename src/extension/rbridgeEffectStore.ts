@@ -117,6 +117,13 @@ export class RbridgeEffectStoreV1{
     if(effect.requestDigest!==requestDigest)fail('REQUEST_ID_COLLISION');const original=current!.commands.find(value=>value.command.commandId===effect.executeCommandId)!;
     return snapshotEffectData({request:original.command.request,outcome:effect.outcome,result:effect.result});
   }
+  // Browser capture reads the original reserved request; content supplies no authority fields.
+  async requestForEffect(effectId:string):Promise<CocwinRbridgeEffectRequestV1|null>{
+    if(!SHA.test(effectId))fail('RBRIDGE_EFFECT_LOOKUP_INVALID');
+    const current=await this.load(),effect=current?.effects.find(value=>value.effectId===effectId);
+    if(!effect)return null;
+    return snapshotEffectData(current!.commands.find(value=>value.command.commandId===effect.executeCommandId)!.command.request);
+  }
   async saveResult(input:RbridgeChatEffectResultV1):Promise<void>{
     const snapshot=snapshotEffectData(input);
     await this.exclusive(async()=>{
