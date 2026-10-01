@@ -79,6 +79,32 @@ await test('missing_reconcile_reserves_only_command_identity',async()=>{
   assert.deepEqual(await dispatcher.dispatch(reconcile),observed);assert.equal(calls,0);
   const fresh=await dispatcher.dispatch(bind.command);assert.equal(fresh.state,'FAILED_SAFE');assert.equal(calls,1);
 });
+for(const completed of [true,false]){
+  await test((completed?'completed':'interrupted')+'_missing_read_cannot_authorize_or_corrupt_later_effect',async()=>{
+    const storage=new MemoryStorage(),store=new RbridgeEffectStoreV1(storage);let calls=0;
+    const dispatcher=new RbridgeEffectDispatcherV1(store,async()=>{calls++;return safe;});
+    const read=await command(bind.command,'independent-missing-read','RECONCILE');
+    const originalRead=completed?await dispatcher.dispatch(read):null;
+    if(!completed)await store.reserve(read);
+    const changed=structuredClone(bind.command);
+    if(changed.request.effectKind!=='RBRIDGE_BIND')throw Error('fixture kind');
+    changed.request.payload.target.conversationId='conv-authoritative';
+    const {requestDigest,...body}=changed.request;void requestDigest;
+    changed.request.requestDigest=await canonicalDigest(body);
+    const execute=await command(changed,'authoritative-after-missing-read');
+    const result=await dispatcher.dispatch(execute);
+    assert.equal(result.state,'FAILED_SAFE');assert.equal(calls,1);
+    const restartedStore=new RbridgeEffectStoreV1({get:key=>storage.get(key),set:items=>storage.set(items)});
+    const restarted=new RbridgeEffectDispatcherV1(restartedStore,async()=>{calls++;return safe;});
+    assert.deepEqual(await restarted.dispatch(execute),result);assert.equal(calls,1);
+    assert.deepEqual((await restartedStore.read(execute.request.effectId,execute.request.requestDigest))?.request,execute.request);
+    const saved=structuredClone(storage.data);
+    if(completed)assert.deepEqual(await restarted.dispatch(read),originalRead);
+    else await assert.rejects(()=>restarted.dispatch(read),/REQUEST_ID_COLLISION/);
+    assert.deepEqual(storage.data,saved);
+    assert.deepEqual(await restarted.dispatch(execute),result);assert.equal(calls,1);
+  });
+}
 await test('pending_restart_never_reclicks_or_unblocks_later_effect',async()=>{
   const storage=new MemoryStorage(),first=new RbridgeEffectStoreV1(storage);assert.equal(await first.reserve(send.command),'NEW');
   let calls=0;const restartedStore=new RbridgeEffectStoreV1(storage),dispatcher=new RbridgeEffectDispatcherV1(restartedStore,async()=>{calls++;return safe;});
@@ -91,7 +117,8 @@ await test('changed_request_with_same_effect_cannot_replace_original',async()=>{
   const storage=new MemoryStorage(),store=new RbridgeEffectStoreV1(storage);await store.reserve(send.command);
   const changed=structuredClone(send.command);if(changed.request.effectKind!=='RBRIDGE_SEND')throw Error('fixture kind');
   changed.request.payload.text+=' changed';const {requestDigest,...body}=changed.request;void requestDigest;changed.request.requestDigest=await canonicalDigest(body);
-  const collision=await command(changed,'changed-request');await assert.rejects(()=>store.reserve(collision),/REQUEST_ID_COLLISION/);
+  const collision=await command(changed,'changed-request'),saved=structuredClone(storage.data);await assert.rejects(()=>store.reserve(collision),/REQUEST_ID_COLLISION/);
+  assert.deepEqual(storage.data,saved);
   const preserved=await store.read(send.command.request.effectId,send.command.request.requestDigest);assert.deepEqual(preserved?.request,send.command.request);
 });
 for(const fault of ['QUOTA','POST_WRITE','READBACK'] as const){
