@@ -144,5 +144,19 @@ await test('negotiated_v3_denies_v1_bind_leader_capture_before_legacy_hook',asyn
   listeners[0]!(hello);await drain();
   listeners[0]!(parseRbridgeChatCommandV1({schema:'RBRIDGE_CHAT_COMMAND_V1',requestDigest:'a'.repeat(64),issuedAt:'2026-10-01T05:00:00.000Z',commandId:'legacy-read',action:'READ_STATE',sessionId:bind.command.request.sessionId,generation:bind.command.request.generation,attemptId:null,effectId:null,payload:{}}));await drain();assert.equal(legacy,1);
 });
+await test('same_port_v3_authority_cannot_downgrade_to_v1_mutation',async()=>{
+  const ports:{messages:((value:unknown)=>void)[];disconnects:((value:void)=>void)[]}[]=[],errors:string[]=[];let legacy=0;
+  const connectNative=():ExtensionNativePortV1=>{const state={messages:[] as ((value:unknown)=>void)[],disconnects:[] as ((value:void)=>void)[]};ports.push(state);return {postMessage:()=>{},disconnect:()=>{},onMessage:{addListener:fn=>state.messages.push(fn)},onDisconnect:{addListener:fn=>state.disconnects.push(fn)}};};
+  const hello:RbridgeChatHelloV1={schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1,protocolMinor:1,releaseSha:'a'.repeat(40),maxMessageBytes:65536,capabilities:[...V3_CAPABILITIES],browserInstanceId:'chrome-main',browserProfileId:'profile-main',nativeHostVersion:'1.0.0'};
+  const v1={...hello,protocolMinor:0,capabilities:V3_CAPABILITIES.slice(0,8)};
+  const link=new ExtensionNativePortLinkV1({connectNative},hello,{onServerCommand:()=>{legacy++;},onProtocolError:error=>{errors.push(error.message);}});link.connect();
+  const drain=()=>new Promise(r=>setTimeout(r,10));
+  const mutate=parseRbridgeChatCommandV1({schema:'RBRIDGE_CHAT_COMMAND_V1',commandId:'downgraded-leader',action:'ACQUIRE_WRITE_LEADER',sessionId:bind.command.request.sessionId,generation:bind.command.request.generation,attemptId:null,effectId:null,requestDigest:'a'.repeat(64),issuedAt:'2026-10-01T05:00:00.000Z',payload:{}});
+  ports[0]!.messages[0]!(hello);await drain();ports[0]!.messages[0]!(v1);await drain();ports[0]!.messages[0]!(mutate);await drain();
+  assert.equal(legacy,0);assert.ok(errors.includes('RBRIDGE_V3_DOWNGRADE_DENIED'));
+  link.disconnect();link.connect();ports[1]!.messages[0]!(v1);await drain();ports[1]!.messages[0]!(mutate);await drain();assert.equal(legacy,1);
+  // A message from the old connection must not negotiate authority on the new port.
+  ports[0]!.messages[0]!(hello);await drain();ports[1]!.messages[0]!(mutate);await drain();assert.equal(legacy,2);
+});
 console.log(JSON.stringify({schema:'RBRIDGE_W1_V3_EFFECT_LEDGER_QUALIFICATION_V1',status:failed===0?'PASS':'FAIL',passed,failed}));
 if(failed)throw Error('W1_V3_EFFECT_LEDGER_FAILED:'+failed);
