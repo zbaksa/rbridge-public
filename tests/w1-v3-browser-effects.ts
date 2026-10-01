@@ -34,10 +34,11 @@ function observation(request:CocwinRbridgeEffectRequestV1):BrowserTargetObservat
 function url(t:ExactBrowserTargetV1){return t.origin+'/g/'+t.projectId+'/c/'+t.conversationId;}
 async function setup(options:{delivery?:boolean;click?:'CLICKED'|'FAILED_BEFORE_CLICK'|'UNCERTAIN';rollover?:boolean}={}){
   const storage=new MemoryStorage(),bind=await command(0),target=bind.request.payload.target;
-  let live=observation(bind.request),clicks=0,navigations=0,quiescent=true,surface:DeliverySurfaceV3={documentId:'document-original',documentUrl:url(target),observedAt:at,turns:[]};
+  let live=observation(bind.request),clicks=0,stages=0,navigations=0,quiescent=true,surface:DeliverySurfaceV3={documentId:'document-original',documentUrl:url(target),observedAt:at,turns:[]};
+  let duringQuiescence:(()=>Promise<void>)|null=null;
   let afterClick:(()=>Promise<void>)|null=null,beforeClick:(()=>Promise<void>)|null=null,nextPatch:Partial<ExactBrowserTargetV1>={};
   const content:BrowserContentDriverV1={
-    stagePrompt:async(_tab,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength}),
+    stagePrompt:async(_tab,text)=>{stages++;return {status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).byteLength};},
     startCapture:async()=>({status:'ACTIVE'}),stopCapture:async()=>({status:'OFF'}),
     preflightSend:async()=>{if(beforeClick){const hook=beforeClick;beforeClick=null;await hook();}return {status:'FOUND'};},
     clickSend:async(...args:unknown[])=>{
@@ -55,15 +56,15 @@ async function setup(options:{delivery?:boolean;click?:'CLICKED'|'FAILED_BEFORE_
   const runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),{observe:async()=>structuredClone(live)},content);
   const effects=new RbridgeEffectStoreV1(storage),delivery=new ChatgptDeliveryAdapterV3(storage,{scan:async()=>structuredClone(surface)});
   const driver:ChatgptRolloverDriverV3={
-    available:()=>options.rollover===true,quiescent:async()=>quiescent,
+    available:()=>options.rollover===true,quiescent:async()=>{if(duringQuiescence){const hook=duringQuiescence;duringQuiescence=null;await hook();}return quiescent;},
     createNext:async(previous:ExactBrowserTargetV1,next:number)=>{navigations++;const target={...previous,conversationId:'conv-next',conversationGeneration:next,...nextPatch};live={...live,...target};surface={...surface,documentUrl:url(target),documentId:'document-next',turns:[]};return target;},
   };
   const rollover=new ChatgptRolloverAdapterV3(runtime,driver),executor=new BrowserEffectExecutorV3(runtime,effects,delivery,rollover);
   const dispatcher=new RbridgeEffectDispatcherV1(effects,request=>executor.executeBrowserEffect(request));
-  return {storage,runtime,effects,delivery,executor,dispatcher,bind,target,clicks:()=>clicks,navigations:()=>navigations,
+  return {storage,runtime,effects,delivery,executor,dispatcher,bind,target,clicks:()=>clicks,stages:()=>stages,navigations:()=>navigations,
     surface:(next:DeliverySurfaceV3)=>{surface=next;},getSurface:()=>structuredClone(surface),live:(next:BrowserTargetObservationV1)=>{live=next;},
     afterClick:(hook:()=>Promise<void>)=>{afterClick=hook;},beforeClick:(hook:()=>Promise<void>)=>{beforeClick=hook;},
-    quiescence:(value:boolean)=>{quiescent=value;},nextTarget:(patch:Partial<ExactBrowserTargetV1>)=>{nextPatch=patch;}};
+    duringQuiescence:(hook:()=>Promise<void>)=>{duringQuiescence=hook;},quiescence:(value:boolean)=>{quiescent=value;},nextTarget:(patch:Partial<ExactBrowserTargetV1>)=>{nextPatch=patch;}};
 }
 let passed=0,failed=0;
 async function test(name:string,fn:()=>Promise<void>){try{await fn();passed++;console.log('PASS V3_EFFECTS '+name);}catch(error){failed++;console.error('FAIL V3_EFFECTS '+name+': '+String(error));}}
@@ -145,6 +146,36 @@ await test('rollover_requires_same_project_and_quiescence',async()=>{
   assert.equal(result.state,'VERIFIED');const receipt=result.receipt as {bindingReceipt:{conversationGeneration:number;projectId:string;writeLeaderEpoch:number;captureEpoch:number}};
   assert.equal(receipt.bindingReceipt.conversationGeneration,h.target.conversationGeneration+1);assert.equal(receipt.bindingReceipt.projectId,h.target.projectId);
   assert.ok(receipt.bindingReceipt.writeLeaderEpoch>0);assert.ok(receipt.bindingReceipt.captureEpoch>0);assert.equal(h.navigations(),1);
+});
+await test('rollover_checks_original_live_target_before_navigation',async()=>{
+  const variants:Partial<BrowserTargetObservationV1>[]=[{tabId:21},{windowId:11},{browserInstanceId:'other-browser'},
+    {browserProfileId:'other-profile'},{projectId:'g-p-'+'b'.repeat(32)+'-other'},{conversationId:'manual-navigation'},{conversationGeneration:2}];
+  for(const variant of variants){
+    const h=await setup({rollover:true});await h.dispatcher.dispatch(h.bind);h.live({...observation(h.bind.request),...variant});
+    const result=await h.dispatcher.dispatch(await command(3));assert.equal(result.state,'BLOCKED');assert.equal(h.navigations(),0);
+  }
+});
+await test('rollover_rechecks_ledger_admission_after_quiescence',async()=>{
+  const h=await setup({rollover:true});await h.dispatcher.dispatch(h.bind);const rollover=await command(3);
+  h.duringQuiescence(async()=>{h.storage.data.rbridgeEffectLedgerV1={invalid:true};await assert.rejects(()=>h.effects.read(rollover.request.effectId,rollover.request.requestDigest),/LEDGER/);});
+  await assert.rejects(()=>h.dispatcher.dispatch(rollover),/LEDGER|STORAGE_UNAVAILABLE/);assert.equal(h.navigations(),0);
+});
+await test('staging_handoff_carries_original_authority_before_composer_mutation',async()=>{
+  const h=await setup({delivery:true});await h.dispatcher.dispatch(h.bind);const original=h.runtime.stageSend.bind(h.runtime);
+  h.runtime.stageSend=async(...args:Parameters<BrowserAuthorityRuntimeV1['stageSend']>)=>{
+    const changed={...observation(h.bind.request),conversationGeneration:2};h.live(changed);
+    await h.runtime.prepareAndVerifyBinding(changed);await h.runtime.acquireLeader();await h.runtime.activateCapture();
+    return await original(...args);
+  };
+  const result=await h.dispatcher.dispatch(await command(1));assert.equal(result.state,'BLOCKED');assert.equal(h.stages(),0);assert.equal(h.clicks(),0);
+});
+await test('binding_phase_handoff_carries_original_authority',async()=>{
+  const h=await setup(),original=h.runtime.acquireLeader.bind(h.runtime);let drift=true;
+  h.runtime.acquireLeader=async(...args:Parameters<BrowserAuthorityRuntimeV1['acquireLeader']>)=>{
+    if(drift){drift=false;const changed={...observation(h.bind.request),conversationGeneration:2};h.live(changed);await h.runtime.prepareAndVerifyBinding(changed);}
+    return await original(...args);
+  };
+  const result=await h.dispatcher.dispatch(h.bind);assert.equal(result.state,'BLOCKED');assert.equal(h.clicks(),0);
 });
 await test('unsupported_or_nonquiescent_rollover_blocks_before_navigation',async()=>{
   for(const supported of [false,true]){const h=await setup({rollover:supported});await h.dispatcher.dispatch(h.bind);h.quiescence(false);
