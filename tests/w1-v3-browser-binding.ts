@@ -6,8 +6,11 @@ import type {BrowserTargetObservationV1,RbridgeChatBindingReceiptV1} from '../sr
 const session='exta-'+'e'.repeat(32),generation='123e4567-e89b-42d3-a456-426614174000',at='2026-10-01T11:00:00.000Z';
 const target:BrowserTargetObservationV1={sessionId:session,generation,browserInstanceId:'chrome-main',browserProfileId:'chatgpt-primary',windowId:10,tabId:20,origin:'https://chatgpt.com',projectId:'g-p-'+'a'.repeat(32)+'-05-cocwin',conversationId:'6a819823-07fc-83eb-b324-ddf6f474ea29',conversationGeneration:1,ownerSessionId:session};
 class MemoryStorage implements ChromeStorageAreaV1{
-  data:Record<string,unknown>={};failWrites=false;
-  async get(key:string):Promise<Record<string,unknown>>{return key in this.data?{[key]:structuredClone(this.data[key])}:{};}
+  data:Record<string,unknown>={};failWrites=false;afterNextRead:(()=>Promise<void>)|null=null;
+  async get(key:string):Promise<Record<string,unknown>>{
+    const row=key in this.data?{[key]:structuredClone(this.data[key])}:{},hook=this.afterNextRead;
+    this.afterNextRead=null;if(hook)await hook();return row;
+  }
   async set(items:Record<string,unknown>):Promise<void>{if(this.failWrites)throw Error('simulated quota');Object.assign(this.data,structuredClone(items));}
 }
 type FinalRuntime=BrowserAuthorityRuntimeV1 & {finalizeBindingReceipt?:(now?:Date)=>Promise<{snapshot:BrowserAuthoritySnapshotV1;receipt:RbridgeChatBindingReceiptV1}>};
@@ -17,8 +20,9 @@ async function finalize(runtime:BrowserAuthorityRuntimeV1){
   return await extended.finalizeBindingReceipt!(new Date(at));
 }
 async function setup(){
-  const storage=new MemoryStorage();let live=structuredClone(target),clicks=0,captureConfirmed=true;
-  const reader:BrowserLiveTargetReaderV1={observe:async()=>structuredClone(live)};
+  const storage=new MemoryStorage();let live=structuredClone(target),clicks=0,captureConfirmed=true,observations=0;
+  let observeHook:((count:number)=>Promise<void>)|null=null;
+  const reader:BrowserLiveTargetReaderV1={observe:async()=>{observations++;if(observeHook)await observeHook(observations);return structuredClone(live);}};
   const content:BrowserContentDriverV1={
     stagePrompt:async(_tab,text)=>({status:'STAGED_VERIFIED',utf8Bytes:new TextEncoder().encode(text).length}),
     startCapture:async()=>{if(!captureConfirmed)throw Error('RBRIDGE_CAPTURE_RUNTIME_NOT_ACTIVE');return {status:'ACTIVE'};},
@@ -27,7 +31,7 @@ async function setup(){
   };
   const runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),reader,content);
   await runtime.prepareAndVerifyBinding(target,new Date(at));
-  return {storage,runtime,reader,content,changeLive:(next:BrowserTargetObservationV1)=>{live=next;},denyCapture:()=>{captureConfirmed=false;},clicks:()=>clicks};
+  return {storage,runtime,reader,content,changeLive:(next:BrowserTargetObservationV1)=>{live=next;},denyCapture:()=>{captureConfirmed=false;},onObserve:(hook:(count:number)=>Promise<void>)=>{observeHook=hook;},clicks:()=>clicks};
 }
 let passed=0,failed=0;
 async function test(name:string,fn:()=>Promise<void>){try{await fn();passed++;console.log('PASS V3_BINDING '+name);}catch(error){failed++;console.error('FAIL V3_BINDING '+name+': '+String(error));}}
@@ -74,6 +78,23 @@ await test('final_binding_receipt_is_not_returned_after_storage_failure',async()
   const before=await h.runtime.state();h.storage.failWrites=true;
   await assert.rejects(()=>finalize(h.runtime),/WRITE_UNCERTAIN/);h.storage.failWrites=false;
   assert.deepEqual(await h.runtime.state(),before);assert.equal(h.clicks(),0);
+});
+await test('authority_drift_during_final_target_observation_denies_receipt',async()=>{
+  const h=await setup();await h.runtime.acquireLeader(new Date(at));await h.runtime.activateCapture(new Date(at));
+  h.onObserve(async count=>{if(count===3)await h.runtime.acquireLeader(new Date(at));});
+  await assert.rejects(()=>finalize(h.runtime),/BINDING_RECEIPT_READBACK_UNCERTAIN/);
+  const latest=await h.runtime.state();assert.equal(latest?.leader?.epoch,2);assert.equal(latest?.capture,null);assert.equal(h.clicks(),0);
+});
+await test('same_url_reload_after_initial_capture_confirmation_denies_receipt',async()=>{
+  const h=await setup();await h.runtime.acquireLeader(new Date(at));await h.runtime.activateCapture(new Date(at));
+  h.onObserve(async count=>{if(count===3)h.denyCapture();});
+  await assert.rejects(()=>finalize(h.runtime),/CAPTURE_RUNTIME_NOT_ACTIVE/);assert.equal(h.clicks(),0);
+});
+await test('mutation_during_final_storage_validation_denies_stale_receipt',async()=>{
+  const h=await setup();await h.runtime.acquireLeader(new Date(at));await h.runtime.activateCapture(new Date(at));
+  h.onObserve(async count=>{if(count===3)h.storage.afterNextRead=async()=>{await h.runtime.acquireLeader(new Date(at));};});
+  await assert.rejects(()=>finalize(h.runtime),/BINDING_RECEIPT_READBACK_UNCERTAIN/);
+  assert.equal((await h.runtime.state())?.leader?.epoch,2);assert.equal(h.clicks(),0);
 });
 await test('click_is_not_delivery_verification',async()=>{
   const h=await setup();await h.runtime.acquireLeader(new Date(at));await h.runtime.activateCapture(new Date(at));
