@@ -2,7 +2,7 @@ import {canonicalDigest,canonicalJson,sha256Hex,type CocwinRbridgeEffectRequestV
 import {validateEventEnvelope} from '../domain/rbridgeChatCore.js';
 import type {SiteMarkdownObservationV3} from '../browser/chatgptAssistantMarkdownCapture.js';
 import type {BrowserAuthorityRuntimeV1} from './browserAuthorityRuntime.js';
-import type {ChromeStorageAreaV1} from './browserAuthorityStore.js';
+import type {BrowserAuthoritySnapshotV1,ChromeStorageAreaV1} from './browserAuthorityStore.js';
 import {snapshotEffectData,type RbridgeEffectStoreV1} from './rbridgeEffectStore.js';
 
 export interface ChromeCaptureSenderV3{id:string;tabId:number;frameId:number;url:string}
@@ -105,10 +105,28 @@ export class RbridgeCaptureEgressV3{
       // The strict reserved request validates canonical project UUID separately from the URL slug.
       if(tx.conversationId!==binding.conversationId||tx.conversationGeneration!==binding.conversationGeneration||tx.captureEpoch!==capture.epoch||tx.writeLeaderEpoch!==leader.epoch||binding.sessionId!==request.sessionId||binding.generation!==request.generation||capture.sessionId!==request.sessionId||capture.generation!==request.generation)fail();
       const current=await this.load(),notificationDigest=await canonicalDigest(notification);
-      const prior=current?.records.find(record=>record.captureToken===notification.captureToken&&record.assistantTurnId===notification.assistantTurnId);
-      if(prior){if(prior.notificationDigest!==notificationDigest||prior.requestDigest!==request.requestDigest)fail();await this.options.runtime.assertLiveSnapshot(state);this.options.effects.assertMutationAvailable();return this.ack(prior.event);}
-      const all=[...(current?.history??this.history),...(current?.records.map(record=>record.event)??[])];
       const identity=await canonicalDigest({requestDigest:request.requestDigest,captureToken:notification.captureToken,assistantTurnId:notification.assistantTurnId});
+      const prior=current?.records.find(record=>record.captureToken===notification.captureToken&&record.assistantTurnId===notification.assistantTurnId);
+      if(prior){if(prior.notificationDigest!==notificationDigest||prior.requestDigest!==request.requestDigest)fail();const fence=await this.options.runtime.assertLiveSnapshot(state);this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();return this.ack(prior.event);}
+      const historical=(current?.history??this.history).find(event=>event.eventId==='capture-event:'+identity);
+      if(historical){
+        for(const key of ['sessionId','generation','attemptId','effectId'] as const)if(historical[key]!==request[key])fail();
+        if(notification.observation.kind==='UNAVAILABLE'){
+          if(historical.eventType!=='CAPTURE_LOST'||historical.payload.reason!=='UI_PROTOCOL_CHANGED')fail();
+        }else{
+          if(!['ASSISTANT_TURN_CAPTURED_V2','ASSISTANT_TURN_REJECTED_V2'].includes(historical.eventType))fail();
+          const receipt=object(historical.payload.captureReceipt),markdown=notification.observation.markdown;
+          if(receipt.receiptId!=='capture-receipt:'+identity||receipt.assistantTurnId!==notification.assistantTurnId||receipt.challenge!==payload.challenge||receipt.conversationId!==binding.conversationId||receipt.conversationGeneration!==binding.conversationGeneration||receipt.captureEpoch!==capture.epoch||receipt.responseUtf8Bytes!==encoder.encode(markdown).byteLength||receipt.assistantTurnSha256!==await sha256Hex(markdown))fail();
+          if(historical.eventType==='ASSISTANT_TURN_CAPTURED_V2'&&historical.payload.assistantTurnUtf8!==markdown)fail();
+        }
+        if(!current){
+          // Register the trusted complete historical prefix durably before acknowledging its retry.
+          const body={schema:'RBRIDGE_CAPTURE_OUTBOX_V3' as const,owner:this.owner,history:this.history,records:[]};
+          await this.write({...body,sha256:await canonicalDigest(body)},state);
+        }else{const fence=await this.options.runtime.assertLiveSnapshot(state);this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();}
+        return this.ack(historical);
+      }
+      const all=[...(current?.history??this.history),...(current?.records.map(record=>record.event)??[])];
       const observedAt=new Date().toISOString();
       const envelope={schema:'RBRIDGE_CHAT_EVENT_V1' as const,eventId:'capture-event:'+identity,sequence:all.length+1,previousEventSha256:all.at(-1)?.eventSha256??null,sessionId:request.sessionId,generation:request.generation,attemptId:request.attemptId,effectId:request.effectId,observedAt};
       const event=async(eventType:string,payload:RbridgeChatEventV1['payload']):Promise<RbridgeChatEventV1>=>{const body={...envelope,eventType,payload};return {...body,eventSha256:await canonicalDigest(body)};};
@@ -125,14 +143,7 @@ export class RbridgeCaptureEgressV3{
       await validateEventEnvelope(nextEvent);
       const records=[...(current?.records??[]),{notificationDigest,requestDigest:request.requestDigest,captureToken:notification.captureToken,assistantTurnId:notification.assistantTurnId,event:nextEvent}];
       const body={schema:'RBRIDGE_CAPTURE_OUTBOX_V3' as const,owner:this.owner,history:current?.history??this.history,records},next={...body,sha256:await canonicalDigest(body)};
-      await this.validate(next);
-      const fence=await this.options.runtime.assertLiveSnapshot(state);
-      this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();
-      try{
-        await this.options.storage.set({[KEY]:snapshotEffectData(next)});
-        const readback=await this.options.storage.get(KEY);if(!same(readback[KEY],next))fail();
-        await this.validate(readback[KEY]);this.shared.seen=snapshotEffectData(next);
-      }catch{this.shared.poisoned=true;fail();}
+      await this.write(next,state);
       return this.ack(nextEvent);
     }).catch(()=>fail());
   }
@@ -143,6 +154,16 @@ export class RbridgeCaptureEgressV3{
     for(const event of events){if(bytes(event)>this.owner.maxMessageBytes)break;try{await this.options.publish(snapshotEffectData(event));}catch{break;}}
   }
   private ack(event:RbridgeChatEventV1):CaptureAckV3{return {eventId:event.eventId,eventSha256:event.eventSha256,durable:true};}
+  private async write(next:Outbox,state:BrowserAuthoritySnapshotV1):Promise<void>{
+    await this.validate(next);
+    const fence=await this.options.runtime.assertLiveSnapshot(state);
+    this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();
+    try{
+      await this.options.storage.set({[KEY]:snapshotEffectData(next)});
+      const readback=await this.options.storage.get(KEY);if(!same(readback[KEY],next))fail();
+      await this.validate(readback[KEY]);this.shared.seen=snapshotEffectData(next);
+    }catch{this.shared.poisoned=true;fail();}
+  }
   private exclusive<T>(run:()=>Promise<T>):Promise<T>{
     const result=this.shared.queue.then(()=>{if(this.shared.poisoned)fail();return run();});this.shared.queue=result.then(()=>undefined,()=>undefined);return result;
   }
@@ -155,14 +176,14 @@ export class RbridgeCaptureEgressV3{
     }catch{this.shared.poisoned=true;fail();}
   }
   private async validateHistory(events:RbridgeChatEventV1[]):Promise<void>{
-    if(events.length>MAX_EVENTS)fail();let previous:string|null=null;
-    for(let i=0;i<events.length;i++){const event=await validateEventEnvelope(events[i]);if(event.sequence!==i+1||event.previousEventSha256!==previous)fail();previous=event.eventSha256;}
+    if(events.length>MAX_EVENTS||bytes(events)>LIMIT)fail();let previous:string|null=null;const ids=new Set<string>();
+    for(let i=0;i<events.length;i++){const event=await validateEventEnvelope(events[i]);if(event.sequence!==i+1||event.previousEventSha256!==previous||ids.has(event.eventId))fail();ids.add(event.eventId);previous=event.eventSha256;}
   }
   private async validate(value:unknown):Promise<Outbox>{
     const row=object(snapshotEffectData(value));exact(row,['schema','owner','history','records','sha256']);
     if(row.schema!=='RBRIDGE_CAPTURE_OUTBOX_V3'||!same(row.owner,this.owner)||!same(row.history,this.history)||!Array.isArray(row.history)||!Array.isArray(row.records)||typeof row.sha256!=='string'||!SHA.test(row.sha256)||row.history.length+row.records.length>MAX_EVENTS||bytes(row)>LIMIT)fail();
     const history=row.history as RbridgeChatEventV1[];await this.validateHistory(history);let previous=history.at(-1)?.eventSha256??null;
-    const ids=new Set<string>(),keys=new Set<string>();
+    const ids=new Set<string>(history.map(event=>event.eventId)),keys=new Set<string>();
     for(let i=0;i<row.records.length;i++){
       const record=object(row.records[i]);exact(record,['notificationDigest','requestDigest','captureToken','assistantTurnId','event']);
       if(typeof record.notificationDigest!=='string'||!SHA.test(record.notificationDigest)||typeof record.requestDigest!=='string'||!SHA.test(record.requestDigest))fail();id(record.captureToken,192);id(record.assistantTurnId,256);
