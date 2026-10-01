@@ -86,6 +86,7 @@ export class ExtensionNativePortLinkV1{
         return;
       }
       if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+      if(this.negotiated.protocolMinor>=1&&this.negotiated.capabilities.includes('CHAT_EFFECT_REQUEST_V1')&&routed.value.action!=='READ_STATE'&&routed.value.action!=='DISCOVER_TARGET')throw new Error('RBRIDGE_V1_MUTATION_DISABLED');
       await this.hooks.onServerCommand?.(routed.value);
     }catch(error){
       this.negotiated=null;
