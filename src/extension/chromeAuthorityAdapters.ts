@@ -1,6 +1,8 @@
 import {requireExactProjectConversationUrl} from '../browser/chatgptConversationIdentity.js';
 import type {BrowserBindingControlV1,BrowserTargetObservationV1} from '../domain/rbridgeChatCore.js';
 import type {BrowserContentDriverV1,BrowserLiveTargetReaderV1} from './browserAuthorityRuntime.js';
+import type {DeliveryClickGuardV3,DeliverySurfaceV3,ChatgptDeliverySurfaceReaderV3} from '../browser/chatgptDeliveryAdapter.js';
+import type {ExactBrowserTargetV1} from '../domain/rbridgeEffectProtocol.js';
 
 export interface ChromeAuthorityTabV1{
   id?:number;
@@ -77,14 +79,21 @@ export class ChromeContentDriverV1 implements BrowserContentDriverV1{
     return {status:result.status};
   }
 
-  async clickSend(tabId:number):Promise<{outcome:'CLICKED'}|{outcome:'FAILED_BEFORE_CLICK';reason:string}|{outcome:'UNCERTAIN';reason:string}>{
+  async clickSend(tabId:number,guard?:DeliveryClickGuardV3):Promise<{outcome:'CLICKED'}|{outcome:'FAILED_BEFORE_CLICK';reason:string}|{outcome:'UNCERTAIN';reason:string}>{
     let raw:unknown;
-    try{raw=await this.call(tabId,'SEND_CLICK');}catch{throw new Error('SEND_UNCERTAIN');}
+    try{raw=await this.call(tabId,guard?'SEND_CLICK_V3':'SEND_CLICK',guard?{guard}:{});}catch{throw new Error('SEND_UNCERTAIN');}
     const result=resultObject(raw);
     if(result.outcome==='CLICKED')return {outcome:'CLICKED'};
     if(result.outcome==='FAILED_BEFORE_CLICK'&&typeof result.reason==='string')return {outcome:'FAILED_BEFORE_CLICK',reason:result.reason};
     if(result.outcome==='UNCERTAIN')return {outcome:'UNCERTAIN',reason:'SEND_UNCERTAIN'};
     fail('RBRIDGE_CONTENT_CLICK_REPLY_INVALID');
+  }
+
+  async deliveryScan(tabId:number):Promise<DeliverySurfaceV3>{
+    await this.ensureContentRuntime(tabId);
+    const result=resultObject(await this.call(tabId,'DELIVERY_SCAN')),keys=['documentId','documentUrl','observedAt','turns'];
+    if(Object.keys(result).length!==keys.length||Object.keys(result).some(key=>!keys.includes(key))||typeof result.documentId!=='string'||typeof result.documentUrl!=='string'||typeof result.observedAt!=='string'||!Array.isArray(result.turns))fail('RBRIDGE_DELIVERY_SURFACE_INVALID');
+    return result as unknown as DeliverySurfaceV3;
   }
 
   private async ensureContentRuntime(tabId:number):Promise<void>{
@@ -94,12 +103,25 @@ export class ChromeContentDriverV1 implements BrowserContentDriverV1{
     catch{throw new Error('RBRIDGE_CONTENT_INJECTION_FAILED');}
   }
 
-  private async call(tabId:number,action:'STAGE_PROMPT'|'SEND_PREFLIGHT'|'SEND_CLICK'|'CAPTURE_START'|'CAPTURE_STOP',extra:Record<string,unknown>={}):Promise<unknown>{
+  private async call(tabId:number,action:'STAGE_PROMPT'|'SEND_PREFLIGHT'|'SEND_CLICK'|'CAPTURE_START'|'CAPTURE_STOP'|'DELIVERY_SCAN'|'SEND_CLICK_V3',extra:Record<string,unknown>={}):Promise<unknown>{
     if(!Number.isInteger(tabId)||tabId<0)fail('RBRIDGE_TAB_ID_INVALID');
     const requestId='rbridge:'+String(++this.sequence)+':'+action.toLowerCase();
     let response:unknown;
     try{response=await this.tabs.sendMessage(tabId,{schema:'RBRIDGE_CONTENT_REQUEST_V1',requestId,action,...extra});}
     catch{throw new Error('RBRIDGE_CONTENT_CHANNEL_UNCERTAIN');}
     return reply(response,requestId);
+  }
+}
+
+export class ChromeDeliverySurfaceReaderV3 implements ChatgptDeliverySurfaceReaderV3{
+  private readonly content:ChromeContentDriverV1;
+  constructor(private readonly tabs:ChromeAuthorityTabsApiV1,private readonly browserInstanceId:string,private readonly browserProfileId:string,scripting:ChromeAuthorityScriptingApiV1|null=null){
+    identity(browserInstanceId,'RBRIDGE_BROWSER_INSTANCE_INVALID');identity(browserProfileId,'RBRIDGE_BROWSER_PROFILE_INVALID');this.content=new ChromeContentDriverV1(tabs,scripting);
+  }
+  async scan(target:ExactBrowserTargetV1):Promise<DeliverySurfaceV3>{
+    if(target.browserInstanceId!==this.browserInstanceId||target.browserProfileId!==this.browserProfileId)fail('BROWSER_BINDING_STALE');
+    const check=(url:string)=>{const parsed=requireExactProjectConversationUrl(url);if(parsed.origin!==target.origin||parsed.projectId!==target.projectId||parsed.canonicalProjectId!==target.canonicalProjectId||parsed.conversationId!==target.conversationId)fail('BROWSER_BINDING_STALE');};
+    const tabCheck=async()=>{const tab=await this.tabs.get(target.tabId);if(tab.id!==target.tabId||tab.windowId!==target.windowId||typeof tab.url!=='string')fail('BROWSER_BINDING_STALE');check(tab.url);};
+    await tabCheck();const result=await this.content.deliveryScan(target.tabId);check(result.documentUrl);await tabCheck();return result;
   }
 }
