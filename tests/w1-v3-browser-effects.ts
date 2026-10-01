@@ -22,12 +22,13 @@ async function command(index:number,patch:Partial<ExactBrowserTargetV1>={},ordin
   const original=structuredClone(commands[index]!),r=original.request;
   r.payload.target={...r.payload.target,...patch};if(ordinal!==undefined)r.effectOrdinal=ordinal;
   r.effectId=await sha256Hex([r.sessionId,r.generation,r.attemptId,r.effectKind,String(r.effectOrdinal)].join('\0'));
-  const {requestDigest:_old,...requestBody}=r;original.request={...requestBody,requestDigest:await canonicalDigest(requestBody)} as CocwinRbridgeEffectRequestV1;
+  const {requestDigest:_old,...requestBody}=r;void _old;original.request={...requestBody,requestDigest:await canonicalDigest(requestBody)} as CocwinRbridgeEffectRequestV1;
   original.commandId='effects:'+String(index)+':'+String(ordinal??r.effectOrdinal)+':'+await canonicalDigest(patch);
-  const {commandSha256:_hash,...body}=original;return {...body,commandSha256:await canonicalDigest(body)};
+  const {commandSha256:_hash,...body}=original;void _hash;return {...body,commandSha256:await canonicalDigest(body)};
 }
 function observation(request:CocwinRbridgeEffectRequestV1):BrowserTargetObservationV1{
   const {canonicalProjectId:_canonical,...target}=request.payload.target;
+  void _canonical;
   return {...target,sessionId:request.sessionId,generation:request.generation,ownerSessionId:request.sessionId};
 }
 function url(t:ExactBrowserTargetV1){return t.origin+'/g/'+t.projectId+'/c/'+t.conversationId;}
@@ -163,8 +164,8 @@ await test('pending_send_denies_rollover_and_binding',async()=>{
 await test('generation_overflow_rejected_before_any_navigation',async()=>{
   const h=await setup({rollover:true});await h.dispatcher.dispatch(h.bind);const c=await command(3,{conversationGeneration:2147483647});
   (c.request.payload as {nextConversationGeneration:number}).nextConversationGeneration=2147483648;
-  const {requestDigest:_old,...body}=c.request;c.request={...body,requestDigest:await canonicalDigest(body)} as CocwinRbridgeEffectRequestV1;
-  const {commandSha256:_hash,...commandBody}=c;const invalid={...commandBody,commandSha256:await canonicalDigest(commandBody)};
+  const {requestDigest:_old,...body}=c.request;void _old;c.request={...body,requestDigest:await canonicalDigest(body)} as CocwinRbridgeEffectRequestV1;
+  const {commandSha256:_hash,...commandBody}=c;void _hash;const invalid={...commandBody,commandSha256:await canonicalDigest(commandBody)};
   await assert.rejects(()=>h.dispatcher.dispatch(invalid),/RBRIDGE_V3/);assert.equal(h.navigations(),0);
 });
 await test('unreserved_executor_request_has_no_browser_effect',async()=>{

@@ -7,7 +7,7 @@ import {RbridgeEffectStoreV1,snapshotEffectData} from './rbridgeEffectStore.js';
 
 function code(error:unknown):string{const value=error instanceof Error?error.message:'';return /^[A-Z][A-Z0-9_:-]{0,127}$/.test(value)?value:'RBRIDGE_BROWSER_EFFECT_UNAVAILABLE';}
 function target(request:CocwinRbridgeEffectRequestV1):BrowserTargetObservationV1{
-  const {canonicalProjectId:_canonical,...t}=request.payload.target;return {...t,sessionId:request.sessionId,generation:request.generation,ownerSessionId:request.sessionId};
+  const {canonicalProjectId:_canonical,...t}=request.payload.target;void _canonical;return {...t,sessionId:request.sessionId,generation:request.generation,ownerSessionId:request.sessionId};
 }
 export class BrowserEffectExecutorV3{
   private readonly claimed=new Set<string>();

@@ -30,6 +30,7 @@ export class ChatgptRolloverAdapterV3{
       if(!await this.driver.quiescent(next))throw Error('RBRIDGE_ROLLOVER_NOT_QUIESCENT');
       await this.runtime.assertSnapshot(snapshot);
       const {canonicalProjectId:_canonical,...observed}=next;
+      void _canonical;
       await this.runtime.prepareAndVerifyBinding({...observed,sessionId:binding.sessionId,generation:binding.generation,ownerSessionId:binding.ownerSessionId});
       await this.runtime.acquireLeader();await this.runtime.activateCapture();
       return (await this.runtime.finalizeBindingReceipt()).receipt;
