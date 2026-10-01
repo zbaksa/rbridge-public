@@ -5,7 +5,7 @@ import {BrowserAuthorityStoreV1,type ChromeStorageAreaV1} from '../src/extension
 import {RbridgeEffectStoreV1} from '../src/extension/rbridgeEffectStore.js';
 import {RbridgeCaptureEgressV3,captureTokenV3,installCaptureMessageBridgeV3,type ContentCaptureNotificationV3,type ChromeCaptureSenderV3,type CaptureMessageApiV3} from '../src/extension/rbridgeCaptureEgress.js';
 import {DurableCaptureNotifierV3} from '../src/extension/contentMessageBridge.js';
-import {canonicalJson,type RbridgeChatEffectCommandV1} from '../src/domain/rbridgeEffectProtocol.js';
+import {canonicalJson,canonicalDigest,type RbridgeChatEffectCommandV1} from '../src/domain/rbridgeEffectProtocol.js';
 import type {BrowserTargetObservationV1} from '../src/domain/rbridgeChatCore.js';
 const fixture=JSON.parse(await readFile(new URL('../../tests/fixtures/rbridge-cocwin-contract-v3.json',import.meta.url),'utf8'));
 const send=fixture.vectors[1].command as RbridgeChatEffectCommandV1;
@@ -139,5 +139,25 @@ await test('historical_event_chain_is_retained_and_wrong_history_or_owner_is_clo
 await test('same_turn_changed_bytes_and_disappearing_outbox_are_closed',async()=>{
   const h=await setup();await h.egress.accept(h.notification(),sender);await assert.rejects(()=>h.egress.accept(h.notification('changed'),sender),/CAPTURE/);
   delete h.storage.data.rbridgeCaptureOutboxV3;await assert.rejects(()=>h.egress.accept(h.notification('next','assistant-next'),sender),/CAPTURE/);
+});
+await test('historical_capture_retry_returns_original_durable_ack_without_new_sequence',async()=>{
+  for(const kind of ['CAPTURED','REJECTED','LOST']){
+    const h=await setup(),notification=kind==='LOST'?{...h.notification(),observation:{kind:'UNAVAILABLE' as const,reason:'UI_PROTOCOL_CHANGED' as const}}:h.notification(kind==='REJECTED'?'x'.repeat(16385):'original');
+    const original=await h.egress.accept(notification,sender),history=[...(await h.egress.events())],storage=new MemoryStorage();
+    const reopened=new RbridgeCaptureEgressV3({...h.options,storage,initialHistory:history});
+    assert.deepEqual(await reopened.accept(notification,sender),original);
+    assert.equal((await reopened.events()).length,0);
+    const durable=storage.data.rbridgeCaptureOutboxV3 as {history:unknown[];records:unknown[]};assert.deepEqual(durable.history,history);assert.equal(durable.records.length,0);
+    if(notification.observation.kind==='CAPTURED'){
+      const changed={...notification,observation:{...notification.observation,markdown:notification.observation.markdown+'changed'}};
+      await assert.rejects(()=>reopened.accept(changed,sender),/CAPTURE/);
+    }else await assert.rejects(()=>reopened.accept(h.notification('changed'),sender),/CAPTURE/);
+  }
+});
+await test('duplicate_historical_event_ids_are_rejected_even_with_valid_chain',async()=>{
+  const h=await setup();await h.egress.accept(h.notification(),sender);const first=(await h.egress.events())[0]!;
+  const {eventSha256:omitted,...body}=first;void omitted;
+  const next={...body,sequence:2,previousEventSha256:first.eventSha256};const duplicate={...next,eventSha256:await canonicalDigest(next)};
+  const invalid=new RbridgeCaptureEgressV3({...h.options,storage:new MemoryStorage(),initialHistory:[first,duplicate]});await assert.rejects(()=>invalid.events(),/CAPTURE/);
 });
 console.log(JSON.stringify({suite:'W1_V3_CAPTURE_EGRESS',passed,failed,liveAcceptance:'NOT_RUN'}));if(failed)process.exitCode=1;
