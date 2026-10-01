@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
+import {negotiateHello, validateEventEnvelope, RbridgeEventSpoolV1} from '../src/domain/rbridgeChatCore.js';
 import * as Protocol from '../src/domain/rbridgeEffectProtocol.js';
 let passed = 0;
 const contractCase = async (name: string, fn: () => Promise<void>): Promise<void> => {await fn(); passed++; console.log('PASS '+name);};
@@ -229,4 +230,28 @@ await contractCase('validation snapshots inputs before any asynchronous digest a
   await denied(() => api.parseEffectRequest(proto, 65536));
 });
 
+await contractCase('core negotiates only explicit minor-1 V3 capabilities and keeps minor-0 history', async () => {
+  const hello = {schema: 'RBRIDGE_CHAT_HELLO_V1', protocolMajor: 1, protocolMinor: 1, releaseSha: 'a'.repeat(40), maxMessageBytes: 65536, capabilities: peer().capabilities, browserInstanceId: 'chrome-main', browserProfileId: 'profile-main', nativeHostVersion: 'test'};
+  const both = negotiateHello(hello, hello); assert.deepEqual(both.capabilities, hello.capabilities);
+  const old = negotiateHello(hello, {...hello, protocolMinor: 0});
+  assert.equal(old.protocolMinor, 0); assert.deepEqual(old.capabilities, peer().capabilities.slice(0, 8));
+  const one = negotiateHello(hello, {...hello, capabilities: hello.capabilities.filter(c => c !== 'CHAT_ASSISTANT_TURN_CAPTURE_V2')});
+  assert.equal(one.capabilities.includes('CHAT_ASSISTANT_TURN_CAPTURE_V2'), false);
+  assert.throws(() => api.requireV3Peer({...peer(), ...one}), /RBRIDGE_CAPABILITY_MISSING/);
+});
+await contractCase('core validates new capture, retains chain checks, and rejects tampered append/replay', async () => {
+  const event = wire(golden.capturedEvent);
+  assert.deepEqual(await validateEventEnvelope(event, null, 1), event);
+  await assert.rejects(() => validateEventEnvelope(event, null, 2), /RBRIDGE_EVENT_SEQUENCE_GAP/);
+  await assert.rejects(() => validateEventEnvelope(event, 'f'.repeat(64), 1), /RBRIDGE_EVENT_CHAIN_MISMATCH/);
+  const spool = new RbridgeEventSpoolV1();
+  const {schema: _schema, sequence: _sequence, previousEventSha256: _previous, eventSha256: _sha, ...input} = event;
+  void _schema; void _sequence; void _previous; void _sha;
+  const appended = await spool.append(input as unknown as Parameters<RbridgeEventSpoolV1['append']>[0]);
+  assert.deepEqual(appended, event); assert.deepEqual(await spool.append(input as unknown as Parameters<RbridgeEventSpoolV1['append']>[0]), event);
+  const tampered = copy(input); wire(tampered.payload).assistantTurnUtf8 = 'tampered';
+  await assert.rejects(() => spool.append(tampered as unknown as Parameters<RbridgeEventSpoolV1['append']>[0]));
+  const invalidNew = {...tampered, eventId: 'new-invalid'}; await assert.rejects(() => spool.append(invalidNew as unknown as Parameters<RbridgeEventSpoolV1['append']>[0]));
+  assert.equal(spool.size, 1);
+});
 console.log('V3_CONTRACT_PASS '+passed);
