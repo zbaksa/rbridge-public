@@ -19,7 +19,7 @@ class MemoryStorage implements ChromeStorageAreaV1{
   async set(items:Record<string,unknown>){if(this.failDelivery&&Object.keys(items).some(key=>key.startsWith('rbridgeDeliveryV3:')))throw Error('quota');Object.assign(this.data,structuredClone(items));}
 }
 async function command(index:number,patch:Partial<ExactBrowserTargetV1>={},ordinal?:number):Promise<RbridgeChatEffectCommandV1>{
-  const original=structuredClone(commands[index]),r=original.request;
+  const original=structuredClone(commands[index]!),r=original.request;
   r.payload.target={...r.payload.target,...patch};if(ordinal!==undefined)r.effectOrdinal=ordinal;
   r.effectId=await sha256Hex([r.sessionId,r.generation,r.attemptId,r.effectKind,String(r.effectOrdinal)].join('\0'));
   const {requestDigest:_old,...requestBody}=r;original.request={...requestBody,requestDigest:await canonicalDigest(requestBody)} as CocwinRbridgeEffectRequestV1;
@@ -55,7 +55,7 @@ async function setup(options:{delivery?:boolean;click?:'CLICKED'|'FAILED_BEFORE_
   const effects=new RbridgeEffectStoreV1(storage),delivery=new ChatgptDeliveryAdapterV3(storage,{scan:async()=>structuredClone(surface)});
   const driver:ChatgptRolloverDriverV3={
     available:()=>options.rollover===true,quiescent:async()=>quiescent,
-    createNext:async(previous,next)=>{navigations++;const target={...previous,conversationId:'conv-next',conversationGeneration:next,...nextPatch};live={...live,...target};surface={...surface,documentUrl:url(target),documentId:'document-next',turns:[]};return target;},
+    createNext:async(previous:ExactBrowserTargetV1,next:number)=>{navigations++;const target={...previous,conversationId:'conv-next',conversationGeneration:next,...nextPatch};live={...live,...target};surface={...surface,documentUrl:url(target),documentId:'document-next',turns:[]};return target;},
   };
   const rollover=new ChatgptRolloverAdapterV3(runtime,driver),executor=new BrowserEffectExecutorV3(runtime,effects,delivery,rollover);
   const dispatcher=new RbridgeEffectDispatcherV1(effects,request=>executor.executeBrowserEffect(request));
