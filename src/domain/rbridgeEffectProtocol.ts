@@ -164,6 +164,12 @@ function scoped(row: Row, attempt = true): void {
     integer(Number(id.slice(prefix.length)), 1); str(row.effectId, HEX256);
   }
 }
+export function parseV3Scope(input: unknown): V3Scope {
+  const row = object(snapshot(input));
+  exact(row, ['appId', 'baseSha', 'sessionId', 'generation']);
+  str(row.appId, /^[a-z0-9][a-z0-9._-]{0,95}$/); str(row.baseSha, HEX160); scoped(row, false);
+  return row as unknown as V3Scope;
+}
 function ceiling(value: number): number {
   if (!Number.isSafeInteger(value) || value < 4096 || value > 65536) invalid('OUTPUT_BUDGET_EXCEEDED'); return value;
 }
@@ -195,7 +201,7 @@ export async function parseEffectRequest(input: unknown, maxBytes: number): Prom
   ceiling(maxBytes); const row = object(snapshot(input));
   exact(row, ['schema', 'appId', 'baseSha', 'sessionId', 'generation', 'attemptId', 'effectId', 'effectKind', 'effectOrdinal', 'createdAt', 'payload', 'requestDigest']);
   schema(row, 'COCWIN_RBRIDGE_EFFECT_REQUEST_V1'); scoped(row);
-  str(row.appId, /^[a-z0-9][a-z0-9._-]{0,95}$/); str(row.baseSha, HEX160); iso(row.createdAt);
+  parseV3Scope({appId:row.appId,baseSha:row.baseSha,sessionId:row.sessionId,generation:row.generation}); iso(row.createdAt);
   const ordinal = integer(row.effectOrdinal, 1), payload = object(row.payload); target(payload.target);
   switch (row.effectKind) {
     case 'RBRIDGE_BIND': exact(payload, ['target']); break;
