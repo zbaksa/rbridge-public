@@ -20,3 +20,14 @@ Pre-flight: Task1 supplies strictrequest/command/result/captureevent parsers and
 - Timestamps are canonical UTC and digest-bound. No cross-host clock ordering assumption is imposed on independently observed receipts.
 - Required catalogs are mirrored byte-for-byte in RBridge documentation so both consumers can inspect the same pending contract; this adds no runtime route or capability advertisement.
 - The fixtures remain the independent fixed Python outputs, SHA-256 8c77656e4783ecda0067417f3cd795bee667cdc39445f30028afb40cbbf02f2c.
+
+## Task 5 continuation — browser effect source
+
+- Status: IN_PROGRESS; isolated source branch starts at the qualified binding foundation `3a79d6d331e158f7f4b229d4eec1ba9b2064dcce`. Existing production checkout is outside this worktree.
+- RED first: independent effect tests cover durable baseline-before-intent/click, exact new user-turn digest, observed delivery before VERIFIED, historical/mismatched/multiple turn rejection, document reload, every target dimension, storage/readback failure, replay/restart, and rollover scope/quiescence/overflow.
+- Ruling T5-A: trusted fixed adapter ports are construction-time dependencies, never request-supplied callbacks, scripts, URLs or selectors. Existing V1 wiring and advertised capabilities remain gated by later feasibility and activation work.
+- Ruling T5-B: delivery uses a conservative public user-message DOM observation with exact UTF-8 text digest. DOM normalization or unavailable/ambiguous message identity is UNAVAILABLE; it is never assistant Markdown capture. Assistant original Markdown acquisition remains Task 6.
+- Ruling T5-C: unsupported rollover acquisition is BLOCKED before navigation. A trusted site driver must prove support and quiescence; candidate URL alone never authorizes a positive binding receipt.
+- Ruling T5-D: unknown click acknowledgement remains UNCERTAIN in this increment even if another observation appears; no guessed click timestamp or legacy caller-claimed verification. Durable late reconciliation remains Task 8.
+- Owner boundary: one owning service worker and one authority store; no claim of distributed CAS or independent process exclusion. Source fixtures prove source behavior only, not live browser acceptance.
+- Final branch review: required after implementation and full application verification; inherited deferred items stay visible.

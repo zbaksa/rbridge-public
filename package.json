@@ -25,7 +25,7 @@
     "build": "tsc -p tsconfig.json",
     "build:server": "tsc -p tsconfig.json",
     "lint": "eslint .",
-    "test": "npm run build:server && node dist/tests/run.js && node dist/tests/native-host-runtime-runner.js && node dist/tests/w1-command-downlink.js && node dist/tests/w1-failure-campaign.js && node dist/tests/w1-v3-contract.js && node dist/tests/w1-v3-effect-ledger.js && node dist/tests/w1-v3-browser-binding.js",
+    "test": "npm run build:server && node dist/tests/run.js && node dist/tests/native-host-runtime-runner.js && node dist/tests/w1-command-downlink.js && node dist/tests/w1-failure-campaign.js && node dist/tests/w1-v3-contract.js && node dist/tests/w1-v3-effect-ledger.js && node dist/tests/w1-v3-browser-binding.js && node dist/tests/w1-v3-browser-effects.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify": "npm run typecheck && npm test && npm run lint && npm run build:server && npm run build:extension && npm run build:native-host",
     "build:extension:content": "vite build --config vite.content.config.ts",
@@ -39,7 +39,8 @@
     "build:native-host:sea": "npm run build:server && npm run build:native-host && node scripts/build-native-host-sea.mjs",
     "test:v3:contract": "npm run build:server && node dist/tests/w1-v3-contract.js",
     "test:v3:ledger": "npm run build:server && node dist/tests/w1-v3-effect-ledger.js",
-    "test:v3:binding": "npm run build:server && node dist/tests/w1-v3-browser-binding.js"
+    "test:v3:binding": "npm run build:server && node dist/tests/w1-v3-browser-binding.js",
+    "test:v3:effects": "npm run build:server && node dist/tests/w1-v3-browser-effects.js"
   },
   "type": "module",
   "version": "0.1.0-dev"
