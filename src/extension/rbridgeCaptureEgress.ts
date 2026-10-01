@@ -102,7 +102,8 @@ export class RbridgeCaptureEgressV3{
       const payload=request.payload,target=payload.target;
       if(request.sessionId!==tx.sessionId||request.generation!==tx.generation||request.attemptId!==tx.attemptId||request.effectId!==tx.effectId||payload.challenge!==tx.challenge||payload.purpose!==tx.purpose||notification.captureToken!==captureTokenV3(request,capture.epoch))fail();
       for(const key of ['browserInstanceId','browserProfileId','windowId','tabId','origin','projectId','conversationId','conversationGeneration'] as const)if(target[key]!==binding[key])fail();
-      if(target.canonicalProjectId!==binding.projectId||tx.conversationId!==binding.conversationId||tx.conversationGeneration!==binding.conversationGeneration||tx.captureEpoch!==capture.epoch||tx.writeLeaderEpoch!==leader.epoch||binding.sessionId!==request.sessionId||binding.generation!==request.generation||capture.sessionId!==request.sessionId||capture.generation!==request.generation)fail();
+      // The strict reserved request validates canonical project UUID separately from the URL slug.
+      if(tx.conversationId!==binding.conversationId||tx.conversationGeneration!==binding.conversationGeneration||tx.captureEpoch!==capture.epoch||tx.writeLeaderEpoch!==leader.epoch||binding.sessionId!==request.sessionId||binding.generation!==request.generation||capture.sessionId!==request.sessionId||capture.generation!==request.generation)fail();
       const current=await this.load(),notificationDigest=await canonicalDigest(notification);
       const prior=current?.records.find(record=>record.captureToken===notification.captureToken&&record.assistantTurnId===notification.assistantTurnId);
       if(prior){if(prior.notificationDigest!==notificationDigest||prior.requestDigest!==request.requestDigest)fail();await this.options.runtime.assertLiveSnapshot(state);this.options.effects.assertMutationAvailable();return this.ack(prior.event);}
