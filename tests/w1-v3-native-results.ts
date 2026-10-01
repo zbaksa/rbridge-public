@@ -3,9 +3,11 @@ import {readFileSync} from 'node:fs';
 import {chmod,link,lstat,mkdtemp,readFile,rm,symlink,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {spawnSync} from 'node:child_process';
 import {canonicalDigest,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope} from '../src/domain/rbridgeEffectProtocol.js';
 
-// Removing durable reservation, scope checks or readback must fail these real-filesystem cases.
+// Real filesystem behavior, with bounded child probes for durability barriers and I/O faults.
 interface ResultStore {
   reserve(command:unknown):Promise<RbridgeChatEffectCommandV1>;
   record(result:unknown):Promise<RbridgeChatEffectResultV1>;
@@ -105,10 +107,43 @@ await test('unsafe_read_id_and_invalid_configuration_never_select_a_path',()=>wi
   for(const extra of [{maxMessageBytes:4095},{maxMessageBytes:65537},{maxRecords:0},{maxBytes:4095}])assert.throws(()=>store(root,extra),/CONFIG_INVALID/);
   assert.throws(()=>store(root,{eventStoreRoot:root+'/../escape'}),/ROOT_INVALID/);
 }));
-if(process.platform==='win32'){skipped+=4;console.log('SKIP V3_NATIVE_RESULT POSIX mode/symlink/hardlink probes require Linux');}
+await test('protocol_valid_dotted_and_maximum_length_app_scopes_are_accepted',()=>withRoot(async root=>{
+  for(const appId of ['cocwin.demo','a'.repeat(96)]){
+    const command=structuredClone(bind.command);command.request.appId=appId;
+    const {requestDigest,...request}=command.request;void requestDigest;command.request.requestDigest=await canonicalDigest(request);
+    const {commandSha256,...body}=command;void commandSha256;command.commandSha256=await canonicalDigest(body);
+    const child=join(root,appId);await import('node:fs/promises').then(fs=>fs.mkdir(child,{mode:0o700}));
+    const s=store(child,{scope:{...scope,appId}});await s.reserve(command);assert.deepEqual((await s.read(command.commandId))?.command,command);
+  }
+}));
+await test('protocol_invalid_leading_app_punctuation_is_rejected',()=>withRoot(async root=>{
+  for(const appId of ['-cocwin','_cocwin','.cocwin','a'.repeat(97)])assert.throws(()=>store(root,{scope:{...scope,appId}}),/CONFIG_INVALID/);
+}));
+await test('missing_event_store_parent_is_not_recursively_created',()=>withRoot(async root=>{
+  const parent=join(root,'missing','event');await assert.rejects(()=>store(parent).reserve(bind.command),/ENOENT|ROOT_INVALID/);
+  await assert.rejects(()=>lstat(join(root,'missing')),/ENOENT/);
+}));
+await test('reservation_leaves_bounded_result_headroom_before_admission',()=>withRoot(async root=>{
+  await assert.rejects(()=>store(root,{maxBytes:4096,maxMessageBytes:4096}).reserve(bind.command),/BYTE_LIMIT/);
+  const s=store(root,{maxBytes:12000,maxMessageBytes:4096});
+  await s.reserve(bind.command);await s.reserve(send.command);
+  await assert.rejects(()=>s.reserve(fixture.vectors[2]!.command),/BYTE_LIMIT/);
+  await s.record(bind.result);await s.record(send.result);
+  assert.equal((await s.replay()).length,2);assert.equal(await s.read(fixture.vectors[2]!.command.commandId),null);
+}));
+function childProbe(root:string,mode:string):void {
+  const run=spawnSync(process.execPath,[fileURLToPath(new URL('./native-result-fault-case.js',import.meta.url)),mode,root],{encoding:'utf8',timeout:8000,maxBuffer:1024*1024});
+  assert.equal(run.signal,null,'bounded child fault probe timed out: '+mode);
+  assert.equal(run.status,0,(run.stdout??'')+(run.stderr??''));
+  assert.match(run.stdout,/FAULT_PROBE_PASS/);
+}
+for(const mode of ['readback-failure','write-failure','rename-failure','file-sync-failure']){
+  await test('failed_'+mode+'_never_returns_delivery_and_latches_instance',()=>withRoot(async root=>childProbe(root,mode)));
+}
+if(process.platform==='win32'){skipped+=8;console.log('SKIP V3_NATIVE_RESULT POSIX mode/symlink/hardlink/directory-sync/FIFO probes require Linux');}
 else {
   await test('unsafe_parent_permissions_are_rejected_without_chmod',()=>withRoot(async root=>{await chmod(root,0o755);await assert.rejects(()=>store(root).reserve(bind.command),/ROOT_INVALID/);assert.equal((await lstat(root)).mode&0o777,0o755);}));
-  await test('symlink_journal_or_child_root_is_closed',()=>withRoot(async root=>{
+  await test('symlink_journal_is_closed',()=>withRoot(async root=>{
     await store(root).reserve(bind.command);const path=join(root,'v3-results','journal.json'),saved=await readFile(path);await unlink(path);const external=join(root,'external.json');await writeFile(external,saved,{mode:0o600});await symlink(external,path);
     await assert.rejects(()=>store(root).replay(),/FILE_INVALID|READ_FAILED/);assert.deepEqual(await readFile(external),saved);
   }));
@@ -121,6 +156,9 @@ else {
     for(const file of ['authority.json','journal.json'])assert.equal((await lstat(join(dir,file))).mode&0o777,0o600);
     const lock=join(dir,'writer.lock');await writeFile(lock,'retained-uncertain-lock\n',{mode:0o600});await assert.rejects(()=>store(root).record(bind.result),/WRITER_BUSY/);assert.equal(await readFile(lock,'utf8'),'retained-uncertain-lock\n');
   }));
+  for(const mode of ['parent-sync','parent-sync-failure','fifo-authority','fifo-journal']){
+    await test('bounded_'+mode+'_probe',()=>withRoot(async root=>childProbe(root,mode)));
+  }
 }
 console.log(JSON.stringify({suite:'W1_V3_NATIVE_RESULT_DURABILITY',passed,failed,skipped,transportIntegration:'NOT_RUN',liveAcceptance:'NOT_RUN'}));
 if(failed>0)process.exitCode=1;
