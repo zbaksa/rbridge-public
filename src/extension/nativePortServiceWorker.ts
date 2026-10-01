@@ -31,6 +31,7 @@ function normalizeError(error:unknown):Error{return error instanceof Error?error
 export class ExtensionNativePortLinkV1{
   private port:ExtensionNativePortV1|null=null;
   private negotiated:NegotiatedHelloV1|null=null;
+  private v3Authority=false;
   private readonly localHello:RbridgeChatHelloV1;
 
   constructor(
@@ -48,18 +49,20 @@ export class ExtensionNativePortLinkV1{
   connect():void{
     if(this.port)return;
     this.negotiated=null;
+    this.v3Authority=false;
     const port=this.runtime.connectNative(RBRIDGE_NATIVE_HOST_NAME);
     this.port=port;
-    port.onMessage.addListener(value=>{void this.handleInbound(value);});
+    port.onMessage.addListener(value=>{void this.handleInbound(port,value);});
     port.onDisconnect.addListener(()=>{
-      if(this.port===port){this.port=null;this.negotiated=null;}
+      if(this.port!==port)return;
+      this.port=null;this.negotiated=null;this.v3Authority=false;
       this.invoke(()=>this.hooks.onDisconnected?.());
     });
     port.postMessage(this.localHello);
   }
 
   disconnect():void{
-    const port=this.port;this.port=null;this.negotiated=null;port?.disconnect();
+    const port=this.port;this.port=null;this.negotiated=null;this.v3Authority=false;port?.disconnect();
   }
 
   async sendEvent(event:unknown):Promise<void>{
@@ -76,18 +79,24 @@ export class ExtensionNativePortLinkV1{
     port.postMessage(validated);
   }
 
-  private async handleInbound(value:unknown):Promise<void>{
+  private async handleInbound(port:ExtensionNativePortV1,value:unknown):Promise<void>{
+    if(this.port!==port)return;
     try{
       const routed=routeServerToNative(value);
       if(routed.kind==='HELLO'){
         const negotiated=negotiateHello(this.localHello,routed.value);
+        const v3=negotiated.protocolMinor>=1&&negotiated.capabilities.includes('CHAT_EFFECT_REQUEST_V1');
+        if(this.v3Authority&&!v3)throw new Error('RBRIDGE_V3_DOWNGRADE_DENIED');
+        this.v3Authority=this.v3Authority||v3;
         this.negotiated=negotiated;
         await this.hooks.onServerHello?.(routed.value,negotiated);
         return;
       }
       if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+      if(this.negotiated.protocolMinor>=1&&this.negotiated.capabilities.includes('CHAT_EFFECT_REQUEST_V1')&&routed.value.action!=='READ_STATE'&&routed.value.action!=='DISCOVER_TARGET')throw new Error('RBRIDGE_V1_MUTATION_DISABLED');
       await this.hooks.onServerCommand?.(routed.value);
     }catch(error){
+      if(this.port!==port)return;
       this.negotiated=null;
       await this.hooks.onProtocolError?.(normalizeError(error));
     }
