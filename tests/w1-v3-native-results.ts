@@ -25,9 +25,9 @@ function store(root:string,extra:Partial<Options>={}):ResultStore {
   return new implementation.RbridgeEffectResultStoreV3({eventStoreRoot:root,scope:structuredClone(scope),maxMessageBytes:65536,...extra});
 }
 let pathDiagnostic=false;
-async function withRoot(fn:(root:string)=>Promise<void>):Promise<void>{const root=await mkdtemp(join(tmpdir(),'rbridge-native-v3-result-'));try{
-  if(process.platform==='win32'&&!pathDiagnostic){pathDiagnostic=true;const info=await lstat(root);console.log('V3_RESULT_WINDOWS_ROOT_DIAGNOSTIC '+JSON.stringify({root,actual:await realpath(root),directory:info.isDirectory(),symlink:info.isSymbolicLink(),mode:info.mode,uid:info.uid,processUid:typeof process.getuid==='function'?process.getuid():null}));}
-  await fn(root);
+async function withRoot(fn:(root:string,alias:string)=>Promise<void>):Promise<void>{const alias=await mkdtemp(join(tmpdir(),'rbridge-native-v3-result-')),root=await realpath(alias);try{
+  if(process.platform==='win32'&&!pathDiagnostic){pathDiagnostic=true;const info=await lstat(root);console.log('V3_RESULT_WINDOWS_ROOT_DIAGNOSTIC '+JSON.stringify({alias,root,actual:await realpath(root),directory:info.isDirectory(),symlink:info.isSymbolicLink(),mode:info.mode,uid:info.uid,processUid:typeof process.getuid==='function'?process.getuid():null}));}
+  await fn(root,alias);
 }finally{await rm(root,{recursive:true,force:true});}}
 async function changedCommand(source:RbridgeChatEffectCommandV1):Promise<RbridgeChatEffectCommandV1>{const {commandSha256,...body}=structuredClone(source);void commandSha256;body.issuedAt='2026-10-01T21:00:00.000Z';return {...body,commandSha256:await canonicalDigest(body)};}
 async function changedResult(source:RbridgeChatEffectResultV1):Promise<RbridgeChatEffectResultV1>{const {resultSha256,...body}=structuredClone(source);void resultSha256;body.state='BLOCKED';body.receipt=null;body.reason='TEST_DIFFERENT_OUTCOME';return {...body,resultSha256:await canonicalDigest(body)};}
@@ -106,10 +106,11 @@ await test('small_peer_budget_rejects_complete_oversize_command_without_partial_
   const command={...body,commandSha256:await canonicalDigest(body)};const s=store(root,{maxMessageBytes:4096});
   await assert.rejects(()=>s.reserve(command),/BUDGET|LARGE/);assert.equal(await s.read(command.commandId),null);
 }));
-await test('unsafe_read_id_and_invalid_configuration_never_select_a_path',()=>withRoot(async root=>{
+await test('unsafe_read_id_and_invalid_configuration_never_select_a_path',()=>withRoot(async(root,alias)=>{
   const s=store(root);await assert.rejects(()=>s.read('../journal.json'),/COMMAND_ID_INVALID/);
   for(const extra of [{maxMessageBytes:4095},{maxMessageBytes:65537},{maxRecords:0},{maxBytes:4095}])assert.throws(()=>store(root,extra),/CONFIG_INVALID/);
   assert.throws(()=>store(root,{eventStoreRoot:root+'/../escape'}),/ROOT_INVALID/);
+  if(process.platform==='win32'&&alias.toLowerCase()!==root.toLowerCase())await assert.rejects(()=>store(alias).read(bind.command.commandId),/ROOT_INVALID/);
 }));
 await test('protocol_valid_dotted_and_maximum_length_app_scopes_are_accepted',()=>withRoot(async root=>{
   for(const appId of ['cocwin.demo','a'.repeat(96)]){

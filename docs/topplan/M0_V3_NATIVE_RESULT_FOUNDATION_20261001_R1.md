@@ -47,6 +47,8 @@ Deferred/declined operational judgments: Windows ACL and directory durability; a
 
 The existing journal symlink case does not test a child-directory symlink. The root validation has that source check, but no additional coverage is claimed. Windows skips eight POSIX-specific probes explicitly; portable tests do not establish Linux-specific filesystem guarantees on Windows.
 
+The Windows workflow now runs the portable Native-result suite before packaging. Its first run at `ffa41eeb9f5602202d78c777411930f117cb778b` failed (3 PASS / 19 FAIL / 8 SKIP). A diagnostic-only run at `c326c40652f28e42741a09a862fd1cb74a8651fa` established that the runner's temporary path uses the `RUNNER~1` alias while `realpath` expands it to `runneradmin`. The source correctly rejected that noncanonical root. The test harness now supplies the established canonical root, and its unsafe-path test preserves rejection of the observed alias. No production path check was weakened. This entry records the reproduction and fix; final Windows qualification requires the later exact-SHA successful run.
+
 ## Next boundary
 
 Continue Task 8 from this exact candidate: strict fixed peer spool and chunk/commit-only enqueue; pinned HELLO/profile/release; Native union/runtime wiring that persists before forwarding and preserves original V1 events. Then Task 9 bounded EXECUTE/RECONCILE waits and original-attempt late-result handling, followed by Task 10 isolated opt-in integration. Positive original Markdown acquisition and installed/live acceptance remain separate blockers. Do not substitute a general shell or arbitrary app job for the required fixed endpoint.
