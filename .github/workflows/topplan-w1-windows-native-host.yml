@@ -38,6 +38,9 @@ jobs:
       - name: Verify portable V3 Native transport and runtime
         run: npm run test:v3:native-transport
 
+      - name: Verify portable V3 fixed peer and stdio CLI
+        run: npm run test:v3:transport
+
       - name: Build Windows Native Host SEA
         run: npm run build:native-host:sea
 
