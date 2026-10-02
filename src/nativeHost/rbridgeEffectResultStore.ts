@@ -67,6 +67,12 @@ export class RbridgeEffectResultStoreV3 {
     if(!Number.isSafeInteger(this.ceiling)||this.ceiling<4096||this.ceiling>65536||!Number.isSafeInteger(this.maxRecords)||this.maxRecords<1||this.maxRecords>4096||!Number.isSafeInteger(this.maxBytes)||this.maxBytes<4096||this.maxBytes>64*1024*1024)fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');
     this.parent=options.eventStoreRoot;this.root=join(this.parent,'v3-results');
   }
+  get eventStoreRoot():string{return this.parent;}
+  get appId():string{return this.scope.appId;}
+  /** Holds the journal writer gate while admitting a peer. Existing unbound history needs explicit migration proof. */
+  async admitPeerOwner<T>(admit:(hasHistory:boolean)=>Promise<T>):Promise<T>{
+    return this.exclusive(async()=>{const journal=await this.load();return admit(journal.revision!==0);});
+  }
 
   private async directory(path:string,create:boolean):Promise<void>{
     if(create)await mkdir(path,{mode:0o700}).catch(error=>{if(errno(error)!=='EEXIST')throw error;});
@@ -190,11 +196,18 @@ export class RbridgeEffectResultStoreV3 {
     });
   }
   async record(input:unknown):Promise<RbridgeChatEffectResultV1>{
+    return this.recordEvidence(input,true);
+  }
+  /** Archives a previously reserved complete result without granting the current generation authority. */
+  async recordRetained(input:unknown):Promise<RbridgeChatEffectResultV1>{
+    return this.recordEvidence(input,false);
+  }
+  private async recordEvidence(input:unknown,current:boolean):Promise<RbridgeChatEffectResultV1>{
     const immutable=snapshot(input),id=commandId((immutable as {commandId?:unknown})?.commandId);
     return this.exclusive(async()=>{
       const journal=await this.load(),entry=journal.entries.find(row=>row.command.commandId===id);
       if(!entry)fail('RBRIDGE_NATIVE_RESULT_COMMAND_MISSING');
-      if(!scopeMatches(entry.command,this.scope))fail('RBRIDGE_NATIVE_RESULT_SCOPE_MISMATCH');
+      if(current&&!scopeMatches(entry.command,this.scope))fail('RBRIDGE_NATIVE_RESULT_SCOPE_MISMATCH');
       const result=await parseEffectResult(immutable,entry.command,this.ceiling);
       if(entry.result){if(canonicalJson(entry.result)!==canonicalJson(result))fail('REQUEST_ID_COLLISION');return structuredClone(entry.result);}
       entry.result=result;await this.persist(journal);return structuredClone(result);
@@ -202,6 +215,10 @@ export class RbridgeEffectResultStoreV3 {
   }
   async read(id:string):Promise<Entry|null>{
     commandId(id);return this.exclusive(async()=>{const entry=(await this.load()).entries.find(row=>row.command.commandId===id);return entry&&scopeMatches(entry.command,this.scope)?structuredClone(entry):null;});
+  }
+  /** Complete reserved historical command, only for authenticated transport correlation. */
+  async readRetained(id:string):Promise<Entry|null>{
+    commandId(id);return this.exclusive(async()=>{const entry=(await this.load()).entries.find(row=>row.command.commandId===id);return entry?structuredClone(entry):null;});
   }
   /** Includes retained old-generation evidence for transport journaling; it grants no current-session authority. */
   async replay():Promise<RbridgeChatEffectResultV1[]>{return this.exclusive(async()=>structuredClone((await this.load()).entries.flatMap(row=>row.result?[row.result]:[])));}

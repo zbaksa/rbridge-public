@@ -86,3 +86,54 @@ Pre-flight: Task1 supplies strictrequest/command/result/captureevent parsers and
 - Final: minor (deferred): inherited exhaustive BIND post-write failed/missing/corrupt/superseded readback matrix.
 - Ruling: retain this externally managed app worktree and tracked Native ledger while the approved plan continues. No local helper workspace was executed under the wrong identity; Task8–12 resume from canonical source rather than deleting app proof artifacts. Cost if wrong: bounded retained source/proof storage until the remaining plan can safely finish.
 - The one-owner store assumption, original Markdown availability, fixed installed peer, typed request-bound capture arming, Native result/event ACK/replay, installed Windows host and real acceptance gates remain explicit. No V3 capability was advertised, no browser request/inference was sent, and no runtime/source promotion or schedule write occurred.
+
+## 2026-10-02 Task8 Native transport increment
+
+Continue from4e261f8; foundation and Task7 remain qualified history. GitHub main/runtime source are separate; COCWIN root repair qualified2a15b138, genuine R3 owner installation/activation pending. New branch is unmerged; completeTask8 and live acceptance remain OPEN.
+
+Ruling: resume the existing isolated Task8 worktree at4e261f8 while retaining foundation commits/PR9 and Task7 donor; no production checkout change — same approved Native plan and clean exact app baseline — if wrong, discard the unmerged transport branch, not runtime.
+
+Ruling: keep release SHA supplied from exact isolated HEAD for build env; baseline190 tests were green, failure was omitted required build pin — no source or capability change — if wrong, invalid artifact cannot qualify.
+
+Ruling: Native result/event integration is a bounded source increment within open Task8. Fixed Linux spool, broker chunk/commit and C transport stay open until built/qualified; source6/12 remains unchanged — avoids treating protocol wiring as complete installed Task8 — if wrong, integration must be revised before opt-in.
+
+Ruling: V3 configuration is trusted construction/approved private config, never browser input. Bind fixed peer/release/profile and approved full historical prefix to app owner; unknown historical ownership blocks — preserves V1 history and pending results — if wrong, legitimate upgrades stay blocked pending explicit ownership evidence.
+
+Ruling: async V3 parser is added alongside frozen synchronous V1 parser; align both Native and extension consumers explicitly — preserves existing V1 caller interface — if wrong, unmerged source correction before any advertisement.
+
+Ruling: add archival read/record operations for a previously reserved old-generation command, distinct from current-scope reserve/read/record. Only fixed transport uses archival evidence; it never grants current-session authority — preserves original late attempt — if wrong, no opt-in until correlation tests and review pass.
+
+Pre-flight: strict V3 async validators consume immutable command; Native must reserve before browser output and record before peer send; resultStore current scope remains distinct from historical archived evidence; V1 event sequence never resets. Extension callback immutability/sticky V3 authority remains owed by Task8. C transport and broker deadlines remain subsequent source steps, not implemented by this Native increment.
+
+### Native transport implementation candidate (source only)
+
+- RED: GitHub bridge issue #12872; exact source `5a19b02c7a4000cf6a30d8eed383a5a649834c53`, actual app UID/GID 1027; compile PASS, 13/13 behavioral cases fail with the missing authority export. No runtime installation.
+- Candidate adds immutable input snapshots, configured HELLO pin checks, private persistent app/peer/history authority, reservation before browser dispatch, result journal readback before peer forwarding, retained old-generation result correlation and original event/result replay. Async V3 routing remains separate from the frozen synchronous V1 parser.
+- Ruling: keep this Native increment separate from the still pending fixed Linux peer, C broker transport and Task10 extension worker integration — each has its own wire/identity and TDD gate — cost if wrong: partial source must not be mistaken for operational V3 acceptance.
+- Native runtime/config integration and whole-branch review are still pending; Task8 remains OPEN, qualified plan completion stays 6/12. Browser original Markdown and I1/I2/I3 remain blocked/not run. Production unchanged.
+
+- Native relay candidate `913fbb15075a7b85fb9f1cffd8f13bdf5608563e`: bridge #12873, actual app1027 target13/13 PASS; full verify203/203 PASS, clean worktree. These qualify the relay source, not runtime wiring.
+- Add runtime/config behavioral cases before implementation: complete strict private pins, actual framed Native runtime reservation/forwarding, and restart replay. Additional corruption/disconnect/input snapshot cases qualify the relay boundary.
+
+- Runtime/config RED: bridge #12874 exact `367f5224e54a9ad8536e19b6c01686784248e75f`, actual app1027; compile PASS; 16 existing/relay checks PASS and 3 intended private config/runtime checks FAIL (`CONFIG_FIELDS_INVALID` / `V3_NOT_CONFIGURED`).
+- Runtime candidate enables V3 only with explicit complete private configuration; default V3 stays closed. Existing extension worker still advertises V1, and Linux peer/C transport/Task10/installation are pending. Portable Windows CI explicitly runs the new Native transport suite before packaging.
+
+- Runtime candidate `5a955a546445cd9e07e04c1512892c945c1be8f1`: bridge #12875 target19/19 PASS; full actual-app verify209/209 PASS, clean worktree. No installed V3 capability.
+- Guard RED `7032f75cd3547ad939fe74f67abc864cf90ec65a`, bridge #12876: compile PASS, 19 PASS, 3 intended FAIL. A validly rehashed command could target a different pinned profile; invalid/oversize inputs threw synchronously from formerly async public methods. Fix validates complete parsed command target before reservation and preserves Promise rejection while taking the snapshot before any await.
+
+### Fresh whole-increment review and one combined correction pass
+
+- Reviewed exact `4e261f8a75523c03f4589e721318cd53a61caabf..67e540f8eb91c888798d7d65ae36de54570e1ac7`; one fresh-context most-capable reviewer, read-only. Critical0 / Important3 / Minor0. Important findings: unbound result-history peer adoption and cross-app marker poisoning; inactive SSH child frames entering current decoder; original replay events bypassing newly negotiated byte ceiling.
+- All three reproduced with six real behavioral cases before edits: bridge #12879 at `6492204be5d731f658e44158f31c51996580a4fe`, app1027, compile PASS, old22 PASS / new6 FAIL. Pending and complete history and cross-app all claimed a marker; old complete frame dispatched an extra command; old partial frame corrupted the current decoder; oversized anchored event transmitted.
+- One combined fix: journal owner validation and history admission under the existing writer lock before marker publication; reject any pre-existing unbound result journal, preserving original files. Child identity checked before decoding/hooks, decoder bound to its originating process. Preflight every complete original replay event against negotiated byte ceiling before any prefix transmission; no truncation, skip, resequence or reset.
+- Ruling: old foundation journals without a peer marker stay BLOCKED even when configured app/profile looks plausible — app ownership alone cannot prove historical peer pins — cost if wrong: a legitimate upgrade requires a future explicit validated migration recipe, while pending SEND/results remain preserved. No invented migration approval.
+
+- Ruling (review set-aside): Task3 ordinal/crash atomicity — unchanged COCWIN request authority — cost if wrong: must requalify at integration.
+- Ruling (review set-aside): Task7 capture baseline/ACK retry — unchanged qualified capture source — cost if wrong: whole paired release must retain its tests.
+- Ruling (review set-aside): Broker enqueue, hung browser deadlines, stale COCWIN callbacks — Task8 Linux/C and Task9 still open — cost if wrong: no end-to-end Task8/adapter acceptance.
+- Ruling (review set-aside): Exact-turn Markdown/provenance/fences/CRLF — positive acquisition Task6 blocked — cost if wrong: no V3 capability advertisement/live I1.
+- Ruling (review set-aside): Capture/rejection construction metadata — existing strict parser/capture foundation — cost if wrong: retain budget tests during final convergence.
+- Ruling (review set-aside): Fixed Linux endpoint, C broker transport, extension V3 hook/callback immutability/sticky authority — remaining source/runtime wiring open — cost if wrong: this increment cannot deliver browser effects end to end.
+- Ruling (review set-aside): Real SSH, Windows path/ACL/power-loss/install/site and I1/I2/I3 — separate platform and live gates; fake factories/SEA do not prove them — cost if wrong: production eligibility remains blocked.
+- Ruling (review set-aside): Foundation stale-lock recovery, event-store crash barriers, distributed ownership and unrelated V1 behavior — not newly qualified by this review — cost if wrong: retain unresolved evidence and never infer those acceptances.
+- No second reviewer pass is used. Required targeted/full app qualification and exact-head dedicated Linux/Windows CI remain pending for this corrected source.

@@ -35,6 +35,9 @@ jobs:
       - name: Verify portable V3 Native result store
         run: npm run test:v3:native-results
 
+      - name: Verify portable V3 Native transport and runtime
+        run: npm run test:v3:native-transport
+
       - name: Build Windows Native Host SEA
         run: npm run build:native-host:sea
 
