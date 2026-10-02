@@ -86,3 +86,21 @@ Pre-flight: Task1 supplies strictrequest/command/result/captureevent parsers and
 - Final: minor (deferred): inherited exhaustive BIND post-write failed/missing/corrupt/superseded readback matrix.
 - Ruling: retain this externally managed app worktree and tracked Native ledger while the approved plan continues. No local helper workspace was executed under the wrong identity; Task8–12 resume from canonical source rather than deleting app proof artifacts. Cost if wrong: bounded retained source/proof storage until the remaining plan can safely finish.
 - The one-owner store assumption, original Markdown availability, fixed installed peer, typed request-bound capture arming, Native result/event ACK/replay, installed Windows host and real acceptance gates remain explicit. No V3 capability was advertised, no browser request/inference was sent, and no runtime/source promotion or schedule write occurred.
+
+## 2026-10-02 Task8 Native transport increment
+
+Continue from4e261f8; foundation and Task7 remain qualified history. GitHub main/runtime source are separate; COCWIN root repair qualified2a15b138, genuine R3 owner installation/activation pending. New branch is unmerged; completeTask8 and live acceptance remain OPEN.
+
+Ruling: resume the existing isolated Task8 worktree at4e261f8 while retaining foundation commits/PR9 and Task7 donor; no production checkout change — same approved Native plan and clean exact app baseline — if wrong, discard the unmerged transport branch, not runtime.
+
+Ruling: keep release SHA supplied from exact isolated HEAD for build env; baseline190 tests were green, failure was omitted required build pin — no source or capability change — if wrong, invalid artifact cannot qualify.
+
+Ruling: Native result/event integration is a bounded source increment within open Task8. Fixed Linux spool, broker chunk/commit and C transport stay open until built/qualified; source6/12 remains unchanged — avoids treating protocol wiring as complete installed Task8 — if wrong, integration must be revised before opt-in.
+
+Ruling: V3 configuration is trusted construction/approved private config, never browser input. Bind fixed peer/release/profile and approved full historical prefix to app owner; unknown historical ownership blocks — preserves V1 history and pending results — if wrong, legitimate upgrades stay blocked pending explicit ownership evidence.
+
+Ruling: async V3 parser is added alongside frozen synchronous V1 parser; align both Native and extension consumers explicitly — preserves existing V1 caller interface — if wrong, unmerged source correction before any advertisement.
+
+Ruling: add archival read/record operations for a previously reserved old-generation command, distinct from current-scope reserve/read/record. Only fixed transport uses archival evidence; it never grants current-session authority — preserves original late attempt — if wrong, no opt-in until correlation tests and review pass.
+
+Pre-flight: strict V3 async validators consume immutable command; Native must reserve before browser output and record before peer send; resultStore current scope remains distinct from historical archived evidence; V1 event sequence never resets. Extension callback immutability/sticky V3 authority remains owed by Task8. C transport and broker deadlines remain subsequent source steps, not implemented by this Native increment.
