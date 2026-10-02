@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {chmod,mkdtemp,readFile,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fixtureChild} from './w1-v3-peer-process-fixture.js';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {REQUIRED_RBRIDGE_CAPABILITIES,RbridgeEventSpoolV1,type RbridgeChatEventV1,type RbridgeChatHelloV1} from '../src/domain/rbridgeChatCore.js';
 import {canonicalDigest,canonicalJson,sha256Hex,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope,type VerifiedPeerV3} from '../src/domain/rbridgeEffectProtocol.js';
@@ -19,6 +20,7 @@ interface PeerStore {
   peer():Promise<VerifiedPeerV3>;
   readEvent(afterSequence:number):Promise<RbridgeChatEventV1|null>;
   disconnect():Promise<void>;
+  heartbeat():Promise<void>;
 }
 const modulePath='../src/server/rbridgeChatPeerStore.js';
 const peerModule=await import(modulePath).catch(()=>null) as {RbridgeChatPeerStoreV3:new(root:string)=>PeerStore}|null;
@@ -130,6 +132,76 @@ if(process.platform!=='win32')await test('unsafe_private_configuration_blocks_wi
   const store=await make(path);await chmod(join(path,'v3-peer-config.json'),0o644);await assert.rejects(()=>store.peer(),/CONFIG|FILE|PRIVATE/);await assert.rejects(()=>store.recordIncoming(hello,pins),/CONFIG|FILE|PRIVATE/);
   assert.ok((await readFile(join(path,'v3-peer-config.json'),'utf8')).includes('RBRIDGE_CHAT_PEER_CONFIG_V3'));
 }));else{skipped++;console.log('SKIP V3_FIXED_PEER private POSIX mode probe requires Linux');}
+
+
+if(process.platform==='linux'){
+  await test('live_cross_process_owner_serializes_without_removing_its_lock',()=>root(async path=>{
+    const store=await make(path);await ready(store);const child=fixtureChild('peer-lock',path);
+    try{await child.locked;let settled=false;const value=store.peer().then(v=>{settled=true;return v;});void value.catch(()=>{settled=true;});
+      await new Promise(r=>setTimeout(r,150));assert.equal(settled,false,'live-owner contention must wait, not fail or steal');
+      child.release();await child.done;assert.deepEqual(await value,pins);assert.deepEqual(await store.peer(),pins);
+    }finally{await child.stop();}
+  }));
+  for(const mode of ['peer-lock','result-lock'] as const)await test('terminated_'+mode+'_owner_recovers_without_erasing_evidence',()=>root(async path=>{
+    const store=await make(path);await ready(store);await store.enqueue(bind.command,scope);await store.takeForDispatch();await store.recordIncoming(bind.result,pins);
+    const event=await originalEvent();await store.recordIncoming(event,pins);const child=fixtureChild(mode,path);
+    try{await child.locked;await child.stop();assert.deepEqual(await store.peer(),pins);assert.deepEqual((await store.read(bind.command.commandId,scope)).result,bind.result);assert.deepEqual(await store.readEvent(0),event);assert.equal(await store.takeForDispatch(),null);}
+    finally{await child.stop();}
+  }));
+}else{skipped+=3;console.log('SKIP V3_FIXED_PEER Linux fixed-peer kernel gate process probes');}
+
+async function advanceGeneration(path:string,store:PeerStore){
+  await store.disconnect();const newer={...scope,generation:'223e4567-e89b-42d3-a456-426614174000'};await config(path,newer);assert.ok(peerModule);
+  const current=new peerModule.RbridgeChatPeerStoreV3(path);await ready(current);
+  const next=structuredClone(bind.command);next.commandId='new-generation-bind';next.request.generation=newer.generation;
+  next.request.effectId=await sha256Hex([next.request.sessionId,next.request.generation,next.request.attemptId,next.request.effectKind,String(next.request.effectOrdinal)].join('\0'));await rehash(next);
+  return {current,newer,next};
+}
+async function resultFor(command:RbridgeChatEffectCommandV1,source:RbridgeChatEffectResultV1){
+  const result={...structuredClone(source),commandId:command.commandId,commandSha256:command.commandSha256};
+  const {resultSha256:old,...body}=result;void old;result.resultSha256=await canonicalDigest(body);return result;
+}
+await test('matching_terminal_reconciliation_resolves_old_send_without_relabeling',()=>root(async path=>{
+  const store=await make(path);await ready(store);await store.enqueue(send.command,scope);await store.takeForDispatch();
+  const reconciliation=structuredClone(send.command);reconciliation.commandId='reconcile-old-send';reconciliation.action='RECONCILE';await rehash(reconciliation);
+  await store.enqueue(reconciliation,scope);await store.takeForDispatch();const result=await resultFor(reconciliation,send.result);await store.recordIncoming(result,pins);
+  const {current,newer,next}=await advanceGeneration(path,store);await current.enqueue(next,newer);assert.deepEqual(await current.takeForDispatch(),next);
+  assert.equal((await current.read(send.command.commandId,scope)).result,null);assert.deepEqual((await current.read(reconciliation.commandId,scope)).result,result);
+  assert.equal((await current.read(reconciliation.commandId,newer)).result,null);
+}));
+await test('unrelated_or_nonterminal_reconciliation_does_not_resolve_old_send',()=>root(async path=>{
+  const store=await make(path);await ready(store);await store.enqueue(send.command,scope);await store.takeForDispatch();
+  const unrelated=structuredClone(bind.command);unrelated.commandId='unrelated-reconciliation';unrelated.action='RECONCILE';await rehash(unrelated);await store.enqueue(unrelated,scope);await store.takeForDispatch();await store.recordIncoming(await resultFor(unrelated,bind.result),pins);
+  const matching=structuredClone(send.command);matching.commandId='uncertain-reconciliation';matching.action='RECONCILE';await rehash(matching);await store.enqueue(matching,scope);await store.takeForDispatch();
+  const source={...structuredClone(send.result),state:'UNCERTAIN' as const,receipt:null,reason:'NOT_OBSERVED'};await store.recordIncoming(await resultFor(matching,source),pins);
+  const {current,newer,next}=await advanceGeneration(path,store);await assert.rejects(()=>current.enqueue(next,newer),/PENDING_OLD_SEND/);assert.equal(await current.takeForDispatch(),null);
+}));
+await test('anchored_historical_duplicate_replays_without_new_scope_authority',()=>root(async path=>{
+  const event=await originalEvent(),events=new RbridgeChatEventStoreV1({root:path});await events.append(event);
+  const newer={...scope,generation:'223e4567-e89b-42d3-a456-426614174000'};
+  await writeFile(join(path,'v3-peer-config.json'),canonicalJson({schema:'RBRIDGE_CHAT_PEER_CONFIG_V3',scope:newer,peerPins:pins,initialHistory:{sequence:event.sequence,eventSha256:event.eventSha256}})+'\n',{mode:0o600});
+  assert.ok(peerModule);const store=new peerModule.RbridgeChatPeerStoreV3(path);await ready(store);await store.recordIncoming(structuredClone(event),pins);
+  assert.deepEqual(await new RbridgeChatEventStoreV1({root:path}).load(),[event]);assert.deepEqual(await store.readEvent(0),event);assert.equal(await store.readEvent(1),null);
+  const {eventSha256:old,...body}=event;void old;const changed={...body,payload:{reason:'CHANGED_HISTORICAL_EVENT'}};
+  await assert.rejects(async()=>store.recordIncoming({...changed,eventSha256:await canonicalDigest(changed)},pins),/COLLISION/);
+  assert.deepEqual(await new RbridgeChatEventStoreV1({root:path}).load(),[event]);
+}));
+await test('completed_uploads_release_pool_but_preserve_exact_replay_and_unfinished_upload',()=>root(async path=>{
+  const store=await make(path);await ready(store);const pending=structuredClone(send.command);pending.commandId='unfinished-large-transfer';if('text' in pending.request.payload)pending.request.payload.text='x'.repeat(9000);await rehash(pending);
+  const unfinished=await chunks(pending);await store.stageChunk(unfinished.chunks[0]);const originals:{command:RbridgeChatEffectCommandV1;result:RbridgeChatEffectResultV1}[]=[];
+  for(let i=0;i<130;i++){
+    await store.heartbeat();const command=structuredClone(send.command);command.commandId='completed-transfer-'+i;command.action='RECONCILE';await rehash(command);const t=await chunks(command);
+    for(const item of t.chunks)await store.stageChunk(item);await store.commitCommand(t.commit);assert.deepEqual(await store.takeForDispatch(),command);
+    const result=await resultFor(command,send.result);await store.recordIncoming(result,pins);originals.push({command,result});
+  }
+  await store.disconnect();assert.ok(peerModule);const reopened=new peerModule.RbridgeChatPeerStoreV3(path);await ready(reopened);
+  const first=originals[0]!,t=await chunks(first.command);for(const item of t.chunks)await reopened.stageChunk(item);await reopened.commitCommand(t.commit);
+  assert.equal(await reopened.takeForDispatch(),null);assert.deepEqual((await reopened.read(first.command.commandId,scope)).result,first.result);
+  const altered=structuredClone(t.chunks[0]!);const bytes=Buffer.from(altered.dataBase64,'base64');bytes[0]=bytes[0]!^1;altered.dataBase64=bytes.toString('base64');await assert.rejects(()=>reopened.stageChunk(altered),/COLLISION/);
+  await assert.rejects(()=>reopened.commitCommand(unfinished.commit),/PARTIAL_COMMAND_UNCERTAIN/);
+  const journal=JSON.parse(await readFile(join(path,'v3-peer','journal.json'),'utf8')) as {transfers:{commit:Commit;chunks:(string|null)[]}[];commands:unknown[]};
+  assert.equal(journal.transfers.length,1);assert.equal(journal.transfers[0]?.commit.commandId,pending.commandId);assert.equal(journal.transfers[0]?.chunks[0],unfinished.chunks[0]?.dataBase64);assert.equal(journal.commands.length,130);
+}));
 
 console.log(JSON.stringify({suite:'W1_V3_FIXED_PEER',passed,failed,skipped,installedForcedCommand:'NOT_RUN',brokerTransport:'NOT_IMPLEMENTED_IN_THIS_INCREMENT',liveAcceptance:'NOT_RUN'}));
 if(failed)process.exitCode=1;

@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {mkdtemp,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fixtureChild} from './w1-v3-peer-process-fixture.js';
 import {PassThrough,Writable} from 'node:stream';
 import {RbridgeChatPeerStoreV3} from '../src/server/rbridgeChatPeerStore.js';
 import {encodeStdioFrame,StdioFrameDecoder} from '../src/transport/sshStdio.js';
@@ -80,4 +81,34 @@ await test('cli_inspect_and_single_event_read_require_live_pinned_channel',()=>f
  assert.ok(cliModule,'FIXED_PEER_CLI_NOT_IMPLEMENTED');await assert.rejects(()=>cliModule.executeRbridgeChatPeerCli(store,['inspect-peer',encoded({})]),/NOT_NEGOTIATED|UNAVAILABLE/);await store.recordIncoming(hello,pins);
  assert.deepEqual((await cliModule.executeRbridgeChatPeerCli(store,['inspect-peer',encoded({})])).value,pins);assert.equal((await cliModule.executeRbridgeChatPeerCli(store,['read-event',encoded({afterSequence:0})])).value,null);await store.disconnect();
 }));
+
+if(process.platform==='linux')await test('separate_cli_and_stdio_contention_completes_without_channel_loss',()=>fixtureRoot(async(store,path)=>{
+  const channel=await helloChannel(store),holder=fixtureChild('peer-lock',path);let cli:ReturnType<typeof fixtureChild>|undefined;
+  try{
+    await holder.locked;cli=fixtureChild('inspect-cli',path);
+    const event=await new RbridgeEventSpoolV1().append({eventId:'overlapping-cli-event',eventType:'BINDING_LOST',sessionId:scope.sessionId,generation:scope.generation,attemptId:null,effectId:null,observedAt:'2026-10-02T12:00:00.000Z',payload:{reason:'UI_PROTOCOL_CHANGED'}});
+    channel.input.write(encodeStdioFrame(event));await new Promise(r=>setTimeout(r,150));holder.release();await holder.done;await cli.done;
+    await until(async()=>Boolean(await new RbridgeChatPeerStoreV3(path).readEvent(0)));assert.deepEqual(await new RbridgeChatPeerStoreV3(path).readEvent(0),event);
+    assert.deepEqual(await store.peer(),pins);channel.input.end();await channel.run;
+  }finally{holder.release();await holder.stop();await cli?.stop();}
+}));else console.log('SKIP V3_FIXED_STDIO separate Linux installed-endpoint process probe');
+
+for(const fragmented of [false,true])await test('supported_history_over_128_frames_'+(fragmented?'fragmented':'coalesced'),()=>fixtureRoot(async(store,path)=>{
+  const channel=await helloChannel(store),spool=new RbridgeEventSpoolV1(),events=[];
+  for(let i=0;i<160;i++)events.push(await spool.append({eventId:'bounded-replay-'+i,eventType:'BINDING_LOST',sessionId:scope.sessionId,generation:scope.generation,attemptId:null,effectId:null,observedAt:'2026-10-02T12:00:00.000Z',payload:{reason:'UI_PROTOCOL_CHANGED'}}));
+  const frames=Buffer.concat(events.map(e=>encodeStdioFrame(e)));assert.ok(frames.length<262144);
+  if(fragmented){for(let offset=0;offset<frames.length;offset+=113)channel.input.write(frames.subarray(offset,offset+113));}else channel.input.write(frames);
+  await until(async()=>Boolean(await new RbridgeChatPeerStoreV3(path).readEvent(159).catch(error=>{if(error instanceof Error&&error.message==='RBRIDGE_EVENT_SEQUENCE_GAP')return null;throw error;})),10000);
+  assert.deepEqual(await store.readEvent(0),events[0]);assert.deepEqual(await store.readEvent(159),events[159]);assert.equal(await store.readEvent(160),null);assert.deepEqual(await store.peer(),pins);
+  channel.input.end();await channel.run;
+}));
+await test('backpressured_valid_replay_keeps_owned_heartbeat_fresh',()=>fixtureRoot(async(store,path)=>{
+  const original=store.recordIncoming.bind(store);
+  store.recordIncoming=async(message,p)=>{if((message as {schema?:string}).schema==='RBRIDGE_CHAT_EVENT_V1')await new Promise(r=>setTimeout(r,45));await original(message,p);};
+  const channel=await helloChannel(store),spool=new RbridgeEventSpoolV1(),events=[];
+  for(let i=0;i<140;i++)events.push(await spool.append({eventId:'slow-bounded-replay-'+i,eventType:'BINDING_LOST',sessionId:scope.sessionId,generation:scope.generation,attemptId:null,effectId:null,observedAt:'2026-10-02T12:00:00.000Z',payload:{reason:'UI_PROTOCOL_CHANGED'}}));
+  channel.input.write(Buffer.concat(events.map(e=>encodeStdioFrame(e))));
+  await until(async()=>Boolean(await new RbridgeChatPeerStoreV3(path).readEvent(139).catch(error=>{if(error instanceof Error&&error.message==='RBRIDGE_EVENT_SEQUENCE_GAP')return null;throw error;})),18000);assert.deepEqual(await store.readEvent(139),events[139]);assert.deepEqual(await store.peer(),pins);channel.input.end();await channel.run;
+}));
+
 console.log(JSON.stringify({suite:'W1_V3_FIXED_STDIO',passed,failed,installedForcedCommand:'NOT_RUN',liveAcceptance:'NOT_RUN'}));if(failed)process.exitCode=1;
