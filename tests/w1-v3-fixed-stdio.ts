@@ -102,7 +102,7 @@ if(process.platform==='linux')await test('separate_cli_and_stdio_contention_comp
   }finally{holder.release();await holder.stop();await cli?.stop();}
 }));else console.log('SKIP V3_FIXED_STDIO separate Linux installed-endpoint process probe');
 
-for(const fragmented of [false,true])await test('supported_history_over_128_frames_'+(fragmented?'fragmented':'coalesced'),()=>fixtureRoot(async(store,path)=>{
+for(const fragmented of [false,true])await test('supported_history_over_128_frames_'+(fragmented?'fragmented':'coalesced'),()=>fixtureRoot(async(store)=>{
   let received=0;const original=store.recordIncoming.bind(store);store.recordIncoming=async(message,p)=>{await original(message,p);if((message as {schema?:string}).schema==='RBRIDGE_CHAT_EVENT_V1')received++;};
   const channel=await helloChannel(store),spool=new RbridgeEventSpoolV1(),events=[];
   for(let i=0;i<160;i++)events.push(await spool.append({eventId:'bounded-replay-'+i,eventType:'BINDING_LOST',sessionId:scope.sessionId,generation:scope.generation,attemptId:null,effectId:null,observedAt:'2026-10-02T12:00:00.000Z',payload:{reason:'UI_PROTOCOL_CHANGED'}}));
@@ -112,7 +112,7 @@ for(const fragmented of [false,true])await test('supported_history_over_128_fram
   assert.deepEqual(await store.readEvent(0),events[0]);assert.deepEqual(await store.readEvent(159),events[159]);assert.equal(await store.readEvent(160),null);assert.deepEqual(await store.peer(),pins);
   channel.input.end();await channel.run;
 }));
-await test('backpressured_valid_replay_keeps_owned_heartbeat_fresh',()=>fixtureRoot(async(store,path)=>{
+await test('backpressured_valid_replay_keeps_owned_heartbeat_fresh',()=>fixtureRoot(async(store)=>{
   let received=0;const original=store.recordIncoming.bind(store);
   store.recordIncoming=async(message,p)=>{const event=(message as {schema?:string}).schema==='RBRIDGE_CHAT_EVENT_V1';if(event)await new Promise(r=>setTimeout(r,45));await original(message,p);if(event)received++;};
   const channel=await helloChannel(store),spool=new RbridgeEventSpoolV1(),events=[];
