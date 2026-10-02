@@ -11,7 +11,8 @@ export async function runRbridgeChatStdio(input:NodeJS.ReadableStream,output:Nod
   const asError=(error:unknown)=>error instanceof Error?error:Error('RBRIDGE_STDIO_CHANNEL_FAILED');
   const settle=(error?:Error)=>{if(closed)return;closed=true;ending=true;clearInterval(timer);for(const reject of writers)reject(error??Error('RBRIDGE_STDIO_CHANNEL_CLOSED'));if(error)rejectEnd(error);else resolveEnd();};
   const write=async(value:unknown)=>{
-    if(closed)throw Error('RBRIDGE_STDIO_CHANNEL_CLOSED');const frame=encodeStdioFrame(value,peer?.maxMessageBytes??65536);
+    if(closed)throw Error('RBRIDGE_STDIO_CHANNEL_CLOSED');const frame=encodeStdioFrame(value);
+    if(frame.byteLength-1>(peer?.maxMessageBytes??65536))throw Error('RBRIDGE_STDIO_OUTPUT_BUDGET_EXCEEDED');
     await new Promise<void>((resolve,reject)=>{
       let done=false;const finish=(error?:Error|null)=>{if(done)return;done=true;clearTimeout(timeout);writers.delete(abort);if(error)reject(error);else resolve();};
       const abort=(error:Error)=>finish(error),timeout=setTimeout(()=>finish(Error('RBRIDGE_STDIO_OUTPUT_TIMEOUT')),5000);writers.add(abort);
