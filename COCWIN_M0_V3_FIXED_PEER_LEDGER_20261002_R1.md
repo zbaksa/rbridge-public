@@ -15,3 +15,10 @@ Task8 store tests first:16 behavior cases (one Linux-specific mode probe). At th
 Ruling: restart fixtures explicitly close the old trusted channel before reopening. A fresh peer object in the same process is not evidence that the old stream ended; an additional test rejects replacement of an existing live pinned channel and late input from its old owner — cost if wrong: concurrent channels could grant stale input current transport authority. Initial issue12894 watched16/16 expected failures after a successful build; updated test-only candidate adds the live-channel gate before implementation.
 
 Issue12900 watched17/17 expected failures on test-only6df797a3 after compilation, before store implementation. The first implementation candidate adds a fixed private spool journal under v3-peer, complete immutable transfers, app/pin authority markers, Native result journal composition, original V1 event retention, and an exclusive live channel with PID/start-time and short heartbeat freshness. It marks dispatch before output and does not resend DISPATCHED effects after reconnect. Targeted/full GREEN are NOT_RUN for this source commit. Fixed stdio/CLI and C broker transport remain OPEN.
+
+
+## Fixed stdio / bounded CLI continuation (2026-10-02)
+
+The initial peer store at f4c25d4a76fd95a6a854250fde43e1eeb12bb074 was qualified under rbridge UID/GID1027 in https://github.com/zbaksa/cocwin-private/issues/12902: all17 targeted tests and full235 tests passed, along with typecheck, lint, server, extension and Native builds. Whole-branch review, exact final Linux/Windows CI and installed route remain OPEN.
+
+This test-first continuation adds13 behavior tests covering HELLO admission and fragmentation, durable result/event storage, incomplete frames, output failure without automatic resend, live heartbeats and a fixed CLI allowlist with strict bounded base64 inputs. Implementation is absent at this test-first commit; RED qualification is pending. No canonical checkout, donor worktree, protected configuration, forced-command installation or live browser route is changed.
