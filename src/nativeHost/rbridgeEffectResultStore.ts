@@ -1,6 +1,7 @@
 import {constants} from 'node:fs';
 import {lstat,mkdir,open,realpath,rename,unlink} from 'node:fs/promises';
 import {randomBytes} from 'node:crypto';
+import {withPrivateLinuxFileGate} from './privateLinuxFileGate.js';
 import {isAbsolute,join,resolve} from 'node:path';
 import {canonicalDigest,canonicalJson,parseEffectCommand,parseEffectResult,parseV3Scope,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope} from '../domain/rbridgeEffectProtocol.js';
 
@@ -10,6 +11,8 @@ export interface RbridgeEffectResultStoreOptionsV3 {
   maxMessageBytes:number;
   maxRecords?:number;
   maxBytes?:number;
+  /** All fixed Linux peer journal writers must use the same kernel gate. Portable Native defaults stay unchanged. */
+  crossProcess?:boolean;
 }
 interface Entry {command:RbridgeChatEffectCommandV1;result:RbridgeChatEffectResultV1|null}
 interface Journal {schema:'RBRIDGE_NATIVE_V3_RESULT_JOURNAL_V1';appId:string;revision:number;entries:Entry[];sha256:string}
@@ -59,12 +62,14 @@ export class RbridgeEffectResultStoreV3 {
   private readonly maxRecords:number;
   private readonly maxBytes:number;
   private faulted=false;
+  private readonly crossProcess:boolean;
 
   constructor(options:RbridgeEffectResultStoreOptionsV3){
     if(typeof options.eventStoreRoot!=='string'||!isAbsolute(options.eventStoreRoot)||resolve(options.eventStoreRoot)!==options.eventStoreRoot||/[\0\r\n]/.test(options.eventStoreRoot))fail('RBRIDGE_NATIVE_RESULT_ROOT_INVALID');
     try{this.scope=parseV3Scope(options.scope);}catch{fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');}
     this.ceiling=options.maxMessageBytes;this.maxRecords=options.maxRecords??4096;this.maxBytes=options.maxBytes??8*1024*1024;
     if(!Number.isSafeInteger(this.ceiling)||this.ceiling<4096||this.ceiling>65536||!Number.isSafeInteger(this.maxRecords)||this.maxRecords<1||this.maxRecords>4096||!Number.isSafeInteger(this.maxBytes)||this.maxBytes<4096||this.maxBytes>64*1024*1024)fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');
+    if(options.crossProcess!==undefined&&typeof options.crossProcess!=='boolean')fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');this.crossProcess=options.crossProcess===true;
     this.parent=options.eventStoreRoot;this.root=join(this.parent,'v3-results');
   }
   get eventStoreRoot():string{return this.parent;}
@@ -170,6 +175,7 @@ export class RbridgeEffectResultStoreV3 {
     let identity:{ino:number;dev:number}|undefined;
     try{
       if(this.faulted)fail('RBRIDGE_NATIVE_RESULT_STORE_FAULTED');await this.ensureRoot();
+      if(this.crossProcess&&process.platform==='linux')return await withPrivateLinuxFileGate(this.root,'RBRIDGE_NATIVE_RESULT',fn);
       try{lock=await open(join(this.root,'writer.lock'),constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);}catch(error){if(errno(error)==='EEXIST')fail('RBRIDGE_NATIVE_RESULT_WRITER_BUSY');throw error;}
       const info=await lock.stat();if(!info.isFile()||info.nlink!==1||!privateMode(info.mode)||(currentUid()!==undefined&&info.uid!==currentUid()))fail('RBRIDGE_NATIVE_RESULT_FILE_INVALID');
       identity={ino:info.ino,dev:info.dev};await lock.writeFile(randomBytes(16).toString('hex')+'\n');await lock.sync();
