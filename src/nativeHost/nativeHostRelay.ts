@@ -27,7 +27,7 @@ export class NativeHostRelayV1{
   constructor(private readonly store:RbridgeChatEventStoreV1,private readonly peer:NativeHostPeerV1,private readonly v3?:NativeHostV3RelayOptions){}
   get protocolReady():boolean{return this.transportConnected&&this.negotiated!==null;}
   private serial<T>(fn:()=>Promise<T>):Promise<T>{const work=this.queue.then(fn);this.queue=work.then(()=>{},()=>{});return work;}
-  private async admit():Promise<void>{if(this.v3)await this.v3.authority.initialize(this.store);}
+  private async admit():Promise<void>{if(this.v3)await this.v3.authority.initialize(this.store,this.v3.results);}
   private current(epoch:number,negotiated?:NegotiatedHelloV1):void{
     if(epoch!==this.epoch||!this.transportConnected||(negotiated&&this.negotiated!==negotiated))throw Error('RBRIDGE_PEER_CONNECTION_CHANGED');
   }
@@ -105,6 +105,8 @@ export class NativeHostRelayV1{
   }
   private async replayEvents(epoch:number,negotiated:NegotiatedHelloV1):Promise<number>{
     const events=await this.store.load();this.current(epoch,negotiated);
+    // Validate every original envelope before publishing any prefix. Oversize history remains intact and unavailable.
+    for(const event of events)snapshotNativeMessage(event,negotiated.maxMessageBytes);
     for(const event of events){this.current(epoch,negotiated);await this.peer.send(event);this.current(epoch,negotiated);}
     return events.length;
   }

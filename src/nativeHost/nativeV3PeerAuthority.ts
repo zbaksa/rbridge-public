@@ -4,6 +4,7 @@ import {isAbsolute,join,resolve} from 'node:path';
 import {parseHello,type RbridgeChatHelloV1} from '../domain/rbridgeChatCore.js';
 import {canonicalDigest,canonicalJson,requireV3Peer,type ExactBrowserTargetV1,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
 import type {RbridgeChatEventStoreV1} from '../server/rbridgeChatEventStore.js';
+import type {RbridgeEffectResultStoreV3} from './rbridgeEffectResultStore.js';
 
 export interface NativeV3HistoryAnchor {sequence:number;eventSha256:string|null}
 export interface NativeV3PeerAuthorityOptions {
@@ -38,7 +39,10 @@ export class NativeV3PeerAuthority {
     if(pins.capabilities.some(cap=>!hello.capabilities.includes(cap)))fail('RBRIDGE_NATIVE_PEER_CAPABILITY_MISSING');
     return structuredClone(hello);
   }
-  initialize(events:RbridgeChatEventStoreV1):Promise<void>{return this.initialized??=this.admit(events);}
+  initialize(events:RbridgeChatEventStoreV1,results:RbridgeEffectResultStoreV3):Promise<void>{
+    if(results.eventStoreRoot!==this.options.eventStoreRoot||results.appId!==this.options.appId)fail('RBRIDGE_NATIVE_PEER_OWNER_ROOT_MISMATCH');
+    return this.initialized??=results.admitPeerOwner(hasHistory=>this.admit(events,hasHistory));
+  }
   private async root():Promise<void>{
     const path=this.options.eventStoreRoot,info=await lstat(path);
     if(!info.isDirectory()||info.isSymbolicLink()||!privateMode(info.mode)||(uid()!==undefined&&info.uid!==uid())||!samePath(await realpath(path),path))fail('RBRIDGE_NATIVE_PEER_ROOT_INVALID');
@@ -60,7 +64,7 @@ export class NativeV3PeerAuthority {
       return new TextDecoder('utf-8',{fatal:true}).decode(bytes);
     }finally{await handle.close();}
   }
-  private async admit(events:RbridgeChatEventStoreV1):Promise<void>{
+  private async admit(events:RbridgeChatEventStoreV1,hasResultHistory:boolean):Promise<void>{
     await this.root();
     const body={schema:'RBRIDGE_NATIVE_V3_PEER_OWNER_V1' as const,appId:this.options.appId,peerPins:this.options.peerPins,initialHistory:this.options.initialHistory};
     const expected:Marker={...body,sha256:await canonicalDigest(body)},expectedText=canonicalJson(expected)+'\n';
@@ -68,6 +72,7 @@ export class NativeV3PeerAuthority {
     const history=await events.load(),anchor=this.options.initialHistory;
     if(history.length<anchor.sequence||(anchor.sequence>0&&history[anchor.sequence-1]?.eventSha256!==anchor.eventSha256))fail('RBRIDGE_NATIVE_HISTORY_OWNERSHIP_UNVERIFIED');
     if(text===null){
+      if(hasResultHistory)fail('RBRIDGE_NATIVE_RESULT_HISTORY_OWNERSHIP_UNVERIFIED');
       if(history.length!==anchor.sequence)fail('RBRIDGE_NATIVE_HISTORY_OWNERSHIP_UNVERIFIED');
       await this.root();
       let handle;

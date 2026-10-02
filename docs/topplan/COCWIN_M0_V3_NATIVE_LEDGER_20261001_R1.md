@@ -120,3 +120,20 @@ Pre-flight: strict V3 async validators consume immutable command; Native must re
 
 - Runtime candidate `5a955a546445cd9e07e04c1512892c945c1be8f1`: bridge #12875 target19/19 PASS; full actual-app verify209/209 PASS, clean worktree. No installed V3 capability.
 - Guard RED `7032f75cd3547ad939fe74f67abc864cf90ec65a`, bridge #12876: compile PASS, 19 PASS, 3 intended FAIL. A validly rehashed command could target a different pinned profile; invalid/oversize inputs threw synchronously from formerly async public methods. Fix validates complete parsed command target before reservation and preserves Promise rejection while taking the snapshot before any await.
+
+### Fresh whole-increment review and one combined correction pass
+
+- Reviewed exact `4e261f8a75523c03f4589e721318cd53a61caabf..67e540f8eb91c888798d7d65ae36de54570e1ac7`; one fresh-context most-capable reviewer, read-only. Critical0 / Important3 / Minor0. Important findings: unbound result-history peer adoption and cross-app marker poisoning; inactive SSH child frames entering current decoder; original replay events bypassing newly negotiated byte ceiling.
+- All three reproduced with six real behavioral cases before edits: bridge #12879 at `6492204be5d731f658e44158f31c51996580a4fe`, app1027, compile PASS, old22 PASS / new6 FAIL. Pending and complete history and cross-app all claimed a marker; old complete frame dispatched an extra command; old partial frame corrupted the current decoder; oversized anchored event transmitted.
+- One combined fix: journal owner validation and history admission under the existing writer lock before marker publication; reject any pre-existing unbound result journal, preserving original files. Child identity checked before decoding/hooks, decoder bound to its originating process. Preflight every complete original replay event against negotiated byte ceiling before any prefix transmission; no truncation, skip, resequence or reset.
+- Ruling: old foundation journals without a peer marker stay BLOCKED even when configured app/profile looks plausible — app ownership alone cannot prove historical peer pins — cost if wrong: a legitimate upgrade requires a future explicit validated migration recipe, while pending SEND/results remain preserved. No invented migration approval.
+
+- Ruling (review set-aside): Task3 ordinal/crash atomicity — unchanged COCWIN request authority — cost if wrong: must requalify at integration.
+- Ruling (review set-aside): Task7 capture baseline/ACK retry — unchanged qualified capture source — cost if wrong: whole paired release must retain its tests.
+- Ruling (review set-aside): Broker enqueue, hung browser deadlines, stale COCWIN callbacks — Task8 Linux/C and Task9 still open — cost if wrong: no end-to-end Task8/adapter acceptance.
+- Ruling (review set-aside): Exact-turn Markdown/provenance/fences/CRLF — positive acquisition Task6 blocked — cost if wrong: no V3 capability advertisement/live I1.
+- Ruling (review set-aside): Capture/rejection construction metadata — existing strict parser/capture foundation — cost if wrong: retain budget tests during final convergence.
+- Ruling (review set-aside): Fixed Linux endpoint, C broker transport, extension V3 hook/callback immutability/sticky authority — remaining source/runtime wiring open — cost if wrong: this increment cannot deliver browser effects end to end.
+- Ruling (review set-aside): Real SSH, Windows path/ACL/power-loss/install/site and I1/I2/I3 — separate platform and live gates; fake factories/SEA do not prove them — cost if wrong: production eligibility remains blocked.
+- Ruling (review set-aside): Foundation stale-lock recovery, event-store crash barriers, distributed ownership and unrelated V1 behavior — not newly qualified by this review — cost if wrong: retain unresolved evidence and never infer those acceptances.
+- No second reviewer pass is used. Required targeted/full app qualification and exact-head dedicated Linux/Windows CI remain pending for this corrected source.

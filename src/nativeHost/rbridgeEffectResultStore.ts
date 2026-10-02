@@ -67,6 +67,12 @@ export class RbridgeEffectResultStoreV3 {
     if(!Number.isSafeInteger(this.ceiling)||this.ceiling<4096||this.ceiling>65536||!Number.isSafeInteger(this.maxRecords)||this.maxRecords<1||this.maxRecords>4096||!Number.isSafeInteger(this.maxBytes)||this.maxBytes<4096||this.maxBytes>64*1024*1024)fail('RBRIDGE_NATIVE_RESULT_CONFIG_INVALID');
     this.parent=options.eventStoreRoot;this.root=join(this.parent,'v3-results');
   }
+  get eventStoreRoot():string{return this.parent;}
+  get appId():string{return this.scope.appId;}
+  /** Holds the journal writer gate while admitting a peer. Existing unbound history needs explicit migration proof. */
+  async admitPeerOwner<T>(admit:(hasHistory:boolean)=>Promise<T>):Promise<T>{
+    return this.exclusive(async()=>{const journal=await this.load();return admit(journal.revision!==0);});
+  }
 
   private async directory(path:string,create:boolean):Promise<void>{
     if(create)await mkdir(path,{mode:0o700}).catch(error=>{if(errno(error)!=='EEXIST')throw error;});

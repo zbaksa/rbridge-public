@@ -101,9 +101,14 @@ export class PersistentSshStdioSessionV1{
       const child=this.factory.launch(this.config);
       this.process=child;
       this._state='CONNECTED';
+      const decoder=this.decoder;
       child.onData(chunk=>{
+        if(this.process!==child||!this.desired||this._state!=='CONNECTED')return;
         try{
-          for(const value of this.decoder.push(chunk))this.invoke(()=>this.hooks.onMessage?.(value));
+          for(const value of decoder.push(chunk)){
+            if(this.process!==child||!this.desired||this._state!=='CONNECTED')return;
+            this.invoke(()=>this.hooks.onMessage?.(value));
+          }
           this.markHealthy();
         }catch(error){this.failActiveConnection(child,error);}
       });
