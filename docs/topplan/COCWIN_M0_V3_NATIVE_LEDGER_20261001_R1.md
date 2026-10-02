@@ -104,3 +104,10 @@ Ruling: async V3 parser is added alongside frozen synchronous V1 parser; align b
 Ruling: add archival read/record operations for a previously reserved old-generation command, distinct from current-scope reserve/read/record. Only fixed transport uses archival evidence; it never grants current-session authority — preserves original late attempt — if wrong, no opt-in until correlation tests and review pass.
 
 Pre-flight: strict V3 async validators consume immutable command; Native must reserve before browser output and record before peer send; resultStore current scope remains distinct from historical archived evidence; V1 event sequence never resets. Extension callback immutability/sticky V3 authority remains owed by Task8. C transport and broker deadlines remain subsequent source steps, not implemented by this Native increment.
+
+### Native transport implementation candidate (source only)
+
+- RED: GitHub bridge issue #12872; exact source `5a19b02c7a4000cf6a30d8eed383a5a649834c53`, actual app UID/GID 1027; compile PASS, 13/13 behavioral cases fail with the missing authority export. No runtime installation.
+- Candidate adds immutable input snapshots, configured HELLO pin checks, private persistent app/peer/history authority, reservation before browser dispatch, result journal readback before peer forwarding, retained old-generation result correlation and original event/result replay. Async V3 routing remains separate from the frozen synchronous V1 parser.
+- Ruling: keep this Native increment separate from the still pending fixed Linux peer, C broker transport and Task10 extension worker integration — each has its own wire/identity and TDD gate — cost if wrong: partial source must not be mistaken for operational V3 acceptance.
+- Native runtime/config integration and whole-branch review are still pending; Task8 remains OPEN, qualified plan completion stays 6/12. Browser original Markdown and I1/I2/I3 remain blocked/not run. Production unchanged.
