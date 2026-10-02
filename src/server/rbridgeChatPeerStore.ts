@@ -128,6 +128,13 @@ export class RbridgeChatPeerStoreV3 {
   }
   private async saveChannel(channel:Omit<Channel,'sha256'>):Promise<void>{await this.atomic('channel.json',canonicalJson({...channel,sha256:await canonicalDigest(channel)})+'\n');}
   async peer():Promise<VerifiedPeerV3>{return this.exclusive(async c=>structuredClone((await this.channel(c)).peerPins));}
+  /** Admission for the fixed installed stdio channel; peer pins come only from private configuration. */
+  async acceptHello(input:unknown):Promise<VerifiedPeerV3>{
+    const immutable=snapshotNativeMessage(input,16384);
+    if((immutable as {schema?:unknown})?.schema!=='RBRIDGE_CHAT_HELLO_V1')fail('RBRIDGE_PEER_HELLO_REQUIRED');
+    const pins=await this.exclusive(async c=>structuredClone(c.config.peerPins));
+    await this.recordIncoming(immutable,pins);return pins;
+  }
   async heartbeat():Promise<void>{return this.exclusive(async c=>{const {sha256,...channel}=await this.channel(c,true);void sha256;channel.updatedAt=Date.now();await this.saveChannel(channel);});}
   async disconnect():Promise<void>{return this.exclusive(async()=>{if(this.channelId===null)return;const text=await this.file(join(this.dataRoot,'channel.json'),16384);if(text!==null&&JSON.parse(text).channelId===this.channelId){await unlink(join(this.dataRoot,'channel.json'));await this.sync(this.dataRoot);}this.channelId=null;});}
   async stageChunk(input:unknown):Promise<void>{
