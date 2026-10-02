@@ -22,6 +22,15 @@ const hello:RbridgeChatHelloV1={schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1,p
 const activeChannels=new Set<{input:PassThrough;output:Writable;run:Promise<void>}>();
 async function fixtureRoot(fn:(store:RbridgeChatPeerStoreV3,path:string)=>Promise<void>){const path=await realpath(await mkdtemp(join(tmpdir(),'rbridge-fixed-stdio-')));try{await writeFile(join(path,'v3-peer-config.json'),canonicalJson({schema:'RBRIDGE_CHAT_PEER_CONFIG_V3',scope,peerPins:pins,initialHistory:{sequence:0,eventSha256:null}})+'\n',{mode:0o600});await fn(new RbridgeChatPeerStoreV3(path),path);}finally{const active=[...activeChannels];for(const c of active){c.input.destroy();c.output.destroy();}await Promise.allSettled(active.map(c=>c.run));activeChannels.clear();await rm(path,{recursive:true,force:true});}}
 async function until(fn:()=>boolean|Promise<boolean>,timeout=2000){const end=Date.now()+timeout;while(!await fn()){if(Date.now()>end)assert.fail('FIXED_STDIO_CONDITION_TIMEOUT');await new Promise(resolve=>setTimeout(resolve,10));}}
+async function durableReplayCompletion(count:()=>number,expected:number,run:Promise<void>):Promise<void>{
+  let timer:ReturnType<typeof setInterval>|undefined,deadline:ReturnType<typeof setTimeout>|undefined;
+  const complete=new Promise<void>((resolve,reject)=>{
+    timer=setInterval(()=>{if(count()===expected)resolve();},10);
+    deadline=setTimeout(()=>reject(Error('FIXTURE_DURABLE_REPLAY_TIMEOUT')),60000);
+  });
+  try{await Promise.race([complete,run.then(()=>{throw Error('FIXTURE_CHANNEL_ENDED_BEFORE_REPLAY');})]);}
+  finally{if(timer)clearInterval(timer);if(deadline)clearTimeout(deadline);}
+}
 function channels(store:RbridgeChatPeerStoreV3){assert.ok(stdioModule,'FIXED_STDIO_NOT_IMPLEMENTED');const input=new PassThrough(),output=new PassThrough(),messages:unknown[]=[],decoder=new StdioFrameDecoder();output.on('data',(data:Buffer)=>messages.push(...decoder.push(data)));const run=stdioModule.runRbridgeChatStdio(input,output,store);void run.catch(()=>undefined);activeChannels.add({input,output,run});return {input,output,messages,run};}
 async function helloChannel(store:RbridgeChatPeerStoreV3){const c=channels(store);c.input.write(encodeStdioFrame(hello));await until(()=>c.messages.length===1);assert.deepEqual(c.messages[0],hello);return c;}
 const encoded=(value:unknown)=>Buffer.from(canonicalJson(value)).toString('base64');
@@ -94,21 +103,22 @@ if(process.platform==='linux')await test('separate_cli_and_stdio_contention_comp
 }));else console.log('SKIP V3_FIXED_STDIO separate Linux installed-endpoint process probe');
 
 for(const fragmented of [false,true])await test('supported_history_over_128_frames_'+(fragmented?'fragmented':'coalesced'),()=>fixtureRoot(async(store,path)=>{
+  let received=0;const original=store.recordIncoming.bind(store);store.recordIncoming=async(message,p)=>{await original(message,p);if((message as {schema?:string}).schema==='RBRIDGE_CHAT_EVENT_V1')received++;};
   const channel=await helloChannel(store),spool=new RbridgeEventSpoolV1(),events=[];
   for(let i=0;i<160;i++)events.push(await spool.append({eventId:'bounded-replay-'+i,eventType:'BINDING_LOST',sessionId:scope.sessionId,generation:scope.generation,attemptId:null,effectId:null,observedAt:'2026-10-02T12:00:00.000Z',payload:{reason:'UI_PROTOCOL_CHANGED'}}));
   const frames=Buffer.concat(events.map(e=>encodeStdioFrame(e)));assert.ok(frames.length<262144);
   if(fragmented){for(let offset=0;offset<frames.length;offset+=113)channel.input.write(frames.subarray(offset,offset+113));}else channel.input.write(frames);
-  await until(async()=>Boolean(await new RbridgeChatPeerStoreV3(path).readEvent(159).catch(error=>{if(error instanceof Error&&error.message==='RBRIDGE_EVENT_SEQUENCE_GAP')return null;throw error;})),10000);
+  await durableReplayCompletion(()=>received,160,channel.run);
   assert.deepEqual(await store.readEvent(0),events[0]);assert.deepEqual(await store.readEvent(159),events[159]);assert.equal(await store.readEvent(160),null);assert.deepEqual(await store.peer(),pins);
   channel.input.end();await channel.run;
 }));
 await test('backpressured_valid_replay_keeps_owned_heartbeat_fresh',()=>fixtureRoot(async(store,path)=>{
-  const original=store.recordIncoming.bind(store);
-  store.recordIncoming=async(message,p)=>{if((message as {schema?:string}).schema==='RBRIDGE_CHAT_EVENT_V1')await new Promise(r=>setTimeout(r,45));await original(message,p);};
+  let received=0;const original=store.recordIncoming.bind(store);
+  store.recordIncoming=async(message,p)=>{const event=(message as {schema?:string}).schema==='RBRIDGE_CHAT_EVENT_V1';if(event)await new Promise(r=>setTimeout(r,45));await original(message,p);if(event)received++;};
   const channel=await helloChannel(store),spool=new RbridgeEventSpoolV1(),events=[];
   for(let i=0;i<140;i++)events.push(await spool.append({eventId:'slow-bounded-replay-'+i,eventType:'BINDING_LOST',sessionId:scope.sessionId,generation:scope.generation,attemptId:null,effectId:null,observedAt:'2026-10-02T12:00:00.000Z',payload:{reason:'UI_PROTOCOL_CHANGED'}}));
   channel.input.write(Buffer.concat(events.map(e=>encodeStdioFrame(e))));
-  await until(async()=>Boolean(await new RbridgeChatPeerStoreV3(path).readEvent(139).catch(error=>{if(error instanceof Error&&error.message==='RBRIDGE_EVENT_SEQUENCE_GAP')return null;throw error;})),18000);assert.deepEqual(await store.readEvent(139),events[139]);assert.deepEqual(await store.peer(),pins);channel.input.end();await channel.run;
+  await durableReplayCompletion(()=>received,140,channel.run);assert.deepEqual(await store.readEvent(139),events[139]);assert.deepEqual(await store.peer(),pins);channel.input.end();await channel.run;
 }));
 
 console.log(JSON.stringify({suite:'W1_V3_FIXED_STDIO',passed,failed,installedForcedCommand:'NOT_RUN',liveAcceptance:'NOT_RUN'}));if(failed)process.exitCode=1;
