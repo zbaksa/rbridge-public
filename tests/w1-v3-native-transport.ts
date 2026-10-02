@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {mkdtemp,realpath,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,readFile,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
@@ -145,12 +145,15 @@ await test('v3_authority_cannot_downgrade_on_peer_reconnect',()=>root(async path
 class FakeSsh implements SshProcessHandleV1 {
   writes:Uint8Array[]=[];killed=false;
   private data:(bytes:Uint8Array)=>void=()=>{};
+  private closed:(code:number|null,signal:string|null)=>void=()=>{};
   write(bytes:Uint8Array){this.writes.push(bytes);}
   onData(fn:(bytes:Uint8Array)=>void){this.data=fn;}
-  onClose(_fn:(code:number|null,signal:string|null)=>void){void _fn;}
+  onClose(fn:(code:number|null,signal:string|null)=>void){this.closed=fn;}
   onError(_fn:(error:Error)=>void){void _fn;}
   kill(){this.killed=true;}
   emit(value:unknown){this.data(encodeStdioFrame(value));}
+  emitBytes(bytes:Uint8Array){this.data(bytes);}
+  close(){this.closed(255,null);}
 }
 function runtimeConfig(path:string){return {
   schema:'RBRIDGE_NATIVE_HOST_CONFIG_V1',expectedExtensionId:'a'.repeat(32),eventStoreRoot:path,
@@ -234,6 +237,58 @@ await test('configured_small_peer_budget_rejects_complete_oversize_command',()=>
   const {relay,results}=await make(path,{pins:smallPins});await relay.acceptBrowserMessage(smallHello);await relay.peerConnected();await relay.acceptServerMessage(smallHello);
   const large=structuredClone(send.command);assert.ok('text' in large.request.payload);large.request.payload.text='x'.repeat(48000);await rehash(large);
   await assert.rejects(()=>relay.acceptServerMessage(large),/BUDGET/);assert.equal(await results.read(large.commandId),null);
+}));
+for(const completed of [false,true])await test('unbound_'+(completed?'complete':'pending')+'_result_history_cannot_acquire_new_peer_owner',()=>root(async path=>{
+  const events=new RbridgeChatEventStoreV1({root:path});await events.load();
+  const results=new RbridgeEffectResultStoreV3({eventStoreRoot:path,scope,maxMessageBytes:65536});
+  await results.reserve(completed?bind.command:send.command);if(completed)await results.record(bind.result);
+  const journal=await readFile(join(path,'v3-results/journal.json')),owner=await readFile(join(path,'v3-results/authority.json'));
+  const newPins={...pins,peerId:'different-fixed-peer',browserProfileId:'different-profile'},newHello={...hello,browserProfileId:newPins.browserProfileId};
+  const {relay,messages}=await make(path,{pins:newPins});await assert.rejects(()=>relay.acceptBrowserMessage(newHello),/HISTORY|OWNERSHIP/);
+  await assert.rejects(()=>readFile(join(path,'v3-peer-owner.json')),/ENOENT/);assert.equal(messages.length,0);
+  assert.deepEqual(await readFile(join(path,'v3-results/journal.json')),journal);assert.deepEqual(await readFile(join(path,'v3-results/authority.json')),owner);
+}));
+await test('unbound_cross_app_journal_cannot_poison_rightful_peer_owner',()=>root(async path=>{
+  const events=new RbridgeChatEventStoreV1({root:path});await events.load();
+  const results=new RbridgeEffectResultStoreV3({eventStoreRoot:path,scope,maxMessageBytes:65536});await results.reserve(send.command);
+  const journal=await readFile(join(path,'v3-results/journal.json'));
+  const other=await make(path,{scope:{...scope,appId:'other-app'}});
+  await assert.rejects(()=>other.relay.acceptBrowserMessage(hello),/OWNER|OWNERSHIP|HISTORY/);
+  await assert.rejects(()=>readFile(join(path,'v3-peer-owner.json')),/ENOENT/);assert.deepEqual(await readFile(join(path,'v3-results/journal.json')),journal);
+}));
+async function replacedRuntime(path:string){
+  const handles:FakeSsh[]=[],scheduled:(()=>void)[]=[],output:Uint8Array[]=[],errors:string[]=[];
+  const host=new NativeHostRuntimeV1(runtimeConfig(path),{write:bytes=>output.push(bytes)},{onProtocolError:e=>{errors.push(e.message);},onTransportError:e=>{errors.push(e.message);}},{processFactory:{launch:()=>{const ssh=new FakeSsh();handles.push(ssh);return ssh;}},scheduler:{set:(_delay,fn)=>{scheduled.push(fn);return fn;},clear:()=>{}}});
+  try{
+    host.start(['chrome-extension://'+'a'.repeat(32)+'/']);await host.acceptNativeChunk(encodeNativeMessage(hello));await until(()=>handles[0]!.writes.length===1);
+    handles[0]!.emit(hello);await until(()=>output.length===1||errors.length>0);assert.deepEqual(errors,[]);
+    handles[0]!.close();await until(()=>scheduled.length===1);scheduled[0]!();await until(()=>handles.length===2&&handles[1]!.writes.length===1);
+    handles[1]!.emit(hello);await until(()=>output.length===2||errors.length>0);assert.deepEqual(errors,[]);
+    return {host,old:handles[0]!,current:handles[1]!,output,errors};
+  }catch(error){host.stop();throw error;}
+}
+await test('inactive_ssh_child_complete_frame_has_no_new_channel_authority',()=>root(async path=>{
+  const {host,old,current,output,errors}=await replacedRuntime(path);
+  try{
+    old.emit(bind.command);await new Promise(r=>setTimeout(r,30));assert.equal(output.length,2);assert.deepEqual(errors,[]);
+    const results=new RbridgeEffectResultStoreV3({eventStoreRoot:path,scope,maxMessageBytes:65536});assert.equal(await results.read(bind.command.commandId),null);
+    current.emit(bind.command);await until(()=>output.length===3||errors.length>0);assert.deepEqual(errors,[]);assert.deepEqual(new NativeMessageDecoder().push(output[2]!),[bind.command]);
+  }finally{host.stop();}
+}));
+await test('inactive_ssh_child_partial_frame_cannot_corrupt_current_decoder',()=>root(async path=>{
+  const {host,old,current,output,errors}=await replacedRuntime(path);
+  try{
+    old.emitBytes(new TextEncoder().encode('{"schema":"RBRIDGE'));current.emit(bind.command);
+    await until(()=>output.length===3||errors.length>0);assert.deepEqual(errors,[]);assert.equal(host.protocolReady,true);
+    assert.deepEqual(new NativeMessageDecoder().push(output[2]!),[bind.command]);
+  }finally{host.stop();}
+}));
+await test('oversize_anchored_legacy_event_is_preserved_without_replay_transmission',()=>root(async path=>{
+  const spool=new RbridgeEventSpoolV1(),original=await spool.append({eventId:'legacy-large-event',eventType:'RESPONSE_CAPTURED',sessionId:scope.sessionId,generation:scope.generation,attemptId:null,effectId:null,observedAt:'2026-10-02T11:00:00.000Z',payload:{captureReceipt:{schema:'COCWIN_RECEIPT_REF_V1',receiptId:'legacy-large-receipt',receiptSchema:'RBRIDGE_TEST_RECEIPT_V1',sha256:'d'.repeat(64)},machineBlockUtf8:'x'.repeat(5000)}});
+  const events=new RbridgeChatEventStoreV1({root:path});await events.append(original);
+  const smallHello={...hello,maxMessageBytes:4096},{relay,messages}=await make(path,{pins:{...pins,maxMessageBytes:4096},anchor:{sequence:original.sequence,eventSha256:original.eventSha256}});
+  await relay.acceptBrowserMessage(smallHello);await relay.peerConnected();await assert.rejects(()=>relay.acceptServerMessage(smallHello),/BUDGET/);
+  assert.equal(relay.protocolReady,false);assert.deepEqual(messages,[smallHello]);assert.deepEqual(await events.load(),[original]);
 }));
 console.log(JSON.stringify({suite:'W1_V3_NATIVE_TRANSPORT',passed,failed,liveAcceptance:'NOT_RUN',fixedLinuxEndpoint:'NOT_IMPLEMENTED_IN_THIS_INCREMENT'}));
 if(failed)process.exitCode=1;
