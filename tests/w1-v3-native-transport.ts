@@ -6,6 +6,11 @@ import {join} from 'node:path';
 import {RbridgeChatEventStoreV1} from '../src/server/rbridgeChatEventStore.js';
 import {RbridgeEffectResultStoreV3} from '../src/nativeHost/rbridgeEffectResultStore.js';
 import {NativeHostRelayV1} from '../src/nativeHost/nativeHostRelay.js';
+import {NativeHostRuntimeV1} from '../src/nativeHost/nativeHostRuntime.js';
+import {parseNativeHostConfigV1} from '../src/nativeHost/nativeHostConfig.js';
+import {NativeMessageDecoder,encodeNativeMessage} from '../src/transport/nativeMessaging.js';
+import {StdioFrameDecoder,encodeStdioFrame} from '../src/transport/sshStdio.js';
+import type {SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
 import {REQUIRED_RBRIDGE_CAPABILITIES,RbridgeEventSpoolV1,type RbridgeChatHelloV1} from '../src/domain/rbridgeChatCore.js';
 import {type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope,type VerifiedPeerV3} from '../src/domain/rbridgeEffectProtocol.js';
 
@@ -136,6 +141,76 @@ await test('v3_authority_cannot_downgrade_on_peer_reconnect',()=>root(async path
   const {relay}=await make(path);await ready(relay);relay.peerDisconnected();await relay.peerConnected();
   await assert.rejects(()=>relay.acceptServerMessage({...hello,protocolMinor:0,capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES]}),/PIN|PEER|CAPABILITY|DOWNGRADE/);
   assert.equal(relay.protocolReady,false);
+}));
+class FakeSsh implements SshProcessHandleV1 {
+  writes:Uint8Array[]=[];killed=false;
+  private data:(bytes:Uint8Array)=>void=()=>{};
+  write(bytes:Uint8Array){this.writes.push(bytes);}
+  onData(fn:(bytes:Uint8Array)=>void){this.data=fn;}
+  onClose(_fn:(code:number|null,signal:string|null)=>void){void _fn;}
+  onError(_fn:(error:Error)=>void){void _fn;}
+  kill(){this.killed=true;}
+  emit(value:unknown){this.data(encodeStdioFrame(value));}
+}
+function runtimeConfig(path:string){return {
+  schema:'RBRIDGE_NATIVE_HOST_CONFIG_V1',expectedExtensionId:'a'.repeat(32),eventStoreRoot:path,
+  ssh:{sshPath:join(path,'ssh'),host:'aether-engine',port:22,user:'rbridge' as const,identityFile:join(path,'id'),knownHostsFile:join(path,'known-hosts')},
+  v3:{scope,peerPins:pins,initialHistory:{sequence:0,eventSha256:null}},
+};}
+async function until(fn:()=>boolean):Promise<void>{for(let i=0;i<200;i++){if(fn())return;await new Promise(r=>setTimeout(r,5));}assert.ok(fn(),'NATIVE_RUNTIME_OPERATION_DID_NOT_SETTLE');}
+function runtime(path:string){
+  const ssh=new FakeSsh(),output:Uint8Array[]=[],errors:string[]=[];
+  const host=new NativeHostRuntimeV1(runtimeConfig(path),{write:bytes=>output.push(bytes)},{onProtocolError:e=>{errors.push(e.message);}},{processFactory:{launch:()=>ssh},scheduler:{set:()=>null,clear:()=>{}}});
+  host.start(['chrome-extension://'+'a'.repeat(32)+'/']);
+  return {host,ssh,output,errors};
+}
+await test('native_private_config_accepts_only_complete_strict_v3_pins',()=>root(async path=>{
+  const config=runtimeConfig(path),parsed=parseNativeHostConfigV1(config) as unknown as {v3:unknown};
+  assert.deepEqual(parsed.v3,config.v3);
+  for(const v3 of [{...config.v3,arbitraryExecutable:'denied'},{...config.v3,scope:{...scope,appId:'-bad'}},{...config.v3,peerPins:{...pins,capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES]}},{...config.v3,peerPins:{...pins,arbitraryRoot:path}},{...config.v3,initialHistory:{sequence:1,eventSha256:null}}])assert.throws(()=>parseNativeHostConfigV1({...config,v3}));
+  config.v3.peerPins={...pins,releaseSha:'2'.repeat(40)};assert.equal((parsed.v3 as {peerPins:VerifiedPeerV3}).peerPins.releaseSha,pins.releaseSha);
+}));
+await test('native_runtime_reserves_before_framed_browser_output',()=>root(async path=>{
+  const {host,ssh,output,errors}=runtime(path);
+  try{
+    await host.acceptNativeChunk(encodeNativeMessage(hello));await until(()=>ssh.writes.length===1);
+    ssh.emit(hello);await until(()=>output.length===1||errors.length>0);assert.deepEqual(errors,[]);assert.equal(host.protocolReady,true);
+    ssh.emit(bind.command);await until(()=>output.length===2||errors.length>0);assert.deepEqual(errors,[]);
+    const frame=new NativeMessageDecoder().push(output[1]!);assert.deepEqual(frame,[bind.command]);
+    const results=new RbridgeEffectResultStoreV3({eventStoreRoot:path,scope,maxMessageBytes:65536});assert.deepEqual((await results.read(bind.command.commandId))?.command,bind.command);
+    await host.acceptNativeChunk(encodeNativeMessage(bind.result));assert.deepEqual((await results.read(bind.command.commandId))?.result,bind.result);
+    assert.deepEqual(new StdioFrameDecoder().push(ssh.writes.at(-1)!),[bind.result]);
+  }finally{host.stop();}
+}));
+await test('native_runtime_restart_replays_exact_framed_event_and_result',()=>root(async path=>{
+  const first=runtime(path),original=await event();
+  try{
+    await first.host.acceptNativeChunk(encodeNativeMessage(hello));await until(()=>first.ssh.writes.length===1);first.ssh.emit(hello);await until(()=>first.host.protocolReady||first.errors.length>0);assert.deepEqual(first.errors,[]);
+    first.ssh.emit(bind.command);await until(()=>first.output.length===2||first.errors.length>0);assert.deepEqual(first.errors,[]);
+    await first.host.acceptNativeChunk(encodeNativeMessage(original));await first.host.acceptNativeChunk(encodeNativeMessage(bind.result));
+  }finally{first.host.stop();}
+  const next=runtime(path);
+  try{
+    await next.host.acceptNativeChunk(encodeNativeMessage(hello));await until(()=>next.ssh.writes.length===1);next.ssh.emit(hello);await until(()=>next.output.length===1||next.errors.length>0);assert.deepEqual(next.errors,[]);
+    const decoder=new StdioFrameDecoder(),replayed=next.ssh.writes.flatMap(bytes=>decoder.push(bytes));assert.deepEqual(replayed,[hello,original,bind.result]);
+  }finally{next.host.stop();}
+}));
+await test('private_peer_marker_corruption_blocks_restart_without_relabeling',()=>root(async path=>{
+  const a=await make(path);await ready(a.relay);await a.relay.acceptServerMessage(send.command);
+  await writeFile(join(path,'v3-peer-owner.json'),'{}\n',{mode:0o600});
+  const b=await make(path);await assert.rejects(()=>b.relay.acceptBrowserMessage(hello),/OWNER|PIN/);
+  assert.deepEqual((await a.results.read(send.command.commandId))?.command,send.command);
+}));
+await test('disconnect_during_reservation_blocks_dispatch_but_retains_original',()=>root(async path=>{
+  const {relay,results}=await make(path);await ready(relay);const reserve=results.reserve.bind(results);
+  results.reserve=async input=>{const command=await reserve(input);relay.peerDisconnected();return command;};
+  await assert.rejects(()=>relay.acceptServerMessage(bind.command),/CONNECTION_CHANGED/);
+  assert.deepEqual((await results.read(bind.command.commandId))?.command,bind.command);
+}));
+await test('queued_wire_mutation_does_not_change_reserved_command',()=>root(async path=>{
+  const {relay,results}=await make(path);await ready(relay);const input=structuredClone(bind.command);
+  const pending=relay.acceptServerMessage(input);input.commandId='mutated-after-call';
+  assert.deepEqual((await pending).message.value,bind.command);assert.deepEqual((await results.read(bind.command.commandId))?.command,bind.command);
 }));
 console.log(JSON.stringify({suite:'W1_V3_NATIVE_TRANSPORT',passed,failed,liveAcceptance:'NOT_RUN',fixedLinuxEndpoint:'NOT_IMPLEMENTED_IN_THIS_INCREMENT'}));
 if(failed)process.exitCode=1;
