@@ -117,3 +117,6 @@ Pre-flight: strict V3 async validators consume immutable command; Native must re
 
 - Runtime/config RED: bridge #12874 exact `367f5224e54a9ad8536e19b6c01686784248e75f`, actual app1027; compile PASS; 16 existing/relay checks PASS and 3 intended private config/runtime checks FAIL (`CONFIG_FIELDS_INVALID` / `V3_NOT_CONFIGURED`).
 - Runtime candidate enables V3 only with explicit complete private configuration; default V3 stays closed. Existing extension worker still advertises V1, and Linux peer/C transport/Task10/installation are pending. Portable Windows CI explicitly runs the new Native transport suite before packaging.
+
+- Runtime candidate `5a955a546445cd9e07e04c1512892c945c1be8f1`: bridge #12875 target19/19 PASS; full actual-app verify209/209 PASS, clean worktree. No installed V3 capability.
+- Guard RED `7032f75cd3547ad939fe74f67abc864cf90ec65a`, bridge #12876: compile PASS, 19 PASS, 3 intended FAIL. A validly rehashed command could target a different pinned profile; invalid/oversize inputs threw synchronously from formerly async public methods. Fix validates complete parsed command target before reservation and preserves Promise rejection while taking the snapshot before any await.

@@ -40,7 +40,7 @@ export class NativeHostRelayV1{
     });
   }
   peerDisconnected():void{this.epoch++;this.transportConnected=false;this.negotiated=null;}
-  acceptBrowserMessage(input:unknown):Promise<BrowserRelayResultV1>{
+  async acceptBrowserMessage(input:unknown):Promise<BrowserRelayResultV1>{
     const immutable=snapshotNativeMessage(input,this.v3?.authority.maxMessageBytes??65536);
     return this.serial(async()=>{
       await this.admit();
@@ -73,7 +73,7 @@ export class NativeHostRelayV1{
       await this.peer.send(routed.value);this.current(epoch,negotiated);return 'EVENT_DURABLE_FORWARDED';
     });
   }
-  acceptServerMessage(input:unknown):Promise<ServerRelayResultV1>{
+  async acceptServerMessage(input:unknown):Promise<ServerRelayResultV1>{
     const immutable=snapshotNativeMessage(input,this.v3?.authority.maxMessageBytes??65536),epoch=this.epoch;
     return this.serial(async()=>{
       if(!this.transportConnected)throw Error('RBRIDGE_PEER_NOT_CONNECTED');this.current(epoch);
@@ -84,6 +84,7 @@ export class NativeHostRelayV1{
         const negotiated=this.negotiated;if(!negotiated)throw Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
         if(message.kind==='EFFECT_COMMAND'){
           if(!this.v3)throw Error('RBRIDGE_V3_NOT_CONFIGURED');
+          this.v3.authority.validateTarget(message.value.request.payload.target);
           const command=await this.v3.results.reserve(message.value);this.current(epoch,negotiated);
           return {message:{kind:'EFFECT_COMMAND',value:command},negotiated:structuredClone(negotiated),replayedEvents:0,replayedResults:0};
         }

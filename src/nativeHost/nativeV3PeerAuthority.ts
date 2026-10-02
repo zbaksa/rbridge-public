@@ -2,7 +2,7 @@ import {constants} from 'node:fs';
 import {lstat,open,realpath} from 'node:fs/promises';
 import {isAbsolute,join,resolve} from 'node:path';
 import {parseHello,type RbridgeChatHelloV1} from '../domain/rbridgeChatCore.js';
-import {canonicalDigest,canonicalJson,requireV3Peer,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
+import {canonicalDigest,canonicalJson,requireV3Peer,type ExactBrowserTargetV1,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
 import type {RbridgeChatEventStoreV1} from '../server/rbridgeChatEventStore.js';
 
 export interface NativeV3HistoryAnchor {sequence:number;eventSha256:string|null}
@@ -27,6 +27,10 @@ export class NativeV3PeerAuthority {
     if(!Number.isSafeInteger(initialHistory.sequence)||initialHistory.sequence<0||(initialHistory.sequence===0?initialHistory.eventSha256!==null:typeof initialHistory.eventSha256!=='string'||! /^[a-f0-9]{64}$/.test(initialHistory.eventSha256)))fail('RBRIDGE_NATIVE_HISTORY_ANCHOR_INVALID');
   }
   get maxMessageBytes():number{return this.options.peerPins.maxMessageBytes;}
+  validateTarget(target:ExactBrowserTargetV1):void{
+    const pins=this.options.peerPins;
+    if(target.browserInstanceId!==pins.browserInstanceId||target.browserProfileId!==pins.browserProfileId)fail('RBRIDGE_NATIVE_COMMAND_TARGET_PIN_MISMATCH');
+  }
   validateHello(input:unknown):RbridgeChatHelloV1{
     const hello=parseHello(input),pins=this.options.peerPins;
     if(hello.protocolMinor!==pins.protocolMinor||hello.releaseSha!==pins.releaseSha||hello.browserInstanceId!==pins.browserInstanceId||hello.browserProfileId!==pins.browserProfileId)fail('RBRIDGE_NATIVE_PEER_PIN_MISMATCH');
