@@ -3,6 +3,9 @@ import type {SshStdioLaunchConfig} from '../transport/sshStdio.js';
 import {RbridgeChatEventStoreV1} from '../server/rbridgeChatEventStore.js';
 import {parseNativeHostInvocation,type NativeHostInvocationV1} from './nativeHostInvocation.js';
 import {NativeHostRelayV1} from './nativeHostRelay.js';
+import {NativeV3PeerAuthority,type NativeV3HistoryAnchor} from './nativeV3PeerAuthority.js';
+import {RbridgeEffectResultStoreV3} from './rbridgeEffectResultStore.js';
+import type {V3Scope,VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
 import {
   PersistentSshStdioSessionV1,
   type ReconnectSchedulerV1,
@@ -15,6 +18,8 @@ export interface NativeHostRuntimeConfigV1 {
   ssh:SshStdioLaunchConfig;
   maxEvents?:number;
   maxEventBytes?:number;
+  /** Owner-approved private pins. Absent means V3 remains closed. */
+  v3?:{scope:V3Scope;peerPins:VerifiedPeerV3;initialHistory:NativeV3HistoryAnchor};
 }
 
 export interface NativeHostBinaryOutputV1 {
@@ -46,6 +51,7 @@ export class NativeHostRuntimeV1 {
     private readonly hooks:NativeHostRuntimeHooksV1={},
     dependencies:NativeHostRuntimeDependenciesV1={},
   ){
+    this.config=structuredClone(config);config=this.config;
     const store=new RbridgeChatEventStoreV1({
       root:config.eventStoreRoot,
       ...(config.maxEvents===undefined?{}:{maxEvents:config.maxEvents}),
@@ -60,7 +66,10 @@ export class NativeHostRuntimeV1 {
           throw new Error('RBRIDGE_SSH_NOT_CONNECTED');
         }
       },
-    });
+    },config.v3?{
+      results:new RbridgeEffectResultStoreV3({eventStoreRoot:config.eventStoreRoot,scope:config.v3.scope,maxMessageBytes:config.v3.peerPins.maxMessageBytes}),
+      authority:new NativeV3PeerAuthority({eventStoreRoot:config.eventStoreRoot,appId:config.v3.scope.appId,peerPins:config.v3.peerPins,initialHistory:config.v3.initialHistory}),
+    }:undefined);
 
     const session=new PersistentSshStdioSessionV1(
       config.ssh,
@@ -69,6 +78,7 @@ export class NativeHostRuntimeV1 {
         onMessage:async value=>{
           try{
             const accepted=await this.relay.acceptServerMessage(value);
+            if(!this.started||!this.relay.protocolReady)throw Error('RBRIDGE_NATIVE_RUNTIME_STALE_OUTPUT');
             this.output.write(encodeNativeMessage(accepted.message.value));
           }catch(cause){
             await this.invokeHook(this.hooks.onProtocolError,error(cause));

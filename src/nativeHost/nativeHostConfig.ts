@@ -1,6 +1,8 @@
 import {lstat,readFile,realpath} from 'node:fs/promises';
 import {isAbsolute,resolve} from 'node:path';
 import type {NativeHostRuntimeConfigV1} from './nativeHostRuntime.js';
+import {parseV3Scope,requireV3Peer,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
+import {NativeV3PeerAuthority,type NativeV3HistoryAnchor} from './nativeV3PeerAuthority.js';
 
 export interface NativeHostConfigFileV1 extends NativeHostRuntimeConfigV1 {
   schema:'RBRIDGE_NATIVE_HOST_CONFIG_V1';
@@ -27,7 +29,7 @@ function samePath(a:string,b:string):boolean{
 }
 export function parseNativeHostConfigV1(input:unknown):NativeHostConfigFileV1{
   const row=object(input);
-  exact(row,['schema','expectedExtensionId','eventStoreRoot','ssh'],['maxEvents','maxEventBytes']);
+  exact(row,['schema','expectedExtensionId','eventStoreRoot','ssh'],['maxEvents','maxEventBytes','v3']);
   if(row.schema!=='RBRIDGE_NATIVE_HOST_CONFIG_V1')fail('RBRIDGE_NATIVE_CONFIG_SCHEMA_INVALID');
   if(typeof row.expectedExtensionId!=='string'||!EXTENSION_ID.test(row.expectedExtensionId))fail('RBRIDGE_EXTENSION_ID_INVALID');
   const ssh=object(row.ssh);
@@ -39,10 +41,23 @@ export function parseNativeHostConfigV1(input:unknown):NativeHostConfigFileV1{
   const maxEventBytes=row.maxEventBytes;
   if(maxEvents!==undefined&&(!Number.isInteger(maxEvents)||Number(maxEvents)<1||Number(maxEvents)>100000))fail('RBRIDGE_NATIVE_CONFIG_EVENT_LIMIT_INVALID');
   if(maxEventBytes!==undefined&&(!Number.isInteger(maxEventBytes)||Number(maxEventBytes)<4096||Number(maxEventBytes)>64*1024*1024))fail('RBRIDGE_NATIVE_CONFIG_BYTE_LIMIT_INVALID');
+  const eventStoreRoot=abs(row.eventStoreRoot,'RBRIDGE_EVENT_STORE_ROOT_INVALID');
+  let v3:NativeHostRuntimeConfigV1['v3'];
+  if(row.v3!==undefined){
+    const config=object(row.v3);exact(config,['scope','peerPins','initialHistory']);
+    const scope=parseV3Scope(config.scope),peer=object(config.peerPins);
+    exact(peer,['peerId','releaseSha','browserInstanceId','browserProfileId','protocolMinor','maxMessageBytes','capabilities']);
+    const peerPins=structuredClone(peer) as unknown as VerifiedPeerV3;requireV3Peer(peerPins);
+    const history=object(config.initialHistory);exact(history,['sequence','eventSha256']);
+    const initialHistory=structuredClone(history) as unknown as NativeV3HistoryAnchor;
+    // Constructor validates the trusted root/app/prefix tuple without touching filesystem or opening a channel.
+    new NativeV3PeerAuthority({eventStoreRoot,appId:scope.appId,peerPins,initialHistory});
+    v3={scope,peerPins,initialHistory};
+  }
   return {
     schema:'RBRIDGE_NATIVE_HOST_CONFIG_V1',
     expectedExtensionId:row.expectedExtensionId,
-    eventStoreRoot:abs(row.eventStoreRoot,'RBRIDGE_EVENT_STORE_ROOT_INVALID'),
+    eventStoreRoot,
     ssh:{
       sshPath:abs(ssh.sshPath,'RBRIDGE_SSH_PATH_INVALID'),
       host:ssh.host,port:ssh.port,user:'rbridge',
@@ -51,6 +66,7 @@ export function parseNativeHostConfigV1(input:unknown):NativeHostConfigFileV1{
     },
     ...(maxEvents===undefined?{}:{maxEvents:Number(maxEvents)}),
     ...(maxEventBytes===undefined?{}:{maxEventBytes:Number(maxEventBytes)}),
+    ...(v3===undefined?{}:{v3}),
   };
 }
 export async function loadNativeHostConfigV1(path:string):Promise<NativeHostConfigFileV1>{

@@ -114,3 +114,6 @@ Pre-flight: strict V3 async validators consume immutable command; Native must re
 
 - Native relay candidate `913fbb15075a7b85fb9f1cffd8f13bdf5608563e`: bridge #12873, actual app1027 target13/13 PASS; full verify203/203 PASS, clean worktree. These qualify the relay source, not runtime wiring.
 - Add runtime/config behavioral cases before implementation: complete strict private pins, actual framed Native runtime reservation/forwarding, and restart replay. Additional corruption/disconnect/input snapshot cases qualify the relay boundary.
+
+- Runtime/config RED: bridge #12874 exact `367f5224e54a9ad8536e19b6c01686784248e75f`, actual app1027; compile PASS; 16 existing/relay checks PASS and 3 intended private config/runtime checks FAIL (`CONFIG_FIELDS_INVALID` / `V3_NOT_CONFIGURED`).
+- Runtime candidate enables V3 only with explicit complete private configuration; default V3 stays closed. Existing extension worker still advertises V1, and Linux peer/C transport/Task10/installation are pending. Portable Windows CI explicitly runs the new Native transport suite before packaging.
