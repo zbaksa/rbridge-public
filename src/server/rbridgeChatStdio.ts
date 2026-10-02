@@ -4,7 +4,7 @@ import type {RbridgeChatPeerStoreV3} from './rbridgeChatPeerStore.js';
 
 /** One fixed authenticated channel. Frames cannot choose an executable, root, host or app owner. */
 export async function runRbridgeChatStdio(input:NodeJS.ReadableStream,output:NodeJS.WritableStream,store:RbridgeChatPeerStoreV3):Promise<void>{
-  const decoder=new StdioFrameDecoder();let peer:VerifiedPeerV3|null=null,closed=false,ending=false,pollQueued=false,pending=0,lastHeartbeat=0;
+  const decoder=new StdioFrameDecoder();let peer:VerifiedPeerV3|null=null,closed=false,ending=false,pollQueued=false,pending=0,lastHeartbeat=0,receiving=false;
   let tail:Promise<void>=Promise.resolve();const writers=new Set<(error:Error)=>void>();
   let resolveEnd:()=>void=()=>undefined,rejectEnd:(error:Error)=>void=()=>undefined;
   const finished=new Promise<void>((resolve,reject)=>{resolveEnd=resolve;rejectEnd=reject;});
@@ -32,11 +32,23 @@ export async function runRbridgeChatStdio(input:NodeJS.ReadableStream,output:Nod
     const schema=(message as {schema?:unknown})?.schema;
     if(!peer){if(schema!=='RBRIDGE_CHAT_HELLO_V1')throw Error('RBRIDGE_PEER_HELLO_REQUIRED');peer=await store.acceptHello(message);lastHeartbeat=Date.now();await write(message);return;}
     if(schema==='RBRIDGE_CHAT_HELLO_V1')throw Error('RBRIDGE_PEER_HELLO_DUPLICATE');
+    if(Date.now()-lastHeartbeat>=1000){await store.heartbeat();lastHeartbeat=Date.now();}
     await store.recordIncoming(message,peer);
   };
   const onData=(data:unknown)=>{
     if(closed||ending)return;
-    try{if(!(data instanceof Uint8Array)||data.byteLength>262144)throw Error('RBRIDGE_STDIO_INPUT_BUDGET_EXCEEDED');for(const message of decoder.push(data))queue(()=>accept(message));}catch(error){settle(asError(error));}
+    try{
+      if(!(data instanceof Uint8Array)||data.byteLength>262144)throw Error('RBRIDGE_STDIO_INPUT_BUDGET_EXCEEDED');
+      if(receiving)throw Error('RBRIDGE_STDIO_BACKPRESSURE_EXCEEDED');
+      // Pause the source before retaining one bounded chunk. Decode through one newline at a time, not a whole replay.
+      input.pause();receiving=true;const bytes=new Uint8Array(data);
+      queue(async()=>{
+        try{let offset=0;while(offset<bytes.byteLength&&!closed){
+          const newline=bytes.indexOf(0x0a,offset),end=newline<0?bytes.byteLength:newline+1;
+          for(const message of decoder.push(bytes.subarray(offset,end)))await accept(message);offset=end;
+        }}finally{receiving=false;if(!closed&&!ending)input.resume();}
+      });
+    }catch(error){settle(asError(error));}
   };
   const onEnd=()=>{if(closed||ending)return;ending=true;clearInterval(timer);void tail.then(()=>{if(decoder.pendingBytes())settle(Error('RBRIDGE_STDIO_FRAME_INCOMPLETE'));else settle();});};
   const onClose=()=>{if(!ending)settle(Error('RBRIDGE_STDIO_INPUT_DISCONNECTED'));};

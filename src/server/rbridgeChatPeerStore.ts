@@ -1,6 +1,7 @@
 import {constants} from 'node:fs';
 import {lstat,mkdir,open,readFile,realpath,rename,unlink} from 'node:fs/promises';
 import {randomBytes} from 'node:crypto';
+import {withPrivateLinuxFileGate} from '../nativeHost/privateLinuxFileGate.js';
 import {isAbsolute,join,resolve} from 'node:path';
 import {parseHello,validateEventEnvelope,type RbridgeChatEventV1} from '../domain/rbridgeChatCore.js';
 import {canonicalDigest,canonicalJson,parseEffectCommand,parseV3Scope,requireV3Peer,sha256Hex,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
@@ -109,12 +110,15 @@ export class RbridgeChatPeerStoreV3 {
     let lock:Awaited<ReturnType<typeof open>>|undefined,identity:{ino:number;dev:number}|undefined;
     try{
       if(this.faulted)fail('RBRIDGE_PEER_STORE_FAULTED');const config=await this.config();await this.directory(this.dataRoot,true);await this.sync(this.root);
+      const operation=async()=>{
+        // Each operation reloads originals; the fixed Linux peer and nested result journal share process-safe gates.
+        const events=new RbridgeChatEventStoreV1({root:this.root}),results=new RbridgeEffectResultStoreV3({eventStoreRoot:this.root,scope:config.scope,maxMessageBytes:config.peerPins.maxMessageBytes,crossProcess:true}),authority=new NativeV3PeerAuthority({eventStoreRoot:this.root,appId:config.scope.appId,peerPins:config.peerPins,initialHistory:config.initialHistory});
+        const eventFile=await this.file(join(this.root,'events.ndjson'),MAX_BYTES);void eventFile;await authority.initialize(events,results);
+        return fn({config,events,results,authority,journal:await this.journal(config)});
+      };
+      if(process.platform==='linux')return await withPrivateLinuxFileGate(this.dataRoot,'RBRIDGE_PEER',operation);
       try{lock=await open(join(this.dataRoot,'writer.lock'),constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);}catch(e){if(errno(e)==='EEXIST')fail('RBRIDGE_PEER_WRITER_BUSY');throw e;}
-      const info=await lock.stat();identity={ino:info.ino,dev:info.dev};await lock.writeFile(randomBytes(16).toString('hex')+'\n');await lock.sync();
-      // Recreate the V1 reader per operation so cross-process appends are never hidden by a cached cursor.
-      const events=new RbridgeChatEventStoreV1({root:this.root}),results=new RbridgeEffectResultStoreV3({eventStoreRoot:this.root,scope:config.scope,maxMessageBytes:config.peerPins.maxMessageBytes}),authority=new NativeV3PeerAuthority({eventStoreRoot:this.root,appId:config.scope.appId,peerPins:config.peerPins,initialHistory:config.initialHistory});
-      const eventFile=await this.file(join(this.root,'events.ndjson'),MAX_BYTES);void eventFile;await authority.initialize(events,results);
-      return await fn({config,events,results,authority,journal:await this.journal(config)});
+      const info=await lock.stat();identity={ino:info.ino,dev:info.dev};await lock.writeFile(randomBytes(16).toString('hex')+'\n');await lock.sync();return await operation();
     }finally{
       try{if(lock){await lock.close();const now=await lstat(join(this.dataRoot,'writer.lock'));if(!now.isFile()||now.nlink!==1||!identity||now.ino!==identity.ino||now.dev!==identity.dev)fail('RBRIDGE_PEER_LOCK_IDENTITY_CHANGED');await unlink(join(this.dataRoot,'writer.lock'));await this.sync(this.dataRoot);}}
       finally{release();if(queues.get(key)===gate)queues.delete(key);}
@@ -137,9 +141,25 @@ export class RbridgeChatPeerStoreV3 {
   }
   async heartbeat():Promise<void>{return this.exclusive(async c=>{const {sha256,...channel}=await this.channel(c,true);void sha256;channel.updatedAt=Date.now();await this.saveChannel(channel);});}
   async disconnect():Promise<void>{return this.exclusive(async()=>{if(this.channelId===null)return;const text=await this.file(join(this.dataRoot,'channel.json'),16384);if(text!==null&&JSON.parse(text).channelId===this.channelId){await unlink(join(this.dataRoot,'channel.json'));await this.sync(this.dataRoot);}this.channelId=null;});}
+  private async descriptorFor(command:RbridgeChatEffectCommandV1):Promise<RbridgeChatCommandCommitV1>{
+    const bytes=Buffer.from(canonicalJson(command));return {schema:'RBRIDGE_CHAT_COMMAND_COMMIT_V1',commandId:command.commandId,commandSha256:command.commandSha256,requestDigest:command.request.requestDigest,transferSha256:await sha256Hex(bytes),totalBytes:bytes.length,chunkCount:Math.ceil(bytes.length/CHUNK_BYTES)};
+  }
+  private async replayTransfer(command:RbridgeChatEffectCommandV1,descriptor:RbridgeChatCommandCommitV1,chunks:readonly (string|null)[]):Promise<void>{
+    if(!same(await this.descriptorFor(command),descriptor)||chunks.length!==descriptor.chunkCount)fail('REQUEST_ID_COLLISION');
+    const bytes=Buffer.from(canonicalJson(command));for(let i=0;i<chunks.length;i++)if(chunks[i]!==null&&chunks[i]!==bytes.subarray(i*CHUNK_BYTES,Math.min((i+1)*CHUNK_BYTES,bytes.length)).toString('base64'))fail('REQUEST_ID_COLLISION');
+  }
+  private async retireCompletedTransfers(c:Context):Promise<void>{
+    const retained:Transfer[]=[];for(const transfer of c.journal.transfers){
+      const entry=c.journal.commands.find(e=>e.command.commandId===transfer.commit.commandId);
+      if(!entry){retained.push(transfer);continue;}await this.replayTransfer(entry.command,transfer.commit,transfer.chunks);
+    }
+    if(retained.length!==c.journal.transfers.length){c.journal.transfers=retained;await this.persist(c.journal);}
+  }
   async stageChunk(input:unknown):Promise<void>{
     const immutable=snapshotNativeMessage(input,8192),data=chunk(immutable);return this.exclusive(async c=>{
       await this.channel(c);if(data.totalBytes>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');const {index,offset,dataBase64,...body}=data;void offset;const descriptor=commit({...body,schema:'RBRIDGE_CHAT_COMMAND_COMMIT_V1'});
+      await this.retireCompletedTransfers(c);const completed=c.journal.commands.find(e=>e.command.commandId===data.commandId);
+      if(completed){const replay=Array.from({length:data.chunkCount},()=>null as string|null);replay[index]=dataBase64;await this.replayTransfer(completed.command,descriptor,replay);return;}
       let transfer=c.journal.transfers.find(t=>t.commit.commandId===data.commandId);if(transfer&&!same(transfer.commit,descriptor))fail('REQUEST_ID_COLLISION');
       if(!transfer){transfer={commit:descriptor,chunks:Array.from({length:data.chunkCount},()=>null)};c.journal.transfers.push(transfer);}
       const old=transfer.chunks[index];if(old!==null){if(old!==dataBase64)fail('REQUEST_ID_COLLISION');return;}
@@ -148,11 +168,13 @@ export class RbridgeChatPeerStoreV3 {
   }
   async commitCommand(input:unknown):Promise<void>{
     const immutable=snapshotNativeMessage(input,2048),descriptor=commit(immutable);return this.exclusive(async c=>{
-      await this.channel(c);const t=c.journal.transfers.find(t=>t.commit.commandId===descriptor.commandId);if(!t||t.chunks.some(x=>x===null))fail('PARTIAL_COMMAND_UNCERTAIN');if(!same(t.commit,descriptor))fail('REQUEST_ID_COLLISION');
+      await this.channel(c);await this.retireCompletedTransfers(c);const completed=c.journal.commands.find(e=>e.command.commandId===descriptor.commandId);
+      if(completed){await this.replayTransfer(completed.command,descriptor,Array.from({length:descriptor.chunkCount},()=>null));return;}
+      const t=c.journal.transfers.find(t=>t.commit.commandId===descriptor.commandId);if(!t||t.chunks.some(x=>x===null))fail('PARTIAL_COMMAND_UNCERTAIN');if(!same(t.commit,descriptor))fail('REQUEST_ID_COLLISION');
       const bytes=Buffer.concat(t.chunks.map(x=>Buffer.from(x!,'base64')));if(bytes.length!==descriptor.totalBytes||await sha256Hex(bytes)!==descriptor.transferSha256)fail('RBRIDGE_PEER_TRANSFER_DIGEST_MISMATCH');
       let text:string,input:unknown;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);input=JSON.parse(text);}catch{fail('RBRIDGE_PEER_COMMAND_JSON_INVALID');}
       const command=await parseEffectCommand(input,c.config.peerPins.maxMessageBytes);if(canonicalJson(command)!==text||command.commandId!==descriptor.commandId||command.commandSha256!==descriptor.commandSha256||command.request.requestDigest!==descriptor.requestDigest)fail('RBRIDGE_PEER_COMMAND_IDENTITY_MISMATCH');
-      await this.enqueueValidated(command,c.config.scope,c);
+      c.journal.transfers=c.journal.transfers.filter(entry=>entry!==t);await this.enqueueValidated(command,c.config.scope,c);
     });
   }
   async enqueue(input:RbridgeChatEffectCommandV1,scopeInput:V3Scope):Promise<void>{
@@ -162,7 +184,13 @@ export class RbridgeChatPeerStoreV3 {
     if(!same(scope,c.config.scope)||!sameScope(command,scope))fail('RBRIDGE_PEER_SCOPE_MISMATCH');c.authority.validateTarget(command.request.payload.target);
     const old=c.journal.commands.find(e=>e.command.commandId===command.commandId);if(old){if(!same(old.command,command))fail('REQUEST_ID_COLLISION');return;}
     // Generation changes retain uncertain old sends; a later authenticated result is stored, never relabelled.
-    if(command.action==='EXECUTE')for(const e of c.journal.commands){if(e.command.action==='EXECUTE'&&!sameScope(e.command,scope)&&['RBRIDGE_SEND','RBRIDGE_RESULT_SEND'].includes(e.command.request.effectKind)){const r=(await c.results.readRetained(e.command.commandId))?.result;if(!r||!['VERIFIED','FAILED_SAFE'].includes(r.state))fail('RBRIDGE_PEER_PENDING_OLD_SEND');}}
+    if(command.action==='EXECUTE'){
+      const terminal=new Set((await c.results.replay()).filter(r=>['VERIFIED','FAILED_SAFE'].includes(r.state)).map(r=>r.commandId));
+      for(const e of c.journal.commands)if(e.command.action==='EXECUTE'&&!sameScope(e.command,scope)&&['RBRIDGE_SEND','RBRIDGE_RESULT_SEND'].includes(e.command.request.effectKind)){
+        const resolved=terminal.has(e.command.commandId)||c.journal.commands.some(reconciliation=>reconciliation.command.action==='RECONCILE'&&same(reconciliation.command.request,e.command.request)&&terminal.has(reconciliation.command.commandId));
+        if(!resolved)fail('RBRIDGE_PEER_PENDING_OLD_SEND');
+      }
+    }
     c.journal.commands.push({command,state:'QUEUED'});this.budget(c.journal);await c.results.reserve(command);await this.persist(c.journal);
   }
   async takeForDispatch():Promise<RbridgeChatEffectCommandV1|null>{return this.exclusive(async c=>{await this.channel(c,true);const entry=c.journal.commands.find(e=>e.state==='QUEUED'&&sameScope(e.command,c.config.scope));if(!entry)return null;entry.state='DISPATCHED';await this.persist(c.journal);await this.channel(c,true);return structuredClone(entry.command);});}
@@ -176,7 +204,9 @@ export class RbridgeChatPeerStoreV3 {
       await this.channel(c,true);if(Buffer.byteLength(canonicalJson(immutable))>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');
       if(schema==='RBRIDGE_CHAT_EFFECT_RESULT_V1'){await c.results.recordRetained(immutable);return;}
       if(schema==='RBRIDGE_CHAT_EVENT_V1'){
-        const event=await validateEventEnvelope(immutable),known=event.sessionId===c.config.scope.sessionId&&event.generation===c.config.scope.generation||c.journal.commands.some(e=>e.command.request.sessionId===event.sessionId&&e.command.request.generation===event.generation);if(!known)fail('RBRIDGE_PEER_EVENT_SCOPE_MISMATCH');
+        const event=await validateEventEnvelope(immutable),retained=(await c.events.load()).find(e=>e.eventId===event.eventId||e.sequence===event.sequence);
+        if(retained){if(!same(retained,event))fail('RBRIDGE_EVENT_ID_COLLISION');return;}
+        const known=event.sessionId===c.config.scope.sessionId&&event.generation===c.config.scope.generation||c.journal.commands.some(e=>e.command.request.sessionId===event.sessionId&&e.command.request.generation===event.generation);if(!known)fail('RBRIDGE_PEER_EVENT_SCOPE_MISMATCH');
         await c.events.append(event);await this.sync(this.root);const persisted=new RbridgeChatEventStoreV1({root:this.root});if(!(await persisted.load()).some(e=>same(e,event)))fail('RBRIDGE_PEER_EVENT_READBACK_MISMATCH');return;
       }
       fail('RBRIDGE_PEER_SCHEMA_DENIED');
