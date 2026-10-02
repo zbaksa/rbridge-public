@@ -12,7 +12,7 @@ import {NativeMessageDecoder,encodeNativeMessage} from '../src/transport/nativeM
 import {StdioFrameDecoder,encodeStdioFrame} from '../src/transport/sshStdio.js';
 import type {SshProcessHandleV1} from '../src/nativeHost/persistentSshSession.js';
 import {REQUIRED_RBRIDGE_CAPABILITIES,RbridgeEventSpoolV1,type RbridgeChatHelloV1} from '../src/domain/rbridgeChatCore.js';
-import {type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope,type VerifiedPeerV3} from '../src/domain/rbridgeEffectProtocol.js';
+import {canonicalDigest,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,type V3Scope,type VerifiedPeerV3} from '../src/domain/rbridgeEffectProtocol.js';
 
 type Authority=object;
 interface Relay {
@@ -211,6 +211,29 @@ await test('queued_wire_mutation_does_not_change_reserved_command',()=>root(asyn
   const {relay,results}=await make(path);await ready(relay);const input=structuredClone(bind.command);
   const pending=relay.acceptServerMessage(input);input.commandId='mutated-after-call';
   assert.deepEqual((await pending).message.value,bind.command);assert.deepEqual((await results.read(bind.command.commandId))?.command,bind.command);
+}));
+async function rehash(command:RbridgeChatEffectCommandV1){
+  const {requestDigest:priorRequest,...request}=command.request;void priorRequest;command.request.requestDigest=await canonicalDigest(request);
+  const {commandSha256:priorCommand,...body}=command;void priorCommand;command.commandSha256=await canonicalDigest(body);return command;
+}
+await test('validly_rehashed_wrong_browser_target_is_not_reserved_or_dispatched',()=>root(async path=>{
+  const {relay,results}=await make(path);await ready(relay);
+  for(const key of ['browserInstanceId','browserProfileId'] as const){
+    const bad=structuredClone(bind.command);bad.commandId+=':'+key;bad.request.payload.target[key]='wrong-pinned-target';await rehash(bad);
+    await assert.rejects(()=>relay.acceptServerMessage(bad),/PIN|TARGET/);assert.equal(await results.read(bad.commandId),null);
+  }
+}));
+await test('invalid_input_rejects_async_api_without_executing_accessors',()=>root(async path=>{
+  const {relay}=await make(path);await ready(relay);let calls=0;
+  const value=structuredClone(bind.command);Object.defineProperty(value,'commandId',{enumerable:true,get:()=>{calls++;return 'forbidden-getter';}});
+  await assert.rejects(()=>relay.acceptServerMessage(value),/INPUT_INVALID/);assert.equal(calls,0);
+  await assert.rejects(()=>relay.acceptBrowserMessage('x'.repeat(65536)),/BUDGET/);
+}));
+await test('configured_small_peer_budget_rejects_complete_oversize_command',()=>root(async path=>{
+  const smallPins={...pins,maxMessageBytes:4096},smallHello={...hello,maxMessageBytes:4096};
+  const {relay,results}=await make(path,{pins:smallPins});await relay.acceptBrowserMessage(smallHello);await relay.peerConnected();await relay.acceptServerMessage(smallHello);
+  const large=structuredClone(send.command);assert.ok('text' in large.request.payload);large.request.payload.text='x'.repeat(48000);await rehash(large);
+  await assert.rejects(()=>relay.acceptServerMessage(large),/BUDGET/);assert.equal(await results.read(large.commandId),null);
 }));
 console.log(JSON.stringify({suite:'W1_V3_NATIVE_TRANSPORT',passed,failed,liveAcceptance:'NOT_RUN',fixedLinuxEndpoint:'NOT_IMPLEMENTED_IN_THIS_INCREMENT'}));
 if(failed)process.exitCode=1;
