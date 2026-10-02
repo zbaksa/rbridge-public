@@ -54,7 +54,7 @@ await test('full_48000_byte_command_requires_bounded_immutable_chunks',()=>root(
   const transfer=await chunks(full);assert.ok(transfer.bytes.length>48000);assert.ok(transfer.chunks.length>1);
   for(const chunk of transfer.chunks){assert.ok(Buffer.byteLength(chunk.dataBase64)<=4096);assert.ok(Buffer.byteLength(JSON.stringify(chunk))<8192);await store.stageChunk(chunk);assert.equal(await store.takeForDispatch(),null);}
   await store.commitCommand(transfer.commit);assert.deepEqual(await store.takeForDispatch(),full);assert.equal(await store.takeForDispatch(),null);
-  assert.ok(peerModule);const reopened=new peerModule.RbridgeChatPeerStoreV3(path);await ready(reopened);assert.equal(await reopened.takeForDispatch(),null,'uncertain dispatched EXECUTE must not be blindly resent');
+  await store.disconnect();assert.ok(peerModule);const reopened=new peerModule.RbridgeChatPeerStoreV3(path);await ready(reopened);assert.equal(await reopened.takeForDispatch(),null,'uncertain dispatched EXECUTE must not be blindly resent');
 }));
 await test('chunk_and_complete_commit_replays_are_idempotent',()=>root(async path=>{
   const store=await make(path);await ready(store);const transfer=await chunks(bind.command);
@@ -98,7 +98,7 @@ await test('disconnect_invalidates_peer_without_deleting_unresolved_command',()=
 await test('native_restart_preserves_result_and_event_chain',()=>root(async path=>{
   const store=await make(path);await ready(store);await store.enqueue(bind.command,scope);assert.deepEqual(await store.takeForDispatch(),bind.command);
   const event=await originalEvent();await store.recordIncoming(event,pins);await store.recordIncoming(bind.result,pins);
-  assert.ok(peerModule);const reopened=new peerModule.RbridgeChatPeerStoreV3(path);await ready(reopened);const value=await reopened.read(bind.command.commandId,scope);
+  await store.disconnect();assert.ok(peerModule);const reopened=new peerModule.RbridgeChatPeerStoreV3(path);await ready(reopened);const value=await reopened.read(bind.command.commandId,scope);
   assert.equal(value.result?.resultSha256,bind.result.resultSha256);assert.deepEqual(value.result,bind.result);assert.deepEqual(value.events,[event]);assert.deepEqual(await reopened.readEvent(0),event);assert.equal(await reopened.readEvent(1),null);
 }));
 await test('forged_unreserved_or_wrong_pinned_result_is_rejected',()=>root(async path=>{
@@ -119,8 +119,12 @@ await test('unverifiable_legacy_history_blocks_without_relabel_or_reset',()=>roo
 }));
 await test('new_generation_archives_original_result_without_current_authority',()=>root(async path=>{
   const old=await make(path);await ready(old);await old.enqueue(send.command,scope);assert.deepEqual(await old.takeForDispatch(),send.command);
-  const newer={...scope,generation:'223e4567-e89b-42d3-a456-426614174000'};await config(path,newer);assert.ok(peerModule);const current=new peerModule.RbridgeChatPeerStoreV3(path);await ready(current);await current.recordIncoming(send.result,pins);
+  await old.disconnect();const newer={...scope,generation:'223e4567-e89b-42d3-a456-426614174000'};await config(path,newer);assert.ok(peerModule);const current=new peerModule.RbridgeChatPeerStoreV3(path);await ready(current);await current.recordIncoming(send.result,pins);
   assert.equal((await current.read(send.command.commandId,newer)).result,null);assert.deepEqual((await current.read(send.command.commandId,scope)).result,send.result);assert.equal(await current.takeForDispatch(),null);
+}));
+await test('one_live_pinned_channel_cannot_be_replaced_by_another',()=>root(async path=>{
+  const first=await make(path);await ready(first);assert.ok(peerModule);const other=new peerModule.RbridgeChatPeerStoreV3(path);
+  await assert.rejects(()=>other.recordIncoming(hello,pins),/CHANNEL_BUSY/);assert.deepEqual(await first.peer(),pins);await first.disconnect();await ready(other);await assert.rejects(()=>first.recordIncoming(bind.result,pins),/CHANNEL_CHANGED|NOT_NEGOTIATED/);
 }));
 if(process.platform!=='win32')await test('unsafe_private_configuration_blocks_without_changing_permissions',()=>root(async path=>{
   const store=await make(path);await chmod(join(path,'v3-peer-config.json'),0o644);await assert.rejects(()=>store.peer(),/CONFIG|FILE|PRIVATE/);await assert.rejects(()=>store.recordIncoming(hello,pins),/CONFIG|FILE|PRIVATE/);
