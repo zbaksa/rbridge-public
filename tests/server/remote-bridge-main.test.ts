@@ -10,4 +10,25 @@ describe('remote bridge main loop',()=>{
  it('applies bounded exponential backoff after repeated transport errors and resets after success',async()=>{let calls=0;const sleeps:number[]=[];await runRemoteBridgeLoop({acquireLock:async()=>({release:async()=>{}}),runOnce:async()=>{calls++;if(calls<3)throw new Error('REMOTE_BRIDGE_GITHUB_COMMAND_FAILED');return {seen:0,pending:0,published:0,blocked:0,errors:0};},shouldContinue:()=>calls<4,sleep:async ms=>{sleeps.push(ms);},log:()=>{},pollMs:100,maxBackoffMs:1000});expect(sleeps).toEqual([200,400,100]);});
  it('uses the maximum bounded backoff for an explicit GitHub rate-limit error',async()=>{let calls=0;const sleeps:number[]=[];await runRemoteBridgeLoop({acquireLock:async()=>({release:async()=>{}}),runOnce:async()=>{calls++;if(calls===1)throw new Error('REMOTE_BRIDGE_GITHUB_COMMAND_FAILED:HTTP 429 secondary rate limit');return {seen:0,pending:0,published:0,blocked:0,errors:0};},shouldContinue:()=>calls<2,sleep:async ms=>{sleeps.push(ms);},log:()=>{},pollMs:100,maxBackoffMs:5000});expect(sleeps).toEqual([5000]);});
 
+ it('runs onLocked after acquiring the global lock and before the first tick',async()=>{
+   const events:string[]=[];
+   await runRemoteBridgeLoop({
+     acquireLock:async()=>{
+       events.push('lock');
+       return {release:async()=>{events.push('release');}};
+     },
+     onLocked:async()=>{events.push('onLocked');},
+     runOnce:async()=>{
+       events.push('tick');
+       return {seen:0,pending:0,published:0,blocked:0,errors:0};
+     },
+     shouldContinue:()=>!events.includes('tick'),
+     sleep:async()=>{},
+     log:()=>{},
+     pollMs:1
+   });
+   expect(events).toEqual(['lock','onLocked','tick','release']);
+ });
+
+
 });
