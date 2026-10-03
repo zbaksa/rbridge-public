@@ -25,7 +25,7 @@
     "build": "tsc -p tsconfig.json",
     "build:server": "tsc -p tsconfig.json",
     "lint": "eslint .",
-    "test": "npm run build:server && node dist/tests/run.js && node dist/tests/native-host-runtime-runner.js && node dist/tests/w1-command-downlink.js && node dist/tests/w1-failure-campaign.js && node dist/tests/w1-v3-contract.js && node dist/tests/w1-v3-effect-ledger.js && node dist/tests/w1-v3-browser-binding.js && node dist/tests/w1-v3-browser-effects.js && node dist/tests/w1-v3-delivery-content.js && node dist/tests/w1-v3-assistant-markdown.js && node dist/tests/w1-v3-capture-egress.js && node dist/tests/w1-v3-native-results.js && node dist/tests/w1-v3-native-transport.js && node dist/tests/w1-v3-transport.js && node dist/tests/w1-v3-fixed-stdio.js",
+    "test": "npm run build:server && node dist/tests/run.js && node dist/tests/native-host-runtime-runner.js && node dist/tests/w1-command-downlink.js && node dist/tests/w1-failure-campaign.js && node dist/tests/w1-v3-contract.js && node dist/tests/w1-v3-effect-ledger.js && node dist/tests/w1-v3-browser-binding.js && node dist/tests/w1-v3-browser-effects.js && node dist/tests/w1-v3-delivery-content.js && node dist/tests/w1-v3-assistant-markdown.js && node dist/tests/w1-v3-capture-egress.js && node dist/tests/w1-v3-native-results.js && node dist/tests/w1-v3-native-transport.js && node dist/tests/w1-v3-transport.js && node dist/tests/w1-v3-fixed-stdio.js && npm run test:v3:staged-artifacts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify": "npm run typecheck && npm test && npm run lint && npm run build:server && npm run build:extension && npm run build:native-host",
     "build:extension:content": "vite build --config vite.content.config.ts",
@@ -46,7 +46,8 @@
     "test:v3:capture": "npm run build:server && node dist/tests/w1-v3-capture-egress.js",
     "test:v3:native-results": "npm run build:server && node dist/tests/w1-v3-native-results.js",
     "test:v3:native-transport": "npm run build:server && node dist/tests/w1-v3-native-transport.js",
-    "test:v3:transport": "npm run build:server && node dist/tests/w1-v3-transport.js && node dist/tests/w1-v3-fixed-stdio.js"
+    "test:v3:transport": "npm run build:server && node dist/tests/w1-v3-transport.js && node dist/tests/w1-v3-fixed-stdio.js",
+    "test:v3:staged-artifacts": "node --test tests/m0-v3-staged-artifact-manifest.node.mjs"
   },
   "type": "module",
   "version": "0.1.0-dev"
