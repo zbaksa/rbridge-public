@@ -16,7 +16,7 @@ describe('standalone RBridge systemd template',()=>{
    expect(unit).not.toContain(['aether','engine'].join('-'));
  });
  it('runs only the immutable current RBridge release entrypoint with hardening',()=>{
-   expect(unit).toContain('ExecStart=/opt/ai-tool-fabric/runtime/node /usr/local/libexec/rbridge/current/dist/server/remoteBridgeMain.js');
+   expect(unit).toContain('ExecStart=/opt/ai-tool-fabric/runtime/node /usr/local/libexec/rbridge/current/dist/server/server/remoteBridgeMain.js');
    for(const row of ['NoNewPrivileges=yes','PrivateTmp=yes','ProtectSystem=strict','ProtectHome=read-only','PrivateDevices=yes','ProtectKernelTunables=yes','ProtectKernelModules=yes','ProtectControlGroups=yes','LockPersonality=yes','RestrictRealtime=yes','RestrictSUIDSGID=yes','CapabilityBoundingSet=','AmbientCapabilities=','UMask=0077'])expect(unit).toContain(row);
  });
 });

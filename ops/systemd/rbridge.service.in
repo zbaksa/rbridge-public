@@ -12,7 +12,7 @@ Environment=HOME=@RBRIDGE_HOME@
 Environment=PATH=/opt/ai-tool-fabric/runtime:/usr/local/bin:/usr/bin:/bin
 Environment=RBRIDGE_RUNTIME_USER=@RBRIDGE_USER@
 EnvironmentFile=@RBRIDGE_ENV_FILE@
-ExecStart=/opt/ai-tool-fabric/runtime/node /usr/local/libexec/rbridge/current/dist/server/remoteBridgeMain.js
+ExecStart=/opt/ai-tool-fabric/runtime/node /usr/local/libexec/rbridge/current/dist/server/server/remoteBridgeMain.js
 Restart=on-failure
 RestartSec=2s
 NoNewPrivileges=yes
