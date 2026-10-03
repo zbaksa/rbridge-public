@@ -16,6 +16,18 @@ function operation(timeoutSeconds = 60, operationId = 'op_run_0000000001_probe_a
   }, authority);
 }
 
+function policyOperation() {
+  return parseFlowPilotBridgeEnvelope({
+    schema: 'FLOWPILOT_REMOTE_BRIDGE_V1', operationId: 'op_run_0000000002_policy_a1',
+    runId: 'run_0000000002', stepId: 'policy', attempt: 1, fencingToken: 8,
+    idempotencyKey: 'fp:run_0000000002:policy:1', appId: 'cocwin',
+    action: 'COCWIN_MASTER_POLICY_HEALTH_V1',
+    payload: { expectedPolicySha256: 'e6609b939f5d6b93feaf0f715252766965ca4f226b3d419b6ed81927c39cb36c' },
+    timeoutSeconds: 60, callback: { url: callbackUrl, bearerToken: callbackToken },
+  }, authority);
+}
+
+
 class MemoryStore implements FlowPilotBridgeStore {
   records = new Map<string, FlowPilotBridgeRecord>();
   events: string[] = [];
@@ -99,6 +111,35 @@ it('terminal result persists an immutable callback before delivery and safely re
   assert.equal(delivered[0]?.outcome, 'PASS');
   assert.equal(store.records.get(operation().operationId)?.phase, 'COMPLETED');
 });
+
+it('COCWIN policy health uses cocwin controller identity and action-specific evidence', async () => {
+  const store = new MemoryStore();
+  const delivered: Record<string, unknown>[] = [];
+  const submitted: Array<{ app: string; payload: unknown }> = [];
+  const gateway = createFlowPilotBridgeGateway({
+    store,
+    controller: {
+      async submit(app, _job, payload) { submitted.push({ app, payload }); return { state: 'RUNNING' }; },
+      async status() { return { state: 'SUCCEEDED' }; },
+      async result() { return { state: 'SUCCEEDED', returncode: 0, timed_out: false, truncated: false, stdout: 'hidden' }; },
+    },
+    callback: { async send(_url, _token, value) { delivered.push(value); } },
+    callbackToken,
+  });
+  await gateway.accept(policyOperation());
+  await gateway.reconcile();
+  assert.equal(submitted[0]?.app, 'cocwin');
+  const payload = submitted[0]?.payload as Record<string, unknown>;
+  assert.equal(payload.tool, 'node');
+  assert.equal(payload.cwd, '/home/cocwin/backend');
+  assert.equal(delivered[0]?.outcome, 'PASS');
+  const evidence = delivered[0]?.evidence as Record<string, unknown>;
+  assert.equal(evidence.schema, 'COCWIN_FLOWPILOT_MASTER_POLICY_HEALTH_EVIDENCE_V1');
+  assert.equal(evidence.action, 'COCWIN_MASTER_POLICY_HEALTH_V1');
+  assert.equal(evidence.expectedPolicySha256, 'e6609b939f5d6b93feaf0f715252766965ca4f226b3d419b6ed81927c39cb36c');
+  assert.equal(JSON.stringify(delivered[0]).includes('hidden'), false);
+});
+
 
 it('timed out or truncated execution resolves to UNKNOWN, never blind FAIL', async () => {
   const store = new MemoryStore(); const delivered: Record<string, unknown>[] = [];

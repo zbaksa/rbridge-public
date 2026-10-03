@@ -5,7 +5,7 @@ export interface FlowPilotBridgeAuthority {
   callbackUrl: string;
 }
 
-export interface FlowPilotBridgeOperation {
+interface FlowPilotBridgeOperationBase {
   schema: 'FLOWPILOT_REMOTE_BRIDGE_V1';
   operationId: string;
   runId: string;
@@ -13,19 +13,28 @@ export interface FlowPilotBridgeOperation {
   attempt: number;
   fencingToken: number;
   idempotencyKey: string;
-  appId: 'fpilot';
-  action: 'APP_PROBE_V1';
-  payload: Record<string, never>;
   timeoutSeconds: number;
   callbackUrl: string;
 }
 
+export type FlowPilotBridgeOperation =
+  | (FlowPilotBridgeOperationBase & {
+    appId: 'fpilot';
+    action: 'APP_PROBE_V1';
+    payload: Record<string, never>;
+  })
+  | (FlowPilotBridgeOperationBase & {
+    appId: 'cocwin';
+    action: 'COCWIN_MASTER_POLICY_HEALTH_V1';
+    payload: { expectedPolicySha256: string };
+  });
+
 export interface FlowPilotAppExecutionRequest {
-  appId: 'fpilot';
+  appId: 'fpilot' | 'cocwin';
   jobId: string;
   payload: {
-    tool: 'probe';
-    cwd: '/home/fpilot/backend';
+    tool: 'probe' | 'node';
+    cwd: '/home/fpilot/backend' | '/home/cocwin/backend';
     args: string[];
     timeout_ms: number;
     max_bytes: 32768;
@@ -37,8 +46,21 @@ const FIELDS = new Set([
   'idempotencyKey', 'appId', 'action', 'payload', 'timeoutSeconds', 'callback',
 ]);
 const CALLBACK_FIELDS = new Set(['url', 'bearerToken']);
+const POLICY_PAYLOAD_FIELDS = new Set(['expectedPolicySha256']);
 const SAFE_ID = /^[a-z0-9][a-z0-9._:-]{0,191}$/;
 const APP_ID = /^[a-z][a-z0-9_-]{0,31}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+
+const COCWIN_POLICY_HEALTH_PROGRAM = [
+  '(async()=>{',
+  'const expected=process.argv[1];',
+  "const response=await fetch('http://192.168.100.14:8088/api/v1/automation-engine/policy',{headers:{accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});",
+  "if(!response.ok)throw new Error('COCWIN_POLICY_HTTP_'+response.status);",
+  'const body=await response.json();',
+  "if(body?.state!=='PASS'||body?.policySha256!==expected)throw new Error('COCWIN_MASTER_POLICY_MISMATCH');",
+  "process.stdout.write(JSON.stringify({schema:'COCWIN_MASTER_POLICY_HEALTH_V1',status:'PASS',policySha256:body.policySha256})+'\\n');",
+  "})().catch((error)=>{console.error(error instanceof Error?error.message:String(error));process.exitCode=1;});",
+].join('');
 
 function fail(code: string): never { throw new Error(code); }
 function record(value: unknown, code: string): Record<string, unknown> {
@@ -85,21 +107,47 @@ export function parseFlowPilotBridgeEnvelope(
   const idempotencyKey = safeText(raw.idempotencyKey, 'FLOWPILOT_IDEMPOTENCY_KEY_INVALID');
   const appId = raw.appId;
   if (typeof appId !== 'string' || !APP_ID.test(appId)) fail('FLOWPILOT_APP_ID_INVALID');
-  if (appId !== 'fpilot') fail('FLOWPILOT_APP_NOT_ALLOWED');
-  if (raw.action !== 'APP_PROBE_V1') fail('FLOWPILOT_ACTION_NOT_ALLOWED');
+  if (!['fpilot', 'cocwin'].includes(appId)) fail('FLOWPILOT_APP_NOT_ALLOWED');
   const payload = record(raw.payload, 'FLOWPILOT_PAYLOAD_INVALID');
-  if (Object.keys(payload).length !== 0) fail('FLOWPILOT_PAYLOAD_NOT_ALLOWED');
+
+  let action: FlowPilotBridgeOperation['action'];
+  let parsedPayload: FlowPilotBridgeOperation['payload'];
+  if (appId === 'fpilot') {
+    if (raw.action !== 'APP_PROBE_V1') fail('FLOWPILOT_ACTION_NOT_ALLOWED');
+    if (Object.keys(payload).length !== 0) fail('FLOWPILOT_PAYLOAD_NOT_ALLOWED');
+    action = 'APP_PROBE_V1';
+    parsedPayload = {};
+  } else {
+    if (raw.action !== 'COCWIN_MASTER_POLICY_HEALTH_V1') fail('FLOWPILOT_ACTION_NOT_ALLOWED');
+    exactFields(payload, POLICY_PAYLOAD_FIELDS, 'FLOWPILOT_PAYLOAD_NOT_ALLOWED');
+    if (typeof payload.expectedPolicySha256 !== 'string' || !SHA256.test(payload.expectedPolicySha256)) {
+      fail('FLOWPILOT_POLICY_SHA_INVALID');
+    }
+    action = 'COCWIN_MASTER_POLICY_HEALTH_V1';
+    parsedPayload = { expectedPolicySha256: payload.expectedPolicySha256 };
+  }
+
   const callback = record(raw.callback, 'FLOWPILOT_CALLBACK_INVALID');
   exactFields(callback, CALLBACK_FIELDS, 'FLOWPILOT_CALLBACK_FIELDS_INVALID');
   if (callback.url !== authority.callbackUrl) fail('FLOWPILOT_CALLBACK_URL_INVALID');
   if (!tokenEqual(callback.bearerToken, authority.callbackToken)) fail('FLOWPILOT_CALLBACK_AUTH_INVALID');
-  return {
+
+  const base: FlowPilotBridgeOperationBase = {
     schema: 'FLOWPILOT_REMOTE_BRIDGE_V1', operationId, runId, stepId,
     attempt: integer(raw.attempt, 1, 10, 'FLOWPILOT_ATTEMPT_INVALID'),
     fencingToken: integer(raw.fencingToken, 1, Number.MAX_SAFE_INTEGER, 'FLOWPILOT_FENCE_INVALID'),
-    idempotencyKey, appId: 'fpilot', action: 'APP_PROBE_V1', payload: {},
+    idempotencyKey,
     timeoutSeconds: integer(raw.timeoutSeconds, 1, 1800, 'FLOWPILOT_TIMEOUT_INVALID'),
     callbackUrl: authority.callbackUrl,
+  };
+  if (appId === 'fpilot') {
+    return { ...base, appId: 'fpilot', action: 'APP_PROBE_V1', payload: parsedPayload as Record<string, never> };
+  }
+  return {
+    ...base,
+    appId: 'cocwin',
+    action: action as 'COCWIN_MASTER_POLICY_HEALTH_V1',
+    payload: parsedPayload as { expectedPolicySha256: string },
   };
 }
 
@@ -109,11 +157,23 @@ export function flowPilotOperationDigest(operation: FlowPilotBridgeOperation): s
 
 export function toFlowPilotAppExecution(operation: FlowPilotBridgeOperation): FlowPilotAppExecutionRequest {
   const suffix = createHash('sha256').update(operation.operationId).digest('hex').slice(0, 48);
+  if (operation.appId === 'fpilot') {
+    return {
+      appId: 'fpilot', jobId: `fp-${suffix}`,
+      payload: {
+        tool: 'probe', cwd: '/home/fpilot/backend', args: [],
+        timeout_ms: operation.timeoutSeconds * 1000, max_bytes: 32768,
+      },
+    };
+  }
   return {
-    appId: 'fpilot', jobId: `fp-${suffix}`,
+    appId: 'cocwin', jobId: `fp-cw-${suffix}`,
     payload: {
-      tool: 'probe', cwd: '/home/fpilot/backend', args: [],
-      timeout_ms: operation.timeoutSeconds * 1000, max_bytes: 32768,
+      tool: 'node',
+      cwd: '/home/cocwin/backend',
+      args: ['-e', COCWIN_POLICY_HEALTH_PROGRAM, operation.payload.expectedPolicySha256],
+      timeout_ms: operation.timeoutSeconds * 1000,
+      max_bytes: 32768,
     },
   };
 }

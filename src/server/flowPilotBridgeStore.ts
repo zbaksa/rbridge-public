@@ -72,13 +72,20 @@ function validateOperation(value: unknown): FlowPilotBridgeOperation {
     || typeof operation.runId !== 'string' || !ID_RE.test(operation.runId)
     || typeof operation.stepId !== 'string' || !ID_RE.test(operation.stepId)
     || typeof operation.idempotencyKey !== 'string' || !ID_RE.test(operation.idempotencyKey)
-    || operation.appId !== 'fpilot' || operation.action !== 'APP_PROBE_V1'
     || !operation.payload || typeof operation.payload !== 'object' || Array.isArray(operation.payload)
-    || Object.keys(operation.payload as Record<string, unknown>).length !== 0
     || !Number.isInteger(operation.attempt) || Number(operation.attempt) < 1 || Number(operation.attempt) > 10
     || !Number.isInteger(operation.fencingToken) || Number(operation.fencingToken) < 1 || Number(operation.fencingToken) > Number.MAX_SAFE_INTEGER
     || !Number.isInteger(operation.timeoutSeconds) || Number(operation.timeoutSeconds) < 1 || Number(operation.timeoutSeconds) > 1800
     || typeof operation.callbackUrl !== 'string') fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
+  const payload = operation.payload as Record<string, unknown>;
+  if (operation.appId === 'fpilot' && operation.action === 'APP_PROBE_V1') {
+    if (Object.keys(payload).length !== 0) fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
+  } else if (operation.appId === 'cocwin' && operation.action === 'COCWIN_MASTER_POLICY_HEALTH_V1') {
+    if (Object.keys(payload).length !== 1 || typeof payload.expectedPolicySha256 !== 'string'
+      || !SHA_RE.test(payload.expectedPolicySha256)) fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
+  } else {
+    fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
+  }
   let url: URL;
   try { url = new URL(operation.callbackUrl); } catch { fail('FLOWPILOT_BRIDGE_STORE_CORRUPT'); }
   if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname)

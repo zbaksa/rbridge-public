@@ -49,21 +49,36 @@ function outcome(value: Record<string, unknown>): 'PASS' | 'FAIL' | 'UNKNOWN' | 
 }
 function callbackFor(record: FlowPilotBridgeRecord, value: Record<string, unknown>): Record<string, unknown> {
   const resolved = outcome(value);
-  return {
-    schema: 'FLOWPILOT_CALLBACK_V1',
-    operationId: record.operation.operationId,
-    fencingToken: record.operation.fencingToken,
-    outcome: resolved,
-    evidence: {
-      schema: 'COCWIN_FLOWPILOT_APP_PROBE_EVIDENCE_V1',
+  const evidence = record.operation.action === 'COCWIN_MASTER_POLICY_HEALTH_V1'
+    ? {
+      schema: 'COCWIN_FLOWPILOT_MASTER_POLICY_HEALTH_EVIDENCE_V1',
       appId: record.appId,
+      action: record.operation.action,
+      expectedPolicySha256: record.operation.payload.expectedPolicySha256,
       jobId: record.jobId,
       state: String(value.state),
       returncode: typeof value.returncode === 'number' ? value.returncode : null,
       timedOut: value.timed_out === true,
       truncated: value.truncated === true,
       resultSha256: resultDigest(value),
-    },
+    }
+    : {
+      schema: 'COCWIN_FLOWPILOT_APP_PROBE_EVIDENCE_V1',
+      appId: record.appId,
+      action: record.operation.action,
+      jobId: record.jobId,
+      state: String(value.state),
+      returncode: typeof value.returncode === 'number' ? value.returncode : null,
+      timedOut: value.timed_out === true,
+      truncated: value.truncated === true,
+      resultSha256: resultDigest(value),
+    };
+  return {
+    schema: 'FLOWPILOT_CALLBACK_V1',
+    operationId: record.operation.operationId,
+    fencingToken: record.operation.fencingToken,
+    outcome: resolved,
+    evidence,
     ...(resolved === 'UNKNOWN' ? { error: 'REMOTE_BRIDGE_EXECUTION_UNCERTAIN' } : {}),
     ...(resolved === 'FAIL' ? { error: 'REMOTE_BRIDGE_EXECUTION_FAILED' } : {}),
     ...(resolved === 'BLOCKED' ? { error: 'REMOTE_BRIDGE_EXECUTION_BLOCKED' } : {}),

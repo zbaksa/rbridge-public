@@ -19,6 +19,19 @@ function record(timeoutSeconds = 60, operationId = 'op_run_0000000001_probe_a1')
   return { operation, digest: flowPilotOperationDigest(operation), appId: app.appId, jobId: app.jobId, phase: 'CLAIMED' };
 }
 
+function policyRecord(): FlowPilotBridgeRecord {
+  const operation = parseFlowPilotBridgeEnvelope({
+    schema: 'FLOWPILOT_REMOTE_BRIDGE_V1', operationId: 'op_run_0000000002_policy_a1', runId: 'run_0000000002',
+    stepId: 'policy', attempt: 1, fencingToken: 8, idempotencyKey: 'fp:run_0000000002:policy:1',
+    appId: 'cocwin', action: 'COCWIN_MASTER_POLICY_HEALTH_V1',
+    payload: { expectedPolicySha256: 'e6609b939f5d6b93feaf0f715252766965ca4f226b3d419b6ed81927c39cb36c' },
+    timeoutSeconds: 60, callback: { url: callbackUrl, bearerToken: callbackToken },
+  }, { callbackToken, callbackUrl });
+  const app = toFlowPilotAppExecution(operation);
+  return { operation, digest: flowPilotOperationDigest(operation), appId: app.appId, jobId: app.jobId, phase: 'CLAIMED' };
+}
+
+
 it('claim is durable, exact replay is stable, and changed digest collides', async () => {
   const root = await mkdtemp(join(tmpdir(), 'flowpilot-bridge-store-'));
   const store = createFlowPilotBridgeStore(root, () => new Date('2026-09-28T18:00:00.000Z'));
@@ -30,6 +43,25 @@ it('claim is durable, exact replay is stable, and changed digest collides', asyn
   assert.equal((await stat(root)).mode & 0o777, 0o700);
   assert.equal((await stat(join(root, `${record().operation.operationId}.json`))).mode & 0o777, 0o600);
 });
+
+it('COCWIN policy-health operation survives durable-store reopen', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'flowpilot-bridge-store-'));
+  const store = createFlowPilotBridgeStore(root);
+  assert.equal((await store.claim(policyRecord())).state, 'NEW');
+  const pending = await createFlowPilotBridgeStore(root).pending();
+  assert.equal(pending.failures, 0);
+  assert.equal(pending.records.length, 1);
+  assert.equal(pending.records[0]?.operation.appId, 'cocwin');
+  assert.equal(pending.records[0]?.operation.action, 'COCWIN_MASTER_POLICY_HEALTH_V1');
+  if (pending.records[0]?.operation.action === 'COCWIN_MASTER_POLICY_HEALTH_V1') {
+    assert.equal(
+      pending.records[0].operation.payload.expectedPolicySha256,
+      'e6609b939f5d6b93feaf0f715252766965ca4f226b3d419b6ed81927c39cb36c',
+    );
+  }
+  assert.match(pending.records[0]?.jobId ?? '', /^fp-cw-[0-9a-f]{48}$/);
+});
+
 
 it('concurrent conflicting first claims have exactly one durable winner', async () => {
   const root = await mkdtemp(join(tmpdir(), 'flowpilot-bridge-store-'));
