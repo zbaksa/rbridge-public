@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
-import {appendFile, chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, symlink, unlink, writeFile} from 'node:fs/promises';
+import {appendFile, chmod, link, lstat, mkdir, mkdtemp, open, opendir, readFile, readdir, realpath, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join, relative} from 'node:path';
 import {collectStagedArtifactFixtureInventory} from '../scripts/write-m0-v3-staged-artifact-manifest.mjs';
@@ -64,8 +64,9 @@ async function fixture(t, sourceObservation = {}) {
   const input = join(root, 'input'), originals = join(root, 'originals'), output = join(root, 'output');
   for (const path of [root, input, originals, output]) await mkdir(path, {recursive: true, mode: 0o700});
   const inputDirectory = await open(input, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const originalDirectory = await open(originals, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   const outputDirectory = await open(output, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-  t.after(async () => { await inputDirectory.close(); await outputDirectory.close(); await rm(root, {recursive: true, force: true}); });
+  t.after(async () => { await inputDirectory.close(); await originalDirectory.close(); await outputDirectory.close(); await rm(root, {recursive: true, force: true}); });
   const sentinel = join(root, 'preserved-history');
   await writeFile(sentinel, 'original history\n', {mode: 0o600});
   const paths = new Map(), sourceBytes = new Map(), refs = new Map(), originalPaths = new Map();
@@ -131,43 +132,103 @@ async function fixture(t, sourceObservation = {}) {
   }
   async function pinnedDirectory(path, handle, code) {
     const current = await lstat(path), pinned = await handle.stat();
-    if (!sameFile(current, pinned) || !current.isDirectory() || current.isSymbolicLink() || current.uid !== process.getuid() || (current.mode & 0o077) !== 0) fail(code);
+    if (!sameFile(current, pinned) || !current.isDirectory() || current.isSymbolicLink() || current.uid !== process.getuid() || current.gid !== process.getgid() || (current.mode & 0o077) !== 0) fail(code);
+    return current;
+  }
+  const directoryBaselines = new Map(), closedMembers = new Map();
+  const expectedInSharedRoot = new Set(ENTRIES.map(e => e.path));
+  const allowedDirectories = new Set();
+  for (const entry of ENTRIES) {
+    for (let parent = dirname(paths.get(entry.id)); parent !== input; parent = dirname(parent)) allowedDirectories.add(parent);
+  }
+  function rememberDirectory(path, state) {
+    const current = fileState(state), baseline = directoryBaselines.get(path);
+    if (baseline && canonical(baseline) !== canonical(current)) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+    if (!baseline) directoryBaselines.set(path, current);
+  }
+  function safeFile(state, code) {
+    if (!state.isFile() || state.isSymbolicLink() || state.nlink !== 1 || state.uid !== process.getuid() || state.gid !== process.getgid() || (state.mode & 0o022) !== 0) fail(code);
+  }
+  async function boundedRead(file, size, code, beforeRead) {
+    const bytes = Buffer.alloc(size);
+    for (let position = 0; position < size;) {
+      beforeRead();
+      const got = await file.read(bytes, position, Math.min(65536, size - position), position);
+      if (got.bytesRead === 0) fail(code);
+      position += got.bytesRead;
+    }
+    return bytes;
   }
   async function safePath(path) {
-    await pinnedDirectory(input, inputDirectory, 'STAGED_ARTIFACT_MEMBER_UNSAFE');
+    rememberDirectory(input, await pinnedDirectory(input, inputDirectory, 'STAGED_ARTIFACT_MEMBER_UNSAFE'));
     const rel = relative(input, path);
     if (rel.startsWith('..') || rel.startsWith('/') || rel.includes('\\')) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
     let parent = dirname(path);
     while (parent !== input) {
       const state = await lstat(parent);
-      if (!state.isDirectory() || state.isSymbolicLink() || state.uid !== process.getuid() || (state.mode & 0o022) !== 0) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
+      if (!state.isDirectory() || state.isSymbolicLink() || state.uid !== process.getuid() || state.gid !== process.getgid() || (state.mode & 0o022) !== 0) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
+      rememberDirectory(parent, state);
       parent = dirname(parent);
     }
     if (await realpath(dirname(path)) !== dirname(path)) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
   }
   async function inspectFixedSurface(component) {
-    await pinnedDirectory(input, inputDirectory, 'STAGED_ARTIFACT_MEMBER_UNSAFE');
+    rememberDirectory(input, await pinnedDirectory(input, inputDirectory, 'STAGED_ARTIFACT_MEMBER_UNSAFE'));
     const entries = [];
     for (const entry of ENTRIES.filter(e => e.component === component)) {
       let kind = 'REGULAR';
       try {
         await safePath(paths.get(entry.id));
         const value = await lstat(paths.get(entry.id));
-        if (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1 || value.uid !== process.getuid() || (value.mode & 0o022) !== 0) kind = 'UNSAFE';
-      } catch (error) { kind = error.code === 'ENOENT' ? 'MISSING' : 'UNSAFE'; }
+        safeFile(value, 'STAGED_ARTIFACT_MEMBER_UNSAFE');
+        const baseline = closedMembers.get(entry.id);
+        if (baseline && canonical(baseline) !== canonical(fileState(value))) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+      } catch (error) {
+        if (error.message === 'STAGED_ARTIFACT_BYTES_CHANGED' || closedMembers.has(entry.id)) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+        kind = error.code === 'ENOENT' ? 'MISSING' : 'UNSAFE';
+      }
       entries.push({id: entry.id, emittedPath: entry.path, kind});
     }
     const roots = {LINUX_RUNTIME: 'dist/src', EXTENSION: 'dist-extension', NATIVE_BUNDLE: 'dist-native-host', WINDOWS_PACKAGE: 'dist-native-host'};
-    const expectedInSharedRoot = new Set(ENTRIES.map(e => e.path));
     async function walk(directory) {
-      if (directory === hooks.directoryReadTarget) events.observedDirectoryReads += 1;
-      for (const child of await readdir(directory, {withFileTypes: true})) {
-        const path = join(directory, child.name), emittedPath = relative(input, path).split('\\').join('/');
-        if (child.isDirectory()) await walk(path);
-        else if (!expectedInSharedRoot.has(emittedPath)) entries.push({id: `${component}:${emittedPath}`, emittedPath, kind: 'UNSAFE'});
+      if (!allowedDirectories.has(directory)) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
+      let before;
+      try { await safePath(directory); before = await lstat(directory); } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        if (directoryBaselines.has(directory)) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+        return;
+      }
+      if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== process.getuid() || before.gid !== process.getgid() || (before.mode & 0o022) !== 0) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
+      rememberDirectory(directory, before);
+      const pinned = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      let listing;
+      try {
+        if (canonical(fileState(before)) !== canonical(fileState(await pinned.stat()))) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+        if (directory === hooks.directoryReadTarget) events.observedDirectoryReads += 1;
+        listing = await opendir(directory, {bufferSize: 8});
+        let count = 0;
+        for (;;) {
+          const child = await listing.read(); if (child === null) break;
+          if (++count > ENTRIES.length + allowedDirectories.size) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
+          const path = join(directory, child.name), emittedPath = relative(input, path).split('\\').join('/');
+          if (child.isDirectory()) {
+            if (!allowedDirectories.has(path)) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
+            await walk(path);
+          } else if (!expectedInSharedRoot.has(emittedPath)) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
+        }
+        await safePath(directory);
+        if (canonical(fileState(before)) !== canonical(fileState(await pinned.stat())) || canonical(fileState(before)) !== canonical(fileState(await lstat(directory)))) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+      } finally {
+        try { if (listing) await listing.close(); } finally { await pinned.close(); }
       }
     }
     await walk(join(input, roots[component]));
+    if (component === 'WINDOWS_PACKAGE' && closedMembers.has('WINDOWS_ARCHIVE')) {
+      await safePath(paths.get('WINDOWS_ARCHIVE'));
+      const state = await lstat(paths.get('WINDOWS_ARCHIVE'));
+      safeFile(state, 'STAGED_ARTIFACT_MEMBER_UNSAFE');
+      if (canonical(closedMembers.get('WINDOWS_ARCHIVE')) !== canonical(fileState(state))) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+    }
     return {entries: entries.sort((a, b) => a.id.localeCompare(b.id))};
   }
   async function openFixedMember(id) {
@@ -176,25 +237,26 @@ async function fixture(t, sourceObservation = {}) {
     let before;
     try { before = await lstat(path); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.uid !== process.getuid() || (before.mode & 0o022) !== 0) fail('STAGED_ARTIFACT_MEMBER_UNSAFE');
-    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     if (!sameFile(before, await file.stat())) { await file.close(); fail('STAGED_ARTIFACT_BYTES_CHANGED'); }
-    let position = 0;
+    let position = 0, atEnd = false, lastState = null;
     const handle = {
       async stat() {
         await safePath(path);
         const state = await file.stat();
         if (!sameFile(await lstat(path), state)) fail('STAGED_ARTIFACT_BYTES_CHANGED');
-        return fileState(state);
+        lastState = fileState(state); return {...lastState};
       },
       async read(maxBytes) {
         assert.ok(Number.isInteger(maxBytes) && maxBytes > 0 && maxBytes <= 65536);
         const bytes = Buffer.alloc(maxBytes);
         const got = await file.read(bytes, 0, maxBytes, position); position += got.bytesRead;
+        if (got.bytesRead === 0) atEnd = true;
         events.reads.push(id);
         if (hooks.afterRead) await hooks.afterRead(id, path);
         return Uint8Array.from(bytes.subarray(0, got.bytesRead));
       },
-      async close() { await file.close(); },
+      async close() { await file.close(); if (atEnd && lastState) closedMembers.set(id, {...lastState}); },
     };
     const entry = ENTRIES.find(e => e.id === id);
     return {handle, acquisitionRef: acquisitions.get(id), archiveMemberPath: entry?.component === 'WINDOWS_PACKAGE' ? 'retained/' + id.split('/').at(-1) : null};
@@ -202,8 +264,22 @@ async function fixture(t, sourceObservation = {}) {
   async function readOriginal(ref) {
     const path = originalPaths.get(ref.id);
     if (!path) return null;
-    events.originalReads.set(ref.id, (events.originalReads.get(ref.id) ?? 0) + 1);
-    return Uint8Array.from(await readFile(path));
+    await pinnedDirectory(originals, originalDirectory, 'STAGED_ARTIFACT_MEMBER_UNSAFE');
+    let before;
+    try { before = await lstat(path); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    safeFile(before, 'STAGED_ARTIFACT_MEMBER_UNSAFE');
+    if (before.size > 1024 * 1024) fail('STAGED_ARTIFACT_BOUNDS_EXCEEDED');
+    if (before.size !== ref.bytes) return null;
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      if (canonical(fileState(before)) !== canonical(fileState(await file.stat()))) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+      const bytes = await boundedRead(file, before.size, 'STAGED_ARTIFACT_BYTES_CHANGED', () => {
+        events.originalReads.set(ref.id, (events.originalReads.get(ref.id) ?? 0) + 1);
+      });
+      await pinnedDirectory(originals, originalDirectory, 'STAGED_ARTIFACT_MEMBER_UNSAFE');
+      if (canonical(fileState(before)) !== canonical(fileState(await file.stat())) || canonical(fileState(before)) !== canonical(fileState(await lstat(path)))) fail('STAGED_ARTIFACT_BYTES_CHANGED');
+      return Uint8Array.from(bytes);
+    } finally { await file.close(); }
   }
   async function publish(bytes, digest) {
     await pinnedDirectory(output, outputDirectory, 'OUTPUT_UNSAFE');
@@ -217,13 +293,16 @@ async function fixture(t, sourceObservation = {}) {
       try { await link(temporary, final); } catch (error) { if (error.code !== 'EEXIST') throw error; }
       await unlink(temporary);
       const current = await lstat(final);
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.uid !== process.getuid() || (current.mode & 0o777) !== 0o600) fail('OUTPUT_UNSAFE');
-      const readback = await open(final, constants.O_RDONLY | constants.O_NOFOLLOW);
+      safeFile(current, 'OUTPUT_UNSAFE');
+      if ((current.mode & 0o777) !== 0o600) fail('OUTPUT_UNSAFE');
+      if (current.size !== bytes.length || current.size > 262144) fail('OUTPUT_COLLISION');
+      const readback = await open(final, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       let actual;
       try {
-        if (!sameFile(current, await readback.stat())) fail('OUTPUT_UNSAFE');
-        events.outputReads += 1;
-        actual = await readback.readFile();
+        if (canonical(fileState(current)) !== canonical(fileState(await readback.stat()))) fail('OUTPUT_UNSAFE');
+        actual = await boundedRead(readback, current.size, 'OUTPUT_UNSAFE', () => { events.outputReads += 1; });
+        await pinnedDirectory(output, outputDirectory, 'OUTPUT_UNSAFE');
+        if (canonical(fileState(current)) !== canonical(fileState(await readback.stat())) || canonical(fileState(current)) !== canonical(fileState(await lstat(final)))) fail('OUTPUT_UNSAFE');
       } finally { await readback.close(); }
       if (!Buffer.from(bytes).equals(actual)) fail('OUTPUT_COLLISION');
       await pinnedDirectory(output, outputDirectory, 'OUTPUT_UNSAFE');

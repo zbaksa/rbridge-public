@@ -223,9 +223,13 @@ export async function collectStagedArtifactFixtureInventory(fixtureBinding) {
       if (cached === null) addReason('ORIGINAL_QUALIFICATION_UNAVAILABLE', component);
       return cached;
     }
+    requireValue(ref.bytes <= 16 * MiB - observationBytes, 'STAGED_ARTIFACT_BOUNDS_EXCEEDED');
     let parsed = null;
     let supplied = null;
-    try { supplied = await input.readOriginal({...ref}); } catch { supplied = null; }
+    try { supplied = await input.readOriginal({...ref}); } catch (error) {
+      if (error instanceof Error && ['STAGED_ARTIFACT_BOUNDS_EXCEEDED', 'STAGED_ARTIFACT_MEMBER_UNSAFE', 'STAGED_ARTIFACT_BYTES_CHANGED'].includes(error.message)) throw error;
+      supplied = null;
+    }
     if (supplied instanceof Uint8Array) {
       requireValue(supplied.byteLength <= MiB && observationBytes + supplied.byteLength <= 16 * MiB, 'STAGED_ARTIFACT_BOUNDS_EXCEEDED');
       const raw = Uint8Array.from(supplied); observationBytes += raw.byteLength;
