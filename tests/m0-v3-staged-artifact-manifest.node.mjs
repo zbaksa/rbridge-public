@@ -117,7 +117,7 @@ async function fixture(t, sourceObservation = {}) {
   for (const entry of [...ENTRIES, {id: 'WINDOWS_ARCHIVE', component: 'WINDOWS_PACKAGE'}]) {
     const bytes = sourceBytes.get(entry.id);
     const archiveMemberPath = entry.component === 'WINDOWS_PACKAGE' && entry.id !== 'WINDOWS_ARCHIVE' ? 'retained/' + entry.id.split('/').at(-1) : null;
-    acquisitions.set(entry.id, await original(`fixture:acquired:${entry.id}`, {schema: 'RBRIDGE_STAGED_ARTIFACT_FIXTURE_ACQUISITION_V1', authority: 'SOURCE_FIXTURE', memberId: entry.id, sha256: hash(bytes), bytes: bytes.length, originId: `fixture:build:${entry.component}`, archiveMemberPath}));
+    acquisitions.set(entry.id, await original(`fixture:acquired:${hash(Buffer.from(entry.id))}`, {schema: 'RBRIDGE_STAGED_ARTIFACT_FIXTURE_ACQUISITION_V1', authority: 'SOURCE_FIXTURE', memberId: entry.id, sha256: hash(bytes), bytes: bytes.length, originId: `fixture:build:${entry.component}`, archiveMemberPath}));
   }
   const buildRefs = {};
   const commands = {LINUX_RUNTIME: 'BUILD_SERVER', EXTENSION: 'BUILD_EXTENSION', NATIVE_BUNDLE: 'BUILD_NATIVE_HOST', WINDOWS_PACKAGE: 'BUILD_WINDOWS_SEA'};
