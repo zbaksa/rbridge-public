@@ -69,8 +69,8 @@ async function fixture(t, sourceObservation = {}) {
   const sentinel = join(root, 'preserved-history');
   await writeFile(sentinel, 'original history\n', {mode: 0o600});
   const paths = new Map(), sourceBytes = new Map(), refs = new Map(), originalPaths = new Map();
-  const hooks = {afterRead: null, failFileSync: false};
-  const events = {reads: [], publications: []};
+  const hooks = {afterRead: null, failFileSync: false, directoryReadTarget: null};
+  const events = {reads: [], publications: [], originalReads: new Map(), outputReads: 0, observedDirectoryReads: 0};
   const manifest = {manifest_version: 3, name: 'COCWIN RBridge Chat', short_name: 'RBridge Chat', version: '0.1.0', description: 'COCWIN RBridge browser authority adapter', key: KEY, background: {service_worker: 'serviceWorker.js', type: 'module'}, permissions: ['tabs', 'scripting', 'storage', 'nativeMessaging'], host_permissions: ['https://chatgpt.com/*', 'https://www.chatgpt.com/*', 'https://chat.openai.com/*', 'https://www.chat.openai.com/*']};
   const executable = Buffer.alloc(1024 * 1024);
   executable.write('MZ'); executable.writeUInt32LE(128, 0x3c); executable.write('PE\0\0', 128);
@@ -160,6 +160,7 @@ async function fixture(t, sourceObservation = {}) {
     const roots = {LINUX_RUNTIME: 'dist/src', EXTENSION: 'dist-extension', NATIVE_BUNDLE: 'dist-native-host', WINDOWS_PACKAGE: 'dist-native-host'};
     const expectedInSharedRoot = new Set(ENTRIES.map(e => e.path));
     async function walk(directory) {
+      if (directory === hooks.directoryReadTarget) events.observedDirectoryReads += 1;
       for (const child of await readdir(directory, {withFileTypes: true})) {
         const path = join(directory, child.name), emittedPath = relative(input, path).split('\\').join('/');
         if (child.isDirectory()) await walk(path);
@@ -199,7 +200,10 @@ async function fixture(t, sourceObservation = {}) {
     return {handle, acquisitionRef: acquisitions.get(id), archiveMemberPath: entry?.component === 'WINDOWS_PACKAGE' ? 'retained/' + id.split('/').at(-1) : null};
   }
   async function readOriginal(ref) {
-    const path = originalPaths.get(ref.id); return path ? Uint8Array.from(await readFile(path)) : null;
+    const path = originalPaths.get(ref.id);
+    if (!path) return null;
+    events.originalReads.set(ref.id, (events.originalReads.get(ref.id) ?? 0) + 1);
+    return Uint8Array.from(await readFile(path));
   }
   async function publish(bytes, digest) {
     await pinnedDirectory(output, outputDirectory, 'OUTPUT_UNSAFE');
@@ -218,6 +222,7 @@ async function fixture(t, sourceObservation = {}) {
       let actual;
       try {
         if (!sameFile(current, await readback.stat())) fail('OUTPUT_UNSAFE');
+        events.outputReads += 1;
         actual = await readback.readFile();
       } finally { await readback.close(); }
       if (!Buffer.from(bytes).equals(actual)) fail('OUTPUT_COLLISION');
@@ -459,4 +464,100 @@ test('missing host proof stays NOT_INSPECTED in a complete fixture inventory', a
 
 test('the public entry without a fixture binding remains inert and unavailable', async () => {
   await assert.rejects(collectStagedArtifactFixtureInventory(), {message: 'SOURCE_ARTIFACT_ACQUISITION_BINDING_UNAVAILABLE'});
+});
+
+// Review regression: a post-read limit does not prevent an oversized sparse
+// original from being acquired through the actual private fixture adapter.
+test('an oversized retained original is rejected before its byte read', async t => {
+  const f = await fixture(t), id = 'fixture:source:runtime';
+  const file = await open(f.originalPaths.get(id), 'r+');
+  try { await file.truncate(1024 * 1024 + 1); } finally { await file.close(); }
+  await assert.rejects(collectStagedArtifactFixtureInventory(f.binding), {message: 'STAGED_ARTIFACT_BOUNDS_EXCEEDED'});
+  await noOutput(f);
+  assert.equal(f.events.originalReads.get(id) ?? 0, 0);
+});
+
+// Review regression: each acquisition is individually <=1MiB, but the next
+// declared original must fit the remaining16MiB before the adapter reads it.
+test('the aggregate original budget is checked before the next byte read', async t => {
+  const f = await fixture(t), buildId = 'fixture:build:LINUX_RUNTIME';
+  const buildPath = f.originalPaths.get(buildId), build = JSON.parse(await readFile(buildPath, 'utf8'));
+  for (const member of build.members.slice(0, 17)) {
+    const path = f.originalPaths.get(member.acquisitionRef.id), raw = await readFile(path);
+    const padded = Buffer.alloc(1024 * 1024, 0x20); raw.copy(padded);
+    await writeFile(path, padded);
+    member.acquisitionRef = observation(member.acquisitionRef.id, padded);
+  }
+  const bytes = Buffer.from(canonical(build) + '\n');
+  await writeFile(buildPath, bytes);
+  f.binding.qualification.buildRefs.LINUX_RUNTIME = observation(buildId, bytes);
+  // Noncanonical padded originals remain unavailable; those acquired bytes
+  // still consume the hard budget and cannot exempt the next original.
+  const nextBeyondBudget = build.members[15].acquisitionRef.id;
+  await assert.rejects(collectStagedArtifactFixtureInventory(f.binding), {message: 'STAGED_ARTIFACT_BOUNDS_EXCEEDED'});
+  await noOutput(f);
+  assert.equal(f.events.originalReads.get(nextBeyondBudget) ?? 0, 0);
+});
+
+// Review regression: a large existing collision must not be read, overwritten
+// or reported as a new publication. The oversized tail is created sparsely.
+test('an oversized existing output collision is rejected before readback', async t => {
+  const f = await fixture(t), first = await collectStagedArtifactFixtureInventory(f.binding);
+  const path = join(f.output, first.record.manifestSha256 + '.json'), beforeReads = f.events.outputReads;
+  const file = await open(path, 'r+');
+  try { await file.truncate(262144 + 1); } finally { await file.close(); }
+  await assert.rejects(collectStagedArtifactFixtureInventory(f.binding), {message: 'OUTPUT_COLLISION'});
+  assert.equal((await lstat(path)).size, 262144 + 1);
+  assert.deepEqual(await readdir(f.output), [first.record.manifestSha256 + '.json']);
+  assert.equal(f.events.publications.length, 1);
+  assert.equal(await readFile(f.sentinel, 'utf8'), 'original history\n');
+  assert.equal(f.events.outputReads, beforeReads);
+});
+
+// Review regression: per-stream stability is insufficient if a later actual
+// stream replaces a path whose earlier stream has already closed.
+test('a later member cannot replace an earlier closed member before publication', async t => {
+  const f = await fixture(t); let replaced = false;
+  f.hooks.afterRead = async id => {
+    if (id === BUNDLE && !replaced) {
+      assert.ok(f.events.reads.includes(DEPENDENCY)); replaced = true;
+      await unlink(f.paths.get(DEPENDENCY));
+      await writeFile(f.paths.get(DEPENDENCY), 'replacement after earlier stream closed\n', {mode: 0o600});
+    }
+  };
+  await assert.rejects(collectStagedArtifactFixtureInventory(f.binding), {message: 'STAGED_ARTIFACT_BYTES_CHANGED'});
+  assert.equal(replaced, true); await noOutput(f);
+});
+
+for (const [name, writable] of [['empty', false], ['writable', true]]) {
+  // Review regression: unknown directories are namespace entries even when
+  // empty. Reject before recursively reading them or opening any member.
+  test(`an unknown ${name} directory is rejected before member or directory reads`, async t => {
+    const f = await fixture(t), extra = join(f.input, 'dist/src/foreign-empty-directory');
+    await mkdir(extra, {mode: 0o700});
+    if (writable) await chmod(extra, 0o770);
+    f.hooks.directoryReadTarget = extra;
+    await assert.rejects(collectStagedArtifactFixtureInventory(f.binding), {message: 'STAGED_ARTIFACT_MEMBER_UNSAFE'});
+    assert.deepEqual(f.events.reads, []); assert.equal(f.events.observedDirectoryReads, 0);
+    await noOutput(f);
+  });
+}
+
+// Review regression: safe absence of a complete component root must preserve
+// all fixed member IDs and emit missing placeholders instead of walk ENOENT.
+test('a missing extension root emits all three null proofs and BLOCKED availability', async t => {
+  const f = await fixture(t); await rm(join(f.input, 'dist-extension'), {recursive: true});
+  const {record} = await collectStagedArtifactFixtureInventory(f.binding);
+  assert.equal(record.availabilityState, 'BLOCKED');
+  assert.equal(record.components.EXTENSION.availabilityState, 'BLOCKED');
+  assert.equal(record.components.EXTENSION.files.length, 3);
+  assert.equal(Object.values(record.components).flatMap(value => value.files).length, 51);
+  for (const path of PATHS.EXTENSION) {
+    const proof = member(record, `EXTENSION:${path}`);
+    assert.equal(proof.bytes, null); assert.equal(proof.sha256, null); assert.equal(proof.acquisitionRef, null);
+    assert.deepEqual(proof.reasons, ['STAGED_ARTIFACT_MEMBER_MISSING']);
+  }
+  assert.equal(record.sourceToBytesState, 'BLOCKED');
+  assert.equal(record.producer.kind, 'SOURCE_FIXTURE');
+  assert.ok(record.reasons.includes('SOURCE_FIXTURE_NOT_QUALIFICATION'));
 });
