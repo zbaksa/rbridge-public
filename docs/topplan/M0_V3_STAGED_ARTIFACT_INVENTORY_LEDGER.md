@@ -1,0 +1,15 @@
+# M0 V3 staged-artifact fixture inventory
+
+Status: SOURCE_PREPARATION / RED_PENDING. No test, build, APP action or source qualification is claimed by this candidate. This branch is limited to the fixture writer scaffold, its behavioral tests, one scoped package command and this ledger.
+
+ROOT froze the source-only contract in the approved staged-artifact fixture plan at C docs head0dc731e42762d85c1afb7a70c5cb8fcc0cba9f66, plan blob48893374f8e6fe09651f2bfaf8d48a1ce9da0d26. Implementation base is R docs77ffe85a1838c03e31f4361dabd7ae7ca716aaad. The separately qualified runtime remains R905d2b3af74907b575003b634e572f126e647025/tree9dafef94d4ce32b526cc56b4413d1682c16ed4ad; the staged-installation runbook and all existing runtime source stay unchanged.
+
+The behavioral suite uses independently authored originals and actual isolated fixture files. It requires all51 deployable members (runtime44, extension3, native CJS1, Windows upload3), bounded raw measurement, strict SOURCE_FIXTURE output, independent original-ref checks and immutable private publication. Every emitted fixture association must remain BLOCKED/SOURCE_FIXTURE_NOT_QUALIFICATION. The optional archive slot cannot replace any executable/member bytes. Node/flock/installed environment and Windows owner/ACL/config/registration remain NOT_INSPECTED; this suite provides no production collector, downloader, archive parser, installer, LIVE factory or canary binding.
+
+The scaffold intentionally returns SOURCE_ARTIFACT_ACQUISITION_BINDING_UNAVAILABLE. The next authorized normal R action must run the scoped Node suite at this exact immutable candidate and retain a genuine behavioral RED receipt before implementation. Loader/syntax/setup failures are not behavioral RED. No local test/build or alternate execution route is permitted by this source-preparation candidate.
+
+`test:v3:staged-artifacts` invokes the `.node.mjs` suite exactly once. The original compiled-node full test chain is retained and invokes that scoped suite once at its end; no workflow, dependency, TS compilation or runtime build configuration changes are included.
+
+Retained fresh named-scope R read13026/comment5964310686 at2026-10-03T01:52:38.418Z observed normal identity UID/GID1027, canonical b7961f2c27da688e14023db48873db23e220dc25/tree dd3db35613b0c998bfe9a33fbd74bff9accdbe05 clean, named default runtime SOURCE_SHA and fixed-peer config ENOENT, and named rbridge.service inactive/dead/MainPID0. It does not prove machine-wide absence. Windows remains NOT_INSPECTED. Actual compiled artifact acquisition/provenance, installed/private bindings, lossless Markdown, real I1/I2/I3 and useful autonomy remain blocked/open. M0 source remains10/12; previous accepted tasks/helper and runtime eligibility are unchanged.
+
+This ledger will record original normal-R RED/GREEN qualification references only after those actions actually occur. Neither the current writer source SHA nor future fixture records may relabel the qualified runtime or stand in for original production byte acquisition.
