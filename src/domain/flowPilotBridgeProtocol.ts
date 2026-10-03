@@ -50,11 +50,13 @@ const POLICY_PAYLOAD_FIELDS = new Set(['expectedPolicySha256']);
 const SAFE_ID = /^[a-z0-9][a-z0-9._:-]{0,191}$/;
 const APP_ID = /^[a-z][a-z0-9_-]{0,31}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+const COCWIN_POLICY_PATH = '/api/v1/automation-engine/policy';
 
 const COCWIN_POLICY_HEALTH_PROGRAM = [
   '(async()=>{',
   'const expected=process.argv[1];',
-  "const response=await fetch('http://192.168.100.14:8088/api/v1/automation-engine/policy',{headers:{accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});",
+  'const policyUrl=process.argv[2];',
+  "const response=await fetch(policyUrl,{headers:{accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});",
   "if(!response.ok)throw new Error('COCWIN_POLICY_HTTP_'+response.status);",
   'const body=await response.json();',
   "if(body?.state!=='PASS'||body?.policySha256!==expected)throw new Error('COCWIN_MASTER_POLICY_MISMATCH');",
@@ -78,6 +80,20 @@ function safeText(value: unknown, code: string): string {
 function integer(value: unknown, min: number, max: number, code: string): number {
   if (!Number.isInteger(value) || Number(value) < min || Number(value) > max) fail(code);
   return Number(value);
+}
+
+function cocwinPolicyUrl(value: string | undefined): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) {
+    fail('FLOWPILOT_POLICY_URL_INVALID');
+  }
+  let url: URL;
+  try { url = new URL(value); }
+  catch { fail('FLOWPILOT_POLICY_URL_INVALID'); }
+  if (url.protocol !== 'http:' || !url.hostname || url.username || url.password
+    || url.pathname !== COCWIN_POLICY_PATH || url.search || url.hash) {
+    fail('FLOWPILOT_POLICY_URL_INVALID');
+  }
+  return url.toString();
 }
 function tokenEqual(actual: unknown, expected: string): boolean {
   if (typeof actual !== 'string') return false;
@@ -155,23 +171,41 @@ export function flowPilotOperationDigest(operation: FlowPilotBridgeOperation): s
   return createHash('sha256').update(JSON.stringify(canonical(operation))).digest('hex');
 }
 
-export function toFlowPilotAppExecution(operation: FlowPilotBridgeOperation): FlowPilotAppExecutionRequest {
+export function flowPilotAppIdentity(
+  operation: FlowPilotBridgeOperation,
+): { appId: 'fpilot' | 'cocwin'; jobId: string } {
   const suffix = createHash('sha256').update(operation.operationId).digest('hex').slice(0, 48);
+  return operation.appId === 'fpilot'
+    ? { appId: 'fpilot', jobId: `fp-${suffix}` }
+    : { appId: 'cocwin', jobId: `fp-cw-${suffix}` };
+}
+
+export function toFlowPilotAppExecution(
+  operation: FlowPilotBridgeOperation,
+  configuredCocwinPolicyUrl?: string,
+): FlowPilotAppExecutionRequest {
+  const identity = flowPilotAppIdentity(operation);
   if (operation.appId === 'fpilot') {
     return {
-      appId: 'fpilot', jobId: `fp-${suffix}`,
+      ...identity,
       payload: {
         tool: 'probe', cwd: '/home/fpilot/backend', args: [],
         timeout_ms: operation.timeoutSeconds * 1000, max_bytes: 32768,
       },
     };
   }
+  const policyUrl = cocwinPolicyUrl(configuredCocwinPolicyUrl);
   return {
-    appId: 'cocwin', jobId: `fp-cw-${suffix}`,
+    ...identity,
     payload: {
       tool: 'node',
       cwd: '/home/cocwin/backend',
-      args: ['-e', COCWIN_POLICY_HEALTH_PROGRAM, operation.payload.expectedPolicySha256],
+      args: [
+        '-e',
+        COCWIN_POLICY_HEALTH_PROGRAM,
+        operation.payload.expectedPolicySha256,
+        policyUrl,
+      ],
       timeout_ms: operation.timeoutSeconds * 1000,
       max_bytes: 32768,
     },

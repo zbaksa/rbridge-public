@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { flowPilotOperationDigest, toFlowPilotAppExecution, type FlowPilotBridgeOperation } from '../domain/flowPilotBridgeProtocol.js';
+import { flowPilotAppIdentity, flowPilotOperationDigest, type FlowPilotBridgeOperation } from '../domain/flowPilotBridgeProtocol.js';
 import type { FlowPilotBridgePhase, FlowPilotBridgeRecord, FlowPilotBridgeStore } from './flowPilotBridgeGateway.js';
 
 interface PersistedRecord extends FlowPilotBridgeRecord {
@@ -109,9 +109,9 @@ function validate(value: unknown): PersistedRecord {
   if (keys.length !== expected.size || keys.some((key) => !expected.has(key)) || containsSecretKey(row)) fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
   if (row.schema !== 'COCWIN_FLOWPILOT_BRIDGE_STORE_V1') fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
   const operation = validateOperation(row.operation);
-  let app: ReturnType<typeof toFlowPilotAppExecution>;
+  let app: ReturnType<typeof flowPilotAppIdentity>;
   let digest: string;
-  try { app = toFlowPilotAppExecution(operation); digest = flowPilotOperationDigest(operation); }
+  try { app = flowPilotAppIdentity(operation); digest = flowPilotOperationDigest(operation); }
   catch { fail('FLOWPILOT_BRIDGE_STORE_CORRUPT'); }
   if (typeof row.digest !== 'string' || !SHA_RE.test(row.digest) || row.digest !== digest || row.appId !== app.appId || row.jobId !== app.jobId || typeof row.jobId !== 'string' || !JOB_RE.test(row.jobId) || typeof row.phase !== 'string' || !PHASES.has(row.phase as FlowPilotBridgePhase) || typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
   const callback = validateCallback(row.callback, operation);
@@ -126,9 +126,9 @@ function validateTombstone(value: unknown): PersistedTombstone {
   if (keys.length !== expected.size || keys.some((key) => !expected.has(key))
     || row.schema !== 'COCWIN_FLOWPILOT_BRIDGE_TOMBSTONE_V1') fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
   const operation = validateOperation(row.operation);
-  let app: ReturnType<typeof toFlowPilotAppExecution>;
+  let app: ReturnType<typeof flowPilotAppIdentity>;
   let digest: string;
-  try { app = toFlowPilotAppExecution(operation); digest = flowPilotOperationDigest(operation); }
+  try { app = flowPilotAppIdentity(operation); digest = flowPilotOperationDigest(operation); }
   catch { fail('FLOWPILOT_BRIDGE_STORE_CORRUPT'); }
   if (typeof row.digest !== 'string' || !SHA_RE.test(row.digest) || row.digest !== digest
     || row.appId !== app.appId || row.jobId !== app.jobId || typeof row.jobId !== 'string'
@@ -287,7 +287,7 @@ export function createFlowPilotBridgeStore(
     async claim(input: FlowPilotBridgeRecord) {
       return runExclusive(input.operation.operationId, async () => {
         if (input.phase !== 'CLAIMED' || input.callback !== undefined || !SHA_RE.test(input.digest)) fail('FLOWPILOT_BRIDGE_CLAIM_INVALID');
-        const app = toFlowPilotAppExecution(input.operation);
+        const app = flowPilotAppIdentity(input.operation);
         if (input.digest !== flowPilotOperationDigest(input.operation) || input.appId !== app.appId || input.jobId !== app.jobId) fail('FLOWPILOT_BRIDGE_CLAIM_INVALID');
         await ensureRoot(root);
         const existing = await read(root, input.operation.operationId);

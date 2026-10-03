@@ -7,6 +7,7 @@ import {it} from 'vitest';
 import { createFlowPilotBridgeRuntime } from '../../src/server/flowPilotBridgeRuntime.js';
 
 const remoteBridgeToken = 'b'.repeat(40), callbackToken = 'c'.repeat(40);
+const policyUrl = 'http://127.0.0.1:18088/api/v1/automation-engine/policy';
 function envelope(callbackUrl: string) { return {
   schema: 'FLOWPILOT_REMOTE_BRIDGE_V1', operationId: 'op_run_0000000001_probe_a1', runId: 'run_0000000001',
   stepId: 'probe', attempt: 1, fencingToken: 7, idempotencyKey: 'fp:run_0000000001:probe:1',
@@ -90,7 +91,13 @@ it('policy-health ingress maps to cocwin fixed controller execution and specific
   const submitted: Array<{ app: string; payload: unknown }> = [];
   const runtime = createFlowPilotBridgeRuntime({
     root, host: '127.0.0.1', port: 0,
-    env: { COCWIN_FLOWPILOT_INGRESS_ENABLED: 'true', FLOWPILOT_REMOTE_BRIDGE_TOKEN: remoteBridgeToken, FLOWPILOT_CALLBACK_TOKEN: callbackToken, COCWIN_FLOWPILOT_CALLBACK_URL: callbackUrl },
+    env: {
+      COCWIN_FLOWPILOT_INGRESS_ENABLED: 'true',
+      FLOWPILOT_REMOTE_BRIDGE_TOKEN: remoteBridgeToken,
+      FLOWPILOT_CALLBACK_TOKEN: callbackToken,
+      COCWIN_FLOWPILOT_CALLBACK_URL: callbackUrl,
+      RBRIDGE_COCWIN_POLICY_URL: policyUrl,
+    },
     controller: {
       async submit(app, _job, payload) { submitted.push({ app, payload }); return { state: 'RUNNING' }; },
       async status() { return { state: 'SUCCEEDED' }; },
@@ -112,6 +119,8 @@ it('policy-health ingress maps to cocwin fixed controller execution and specific
     const payload = submitted[0]?.payload as Record<string, unknown>;
     assert.equal(payload.tool, 'node');
     assert.equal(payload.cwd, '/home/cocwin/backend');
+    const args = payload.args as string[];
+    assert.equal(args[3], policyUrl);
     assert.equal(callbacks.length, 1);
     assert.equal(callbacks[0]?.outcome, 'PASS');
     const evidence = callbacks[0]?.evidence as Record<string, unknown>;

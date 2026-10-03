@@ -35,6 +35,7 @@ export interface FlowPilotBridgeGatewayOptions {
   controller: ControllerPort;
   callback: CallbackPort;
   callbackToken: string;
+  cocwinPolicyUrl?: string;
 }
 
 function resultDigest(value: unknown): string {
@@ -105,7 +106,10 @@ function createOperationSerializer() {
 export function createFlowPilotBridgeGateway(options: FlowPilotBridgeGatewayOptions) {
   const runExclusive = createOperationSerializer();
   async function submit(record: FlowPilotBridgeRecord): Promise<Record<string, unknown>> {
-    const request = toFlowPilotAppExecution(record.operation);
+    const request = toFlowPilotAppExecution(
+      record.operation,
+      options.cocwinPolicyUrl,
+    );
     const status = await options.controller.submit(request.appId, request.jobId, request.payload);
     await options.store.markSubmitted(record.operation.operationId);
     return status;
@@ -117,7 +121,10 @@ export function createFlowPilotBridgeGateway(options: FlowPilotBridgeGatewayOpti
   return {
     async accept(operation: FlowPilotBridgeOperation): Promise<{ status: 'ACCEPTED'; operationId: string }> {
       return runExclusive(operation.operationId, async () => {
-        const request = toFlowPilotAppExecution(operation);
+        const request = toFlowPilotAppExecution(
+          operation,
+          options.cocwinPolicyUrl,
+        );
         const proposed: FlowPilotBridgeRecord = {
           operation, digest: flowPilotOperationDigest(operation), appId: request.appId,
           jobId: request.jobId, phase: 'CLAIMED',

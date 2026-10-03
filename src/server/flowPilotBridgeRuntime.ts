@@ -57,11 +57,13 @@ export function createFlowPilotBridgeRuntime(options: FlowPilotBridgeRuntimeOpti
   const port = ingressPort(configuredPort, options.port === 0);
   const store = createFlowPilotBridgeStore(join(options.root, 'flowpilot'));
   const callback = createFlowPilotCallbackClient();
+  const cocwinPolicyUrl = options.env.RBRIDGE_COCWIN_POLICY_URL;
   const gateway = createFlowPilotBridgeGateway({
     store,
     controller: options.controller,
     callback,
     callbackToken,
+    ...(cocwinPolicyUrl === undefined ? {} : { cocwinPolicyUrl }),
   });
   const server = createFlowPilotBridgeIngress({
     remoteBridgeToken,

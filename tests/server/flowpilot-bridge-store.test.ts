@@ -3,7 +3,7 @@ import { link, mkdir, mkdtemp, readFile, readdir, stat, symlink, unlink, writeFi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {it} from 'vitest';
-import { parseFlowPilotBridgeEnvelope, flowPilotOperationDigest, toFlowPilotAppExecution } from '../../src/domain/flowPilotBridgeProtocol.js';
+import { flowPilotAppIdentity, parseFlowPilotBridgeEnvelope, flowPilotOperationDigest } from '../../src/domain/flowPilotBridgeProtocol.js';
 import type { FlowPilotBridgeRecord } from '../../src/server/flowPilotBridgeGateway.js';
 import { createFlowPilotBridgeStore } from '../../src/server/flowPilotBridgeStore.js';
 
@@ -15,7 +15,7 @@ function record(timeoutSeconds = 60, operationId = 'op_run_0000000001_probe_a1')
     appId: 'fpilot', action: 'APP_PROBE_V1', payload: {}, timeoutSeconds,
     callback: { url: callbackUrl, bearerToken: callbackToken },
   }, { callbackToken, callbackUrl });
-  const app = toFlowPilotAppExecution(operation);
+  const app = flowPilotAppIdentity(operation);
   return { operation, digest: flowPilotOperationDigest(operation), appId: app.appId, jobId: app.jobId, phase: 'CLAIMED' };
 }
 
@@ -27,7 +27,7 @@ function policyRecord(): FlowPilotBridgeRecord {
     payload: { expectedPolicySha256: 'e6609b939f5d6b93feaf0f715252766965ca4f226b3d419b6ed81927c39cb36c' },
     timeoutSeconds: 60, callback: { url: callbackUrl, bearerToken: callbackToken },
   }, { callbackToken, callbackUrl });
-  const app = toFlowPilotAppExecution(operation);
+  const app = flowPilotAppIdentity(operation);
   return { operation, digest: flowPilotOperationDigest(operation), appId: app.appId, jobId: app.jobId, phase: 'CLAIMED' };
 }
 

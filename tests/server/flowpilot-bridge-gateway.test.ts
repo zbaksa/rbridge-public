@@ -6,6 +6,7 @@ import { parseFlowPilotBridgeEnvelope } from '../../src/domain/flowPilotBridgePr
 const callbackToken = 'c'.repeat(40);
 const callbackUrl = 'http://127.0.0.1:8097/api/v1/executor/callback';
 const authority = { callbackToken, callbackUrl };
+const policyUrl = 'http://127.0.0.1:18088/api/v1/automation-engine/policy';
 
 function operation(timeoutSeconds = 60, operationId = 'op_run_0000000001_probe_a1') {
   return parseFlowPilotBridgeEnvelope({
@@ -125,6 +126,7 @@ it('COCWIN policy health uses cocwin controller identity and action-specific evi
     },
     callback: { async send(_url, _token, value) { delivered.push(value); } },
     callbackToken,
+    cocwinPolicyUrl: policyUrl,
   });
   await gateway.accept(policyOperation());
   await gateway.reconcile();
@@ -132,6 +134,8 @@ it('COCWIN policy health uses cocwin controller identity and action-specific evi
   const payload = submitted[0]?.payload as Record<string, unknown>;
   assert.equal(payload.tool, 'node');
   assert.equal(payload.cwd, '/home/cocwin/backend');
+  const args = payload.args as string[];
+  assert.equal(args[3], policyUrl);
   assert.equal(delivered[0]?.outcome, 'PASS');
   const evidence = delivered[0]?.evidence as Record<string, unknown>;
   assert.equal(evidence.schema, 'COCWIN_FLOWPILOT_MASTER_POLICY_HEALTH_EVIDENCE_V1');

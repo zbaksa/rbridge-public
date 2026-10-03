@@ -10,6 +10,7 @@ const callbackToken = 'c'.repeat(40);
 const callbackUrl = 'http://127.0.0.1:8097/api/v1/executor/callback';
 const authority = { callbackToken, callbackUrl };
 const policySha = 'e6609b939f5d6b93feaf0f715252766965ca4f226b3d419b6ed81927c39cb36c';
+const policyUrl = 'http://127.0.0.1:18088/api/v1/automation-engine/policy';
 
 function envelope(extra: Record<string, unknown> = {}) {
   return {
@@ -58,15 +59,27 @@ it('COCWIN policy health maps only to a fixed read-only execution program', () =
   const parsed = parseFlowPilotBridgeEnvelope(policyEnvelope(), authority);
   assert.equal(parsed.appId, 'cocwin');
   assert.equal(parsed.action, 'COCWIN_MASTER_POLICY_HEALTH_V1');
-  const request = toFlowPilotAppExecution(parsed);
+  const request = toFlowPilotAppExecution(parsed, policyUrl);
   assert.equal(request.appId, 'cocwin');
   assert.match(request.jobId, /^fp-cw-[0-9a-f]{48}$/);
   assert.equal(request.payload.tool, 'node');
   assert.equal(request.payload.cwd, '/home/cocwin/backend');
   assert.equal(request.payload.args[0], '-e');
-  assert.match(request.payload.args[1] ?? '', /\/api\/v1\/automation-engine\/policy/);
   assert.match(request.payload.args[1] ?? '', /COCWIN_MASTER_POLICY_MISMATCH/);
+  assert.match(request.payload.args[1] ?? '', /process\.argv\[2\]/);
   assert.equal(request.payload.args[2], policySha);
+  assert.equal(request.payload.args[3], policyUrl);
+  assert.throws(
+    () => toFlowPilotAppExecution(parsed),
+    /FLOWPILOT_POLICY_URL_INVALID/,
+  );
+  assert.throws(
+    () => toFlowPilotAppExecution(
+      parsed,
+      'https://127.0.0.1:18088/api/v1/automation-engine/policy',
+    ),
+    /FLOWPILOT_POLICY_URL_INVALID/,
+  );
   assert.equal(request.payload.timeout_ms, 60_000);
   assert.equal(request.payload.max_bytes, 32_768);
 });
