@@ -87,7 +87,19 @@ function callbackFor(record: FlowPilotBridgeRecord, value: Record<string, unknow
           truncated: value.truncated === true,
           resultSha256: resultDigest(value),
         }
-        : {
+        : record.operation.action === 'COCWIN_DEVELOPMENT_SUPERVISOR_V1'
+          ? {
+            schema: 'COCWIN_FLOWPILOT_DEVELOPMENT_SUPERVISOR_EVIDENCE_V1',
+            appId: record.appId,
+            action: record.operation.action,
+            jobId: record.jobId,
+            state: String(value.state),
+            returncode: typeof value.returncode === 'number' ? value.returncode : null,
+            timedOut: value.timed_out === true,
+            truncated: value.truncated === true,
+            resultSha256: resultDigest(value),
+          }
+          : {
           schema: 'COCWIN_FLOWPILOT_APP_PROBE_EVIDENCE_V1',
           appId: record.appId,
           action: record.operation.action,

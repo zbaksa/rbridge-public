@@ -37,6 +37,11 @@ export type FlowPilotBridgeOperation =
     appId: 'cocwin';
     action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1';
     payload: Record<string, never>;
+  })
+  | (FlowPilotBridgeOperationBase & {
+    appId: 'cocwin';
+    action: 'COCWIN_DEVELOPMENT_SUPERVISOR_V1';
+    payload: Record<string, never>;
   });
 
 export interface FlowPilotAppExecutionRequest {
@@ -103,6 +108,24 @@ const COCWIN_CONTINUOUS_QUALIFICATION_PROGRAM = [
   "for(const [name,url] of endpoints){const response=await fetch(url,{headers:{accept:'application/json'},signal:AbortSignal.timeout(15000),redirect:'error'});const body=await response.text();if(Buffer.byteLength(body,'utf8')>524288)throw new Error('COCWIN_'+name.toUpperCase()+'_RESPONSE_TOO_LARGE');checks[name]={ok:response.ok,status:response.status};}",
   "if(!Object.values(checks).every((check)=>check.ok))throw new Error('COCWIN_CONTINUOUS_QUALIFICATION_BLOCKED');",
   "process.stdout.write(JSON.stringify({schema:'COCWIN_CONTINUOUS_QUALIFICATION_V1',status:'READY_FOR_AI',checks,checked_at:new Date().toISOString(),limitations:['NO_LOCAL_WORKTREE_ACCESS_PROVEN','NO_GITHUB_CREDENTIAL_PROVEN']})+'\\n');",
+  "})().catch((error)=>{console.error(error instanceof Error?error.message:String(error));process.exitCode=1;});",
+].join('');
+
+
+const COCWIN_DEVELOPMENT_SUPERVISOR_PROGRAM = [
+  "const fs=require('node:fs');",
+  '(async()=>{',
+  'const baseUrl=process.argv[1];',
+  "const tickUrl=new URL('/internal/automation-supervisor/tick',baseUrl).toString();",
+  "const secret=fs.readFileSync('/etc/cocwin/refresh.secret','utf8').trim();",
+  "if(secret.length<16||secret.length>4096||/\\s/.test(secret))throw new Error('COCWIN_SUPERVISOR_SECRET_INVALID');",
+  "const response=await fetch(tickUrl,{method:'POST',headers:{authorization:'Bearer '+secret,accept:'application/json'},signal:AbortSignal.timeout(55000),redirect:'error'});",
+  "const text=await response.text();",
+  "if(Buffer.byteLength(text,'utf8')>524288)throw new Error('COCWIN_SUPERVISOR_RESPONSE_TOO_LARGE');",
+  "if(!response.ok)throw new Error('COCWIN_SUPERVISOR_HTTP_'+response.status);",
+  "let body;try{body=JSON.parse(text);}catch{throw new Error('COCWIN_SUPERVISOR_RESPONSE_INVALID');}",
+  "if(body?.schema!=='COCWIN_AUTOMATION_SUPERVISOR_V1')throw new Error('COCWIN_SUPERVISOR_RESULT_INVALID');",
+  "process.stdout.write(JSON.stringify(body)+'\\n');",
   "})().catch((error)=>{console.error(error instanceof Error?error.message:String(error));process.exitCode=1;});",
 ].join('');
 
@@ -191,6 +214,10 @@ export function parseFlowPilotBridgeEnvelope(
       if (Object.keys(payload).length !== 0) fail('FLOWPILOT_PAYLOAD_NOT_ALLOWED');
       action = 'COCWIN_CONTINUOUS_QUALIFICATION_V1';
       parsedPayload = {};
+    } else if (raw.action === 'COCWIN_DEVELOPMENT_SUPERVISOR_V1') {
+      if (Object.keys(payload).length !== 0) fail('FLOWPILOT_PAYLOAD_NOT_ALLOWED');
+      action = 'COCWIN_DEVELOPMENT_SUPERVISOR_V1';
+      parsedPayload = {};
     } else {
       fail('FLOWPILOT_ACTION_NOT_ALLOWED');
     }
@@ -228,10 +255,18 @@ export function parseFlowPilotBridgeEnvelope(
       payload: {},
     };
   }
+  if (action === 'COCWIN_CONTINUOUS_QUALIFICATION_V1') {
+    return {
+      ...base,
+      appId: 'cocwin',
+      action,
+      payload: {},
+    };
+  }
   return {
     ...base,
     appId: 'cocwin',
-    action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+    action: 'COCWIN_DEVELOPMENT_SUPERVISOR_V1',
     payload: {},
   };
 }
@@ -302,6 +337,23 @@ export function toFlowPilotAppExecution(
     };
   }
 
+  if (operation.action === 'COCWIN_CONTINUOUS_QUALIFICATION_V1') {
+    return {
+      ...identity,
+      payload: {
+        tool: 'node',
+        cwd: '/home/cocwin/backend',
+        args: [
+          '-e',
+          COCWIN_CONTINUOUS_QUALIFICATION_PROGRAM,
+          cocwinBaseUrl,
+        ],
+        timeout_ms: operation.timeoutSeconds * 1000,
+        max_bytes: 32768,
+      },
+    };
+  }
+
   return {
     ...identity,
     payload: {
@@ -309,7 +361,7 @@ export function toFlowPilotAppExecution(
       cwd: '/home/cocwin/backend',
       args: [
         '-e',
-        COCWIN_CONTINUOUS_QUALIFICATION_PROGRAM,
+        COCWIN_DEVELOPMENT_SUPERVISOR_PROGRAM,
         cocwinBaseUrl,
       ],
       timeout_ms: operation.timeoutSeconds * 1000,
