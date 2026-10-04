@@ -200,6 +200,8 @@ it('COCWIN development supervisor maps to fixed Windmill-independent execution',
   assert.match(request.payload.args[1] ?? '', /\/etc\/cocwin\/refresh\.secret/);
   assert.match(request.payload.args[1] ?? '', /\/internal\/automation-supervisor\/tick/);
   assert.match(request.payload.args[1] ?? '', /COCWIN_AUTOMATION_SUPERVISOR_V1/);
+  assert.match(request.payload.args[1] ?? '', /body\?\.status!==['"]PASS['"]/);
+  assert.match(request.payload.args[1] ?? '', /COCWIN_SUPERVISOR_STATUS_/);
   assert.match(request.payload.args[1] ?? '', /55000/);
   assert.match(request.payload.args[1] ?? '', /524288/);
   assert.doesNotMatch(request.payload.args[1] ?? '', /WM_TOKEN|WM_WORKSPACE|192\.168\./);
