@@ -36,6 +36,19 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ## 2026-10-04
 
+### Fail-closed durable audit correction
+
+**Type:** V1 upgrade-gate correctness
+
+Regression tests reproduced false PASS paths in the original read-only audit: missing session evidence, `UNCERTAIN` sessions, skipped symlinks, corrupt durable identity, zero lookup concurrency, orphaned START claims and a state tree changing during lookup. The CLI also returned success for a blocked cutover and lost structural failure reports when stdout was redirected.
+
+The correction rejects incomplete evidence, checks session/START-claim ownership and durable filename/digest identity, bounds reads and lookups, compares state fingerprints, and returns nonzero gate exit codes with machine-readable UNKNOWN reports. It remains read-only and requires a fresh audit with writers quiesced before production switching.
+
+**Source status:** **CANDIDATE — verification pending**
+**Live status:** **NOT DEPLOYED**
+
+---
+
 ### Read-only durable-state cutover audit
 
 **Type:** V1 operations / upgrade safety  

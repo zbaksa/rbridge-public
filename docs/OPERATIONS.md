@@ -220,3 +220,9 @@ The utility does **not** mutate state or GitHub Issues. It:
 - returns `cutoverGate: PASS|BLOCKED|UNKNOWN`.
 
 A `CLOSED` historical durable record is not automatically rewritten or deleted. It remains evidence. A future replay under a different scope must still fail closed.
+
+Audit evidence is fail-closed: missing/malformed session records, orphaned START claims, invalid durable digests or filenames, symlinked evidence and changes to the observed state tree cannot produce PASS. `UNCERTAIN` process state blocks cutover because it does not prove the process stopped. GitHub lookups have a bounded timeout and concurrency.
+
+The CLI always writes its JSON report to stdout, including structural `UNKNOWN` failures. Exit codes are `0` for PASS, `4` for BLOCKED, `3` for lookup UNKNOWN and `2` for invalid/unreadable/changing evidence. Check both the exit code and `cutoverGate`; `auditStatus: PASS` only means the audit completed, not that cutover is permitted.
+
+A read-only audit is an observation, not an execution lock. Its before/after state fingerprint detects changes during observation but does not prevent later writes or Issue edits. Quiesce all state writers and admission paths, repeat the audit immediately before cutover, and keep them quiesced through the switch. Do not reuse an earlier live audit as deployment authorization.

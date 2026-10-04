@@ -1,4 +1,4 @@
-import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,rename,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,describe,expect,it} from 'vitest';
@@ -25,6 +25,17 @@ function lookup(states:Record<number,{state:'open'|'closed';author?:string;title
     const row=states[number];if(!row)throw new Error('NOT_FOUND');
     return {number,state:row.state,authorLogin:row.author??'bridge-owner',title:row.title??`[COCWIN BRIDGE REQUEST] req-${number}`,isPullRequest:false};
   };
+}
+const SESSION_ID='a'.repeat(32);
+async function session(dir:string,state:string){
+  const sessionDir=join(dir,'sessions',SESSION_ID);await mkdir(sessionDir,{recursive:true});
+  await writeFile(join(sessionDir,'record.json'),JSON.stringify({
+    schema:'COCWIN_REMOTE_BRIDGE_PROCESS_SESSION_V1',sessionId:SESSION_ID,ownerDigest:'c'.repeat(64),
+    profileId:'node-safe',state,createdAt:'2026-09-01T00:00:00.000Z',updatedAt:'2026-09-01T00:01:00.000Z',
+    expiresAt:'2026-09-01T00:02:00.000Z',pid:null,identity:null,outputBytes:0,truncated:false,
+    stdinAttached:false,exitCode:null,signal:null,reason:null,receipts:{}
+  })+'\n');
+  return sessionDir;
 }
 
 describe('V1 durable-state cutover audit',()=>{
@@ -60,9 +71,73 @@ describe('V1 durable-state cutover audit',()=>{
 
   it('blocks while a process session is not terminal',async()=>{
     const dir=await root();await durable(dir,{requestId:'req-7',issueNumber:7,phase:'PUBLISHED'});
-    const sessionDir=join(dir,'sessions','abc');await mkdir(sessionDir,{recursive:true});
-    await writeFile(join(sessionDir,'record.json'),JSON.stringify({state:'RUNNING'})+'\n');
+    await session(dir,'RUNNING');
     const out=await auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})});
-    expect(out).toMatchObject({cutoverGate:'BLOCKED',activeSessions:1});expect(out.activeSessionIds).toEqual(['abc']);
+    expect(out).toMatchObject({cutoverGate:'BLOCKED',activeSessions:1});expect(out.activeSessionIds).toEqual([SESSION_ID]);
+  });
+
+  it('does not treat UNCERTAIN as proof that a process stopped',async()=>{
+    const dir=await root();await session(dir,'UNCERTAIN');
+    const out=await auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})});
+    expect(out).toMatchObject({cutoverGate:'BLOCKED',activeSessions:1});
+  });
+
+  it('rejects a session directory whose record disappeared instead of silently passing',async()=>{
+    const dir=await root();await mkdir(join(dir,'sessions',SESSION_ID),{recursive:true});
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_RECORD_MISSING/);
+  });
+
+  it('rejects unverified terminal session metadata',async()=>{
+    const dir=await root(),path=await session(dir,'SUCCEEDED');
+    await writeFile(join(path,'record.json'),JSON.stringify({state:'SUCCEEDED'}));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_INVALID/);
+  });
+
+  it('does not follow or skip a symlinked durable record',async()=>{
+    const dir=await root();await durable(dir,{requestId:'req-8',issueNumber:8,phase:'PUBLISHED'});
+    await rename(join(dir,'req-8.json'),join(dir,'record.backup'));
+    await symlink(join(dir,'record.backup'),join(dir,'req-8.json'));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/FILE_INVALID/);
+  });
+
+  it('rejects a symlinked sessions root instead of reading outside the audited tree',async()=>{
+    const dir=await root(),outside=await root();await symlink(outside,join(dir,'sessions'));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_ROOT_INVALID/);
+  });
+
+  it('rejects a record whose filename does not bind its durable request identity',async()=>{
+    const dir=await root();await durable(dir,{requestId:'req-9',issueNumber:9,phase:'PUBLISHED'});
+    await rename(join(dir,'req-9.json'),join(dir,'req-other.json'));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/FILENAME_MISMATCH/);
+  });
+
+  it('rejects missing intent digests rather than qualifying corrupt durable evidence',async()=>{
+    const dir=await root();await durable(dir,{requestId:'req-10',issueNumber:10,phase:'PUBLISHED'});
+    const path=join(dir,'req-10.json'),row=JSON.parse(await readFile(path,'utf8'));delete row.requestSha256;
+    await writeFile(path,JSON.stringify(row));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/DIGEST_INVALID/);
+  });
+
+  it('rejects zero lookup concurrency instead of issuing PASS without looking up unresolved work',async()=>{
+    const dir=await root();await durable(dir,{requestId:'req-11',issueNumber:11,phase:'SUBMITTED'});
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({11:{state:'open'}}),lookupConcurrency:0})).rejects.toThrow(/CONCURRENCY_INVALID/);
+  });
+
+  it('does not qualify a state snapshot that changed during issue lookup',async()=>{
+    const dir=await root();await durable(dir,{requestId:'req-12',issueNumber:12,phase:'SUBMITTED'});
+    const issueLookup:DurableAuditIssueLookup=async number=>{
+      await durable(dir,{requestId:'req-13',issueNumber:13,phase:'SUBMITTED'});
+      return {number,state:'closed',authorLogin:'bridge-owner',title:'[COCWIN BRIDGE REQUEST] req-12',isPullRequest:false};
+    };
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup})).rejects.toThrow(/SNAPSHOT_CHANGED/);
+  });
+
+  it('does not qualify an orphaned process START claim as an idle system',async()=>{
+    const dir=await root(),claims=join(dir,'sessions','start-claims');await mkdir(claims,{recursive:true});
+    await writeFile(join(claims,'c'.repeat(64)+'.json'),JSON.stringify({
+      schema:'COCWIN_REMOTE_BRIDGE_PROCESS_START_CLAIM_V1',ownerDigest:'c'.repeat(64),
+      sessionId:SESSION_ID,profileId:'node-safe',createdAt:'2026-09-01T00:00:00.000Z'
+    }));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_RECORD_MISSING/);
   });
 });
