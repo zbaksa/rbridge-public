@@ -2,6 +2,8 @@
 
 This guide gets a local Linux checkout from clone to one successful **HEALTH** request over the GitHub Issue transport.
 
+> Compatibility note: some exact wire literals in the copy/paste examples retain a legacy namespace. Treat those strings as opaque protocol constants for the current revision; they do not name a required public dependency.
+
 It deliberately starts with HEALTH because it exercises authentication, request parsing, durable state, result publication and Issue closure without granting file or process access.
 
 ## Prerequisites
@@ -129,13 +131,7 @@ RBridge will:
 5. publish a JSON result as an Issue comment;
 6. close the Issue as completed.
 
-A successful V2 result has schema:
-
-```text
-COCWIN_REMOTE_BRIDGE_RESULT_V2
-```
-
-and a HEALTH payload with safe fields such as release SHA, uptime, queue count, active process sessions, active chunk transfers and last GitHub poll time.
+A successful V2 result uses the exact result schema defined by the current protocol revision and includes a HEALTH payload with safe fields such as release SHA, uptime, queue count, active process sessions, active chunk transfers and last GitHub poll time.
 
 ## 7. Try a bounded file read
 

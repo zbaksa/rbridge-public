@@ -28,11 +28,7 @@ journalctl -u rbridge.service -n 200 --no-pager
 journalctl -u rbridge.service -f
 ```
 
-Typical top-level log schemas include:
-
-- `COCWIN_REMOTE_BRIDGE_TICK_V1`
-- `COCWIN_REMOTE_BRIDGE_FATAL_V1`
-- `COCWIN_FLOWPILOT_BRIDGE_INGRESS_V1` when FlowPilot is enabled.
+Typical logs include structured tick records and fatal-error records.
 
 Do not treat a single transient tick error as proof that the process is dead; the main loop applies bounded backoff and continues unless the service itself exits.
 
@@ -57,7 +53,7 @@ Default state root:
 ~/.local/state/rbridge
 ```
 
-Important subtrees include request state, process sessions, transfers and optional FlowPilot state.
+Important subtrees include request state, process sessions and transfers.
 
 ### Backup
 
@@ -149,16 +145,19 @@ Open CHUNK transfers have expiration. Completed manifests may remain as durable 
 
 If disk usage matters, inspect the transfer subtree and application retention policy. Do not manually delete individual chunks from an active transfer.
 
-## FlowPilot operations
+## Windmill orchestration
 
-When FlowPilot ingress is enabled, also check:
+When Windmill drives RBridge through GitHub Issues, troubleshoot the two sides independently:
 
-- ingress listener is loopback-only;
-- FlowPilot callback target is reachable locally;
-- FlowPilot tokens are present and distinct;
-- durable records do not accumulate unexpectedly in non-terminal phases.
+- Windmill flow/job state should show whether the request Issue was created;
+- the Issue author must match `RBRIDGE_GITHUB_AUTHOR`;
+- the Issue body/title must satisfy the normal RBridge V2 contract;
+- RBridge should publish a structured result and close the Issue;
+- Windmill should poll/read that result rather than resubmit side effects blindly.
 
-A completed FlowPilot operation should progress to `COMPLETED` only after callback delivery succeeds.
+Keep the Windmill GitHub credential in a Windmill secret/resource and scope it to the control repository as narrowly as practical.
+
+See [Windmill integration](WINDMILL.md).
 
 ## Disk permissions
 
@@ -184,6 +183,6 @@ Useful operational signals:
 - active transfer count;
 - age of last GitHub poll;
 - number/age of open request Issues;
-- FlowPilot pending record count if enabled.
+- age/state of Windmill flow runs that are waiting on RBridge results.
 
 RBridge does not currently ship a Prometheus exporter; integrate these checks with your monitoring system as appropriate.

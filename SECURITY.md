@@ -16,7 +16,7 @@ The public implementation includes:
 - fail-closed handling of ambiguous or unauthorized operations;
 - explicit UNKNOWN/UNCERTAIN semantics where execution cannot be proven;
 - no generic root shell;
-- optional loopback-only authenticated FlowPilot ingress;
+- public orchestration can run through GitHub Issues without exposing an inbound RBridge control port;
 - systemd hardening template;
 - no deployment credentials or secret-bearing transport configuration committed to this repository.
 

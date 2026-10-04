@@ -23,7 +23,7 @@ RBridge is designed around the opposite default:
 - **bounded file, process, transfer, timeout, and output limits**;
 - **structured PASS / FAIL / BLOCKED / UNKNOWN outcomes**;
 - **GitHub Issue request/result transport** for asynchronous remote automation;
-- optional **loopback FlowPilot ingress** for low-latency workflow execution;
+- **Windmill-friendly orchestration** through the public GitHub request/result transport;
 - systemd hardening and a dedicated non-root runtime identity.
 
 ## Current status
@@ -43,8 +43,8 @@ A source checkout never grants machine access by itself. Every deployment must c
 | Health | Safe operational snapshot: release, uptime, queue/session/transfer counts and last GitHub poll |
 | Durable requests | Persistent phase/state, replay after restart, collision detection |
 | GitHub transport | Poll authorized Issues, publish structured result comments, close completed requests |
-| FlowPilot bridge | Optional loopback ingress with authenticated callbacks and durable operation state |
-| Evidence | Deterministic result digests and action-specific FlowPilot evidence |
+| Windmill orchestration | Recommended free/open-source workflow layer using the public GitHub transport |
+| Evidence | Deterministic request/result digests, durable state and replay/collision evidence |
 | Failure semantics | Distinguishes terminal failure, authorization block, and uncertain execution |
 
 See [Protocol reference](docs/PROTOCOL.md) for the exact public wire contract.
@@ -101,32 +101,7 @@ RBridge will poll only the configured repository and only requests authored by t
 
 ### 4. Send a health request
 
-Create an Issue in the configured control repository with title:
-
-```text
-[COCWIN BRIDGE REQUEST] demo.health.1
-```
-
-and body:
-
-```json
-{
-  "schema": "COCWIN_REMOTE_BRIDGE_REQUEST_V2",
-  "requestId": "demo.health.1",
-  "createdAt": "2026-10-04T12:00:00.000Z",
-  "expiresAt": "2026-10-04T12:10:00.000Z",
-  "operation": {
-    "kind": "HEALTH",
-    "action": "STATUS"
-  }
-}
-```
-
-Use fresh canonical UTC timestamps when you try it: requests expire, and V2 TTL is capped at 30 minutes.
-
-RBridge publishes the structured result as an Issue comment and closes a completed request.
-
-> The `COCWIN_...` schema and Issue-prefix names are retained for wire compatibility with the original deployment lineage. They are protocol identifiers, not a requirement that a base RBridge deployment run COCWIN.
+Follow the copy/paste example in **[Quick Start](docs/QUICKSTART.md)**. The exact wire literals are documented there as compatibility identifiers for the current protocol revision.
 
 Full walkthrough: **[Quick Start](docs/QUICKSTART.md)**.
 
@@ -138,7 +113,7 @@ Full walkthrough: **[Quick Start](docs/QUICKSTART.md)**.
 - [Security model](docs/SECURITY_MODEL.md) — what RBridge does and does not protect
 - [Configuration](docs/CONFIGURATION.md) — environment variables and deployment dependencies
 - [Protocol reference](docs/PROTOCOL.md) — V2 request operations and constraints
-- [FlowPilot integration](docs/FLOWPILOT.md) — optional loopback workflow ingress
+- [Windmill integration](docs/WINDMILL.md) — recommended public workflow orchestration
 - [Operations](docs/OPERATIONS.md) — health, logs, upgrade, backup and rollback
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — common error codes and recovery
 - [Comparison](docs/COMPARISON.md) — Desktop Commander, SSH and MCP
@@ -169,10 +144,10 @@ RBridge is still privileged-adjacent software. A compromised trusted GitHub acco
 
 The public repository currently targets **Linux/systemd**.
 
-The base GitHub transport can serve HEALTH, FILE, PROCESS and CHUNK operations without enabling FlowPilot. Some capabilities have additional deployment dependencies:
+The base GitHub transport can serve HEALTH, FILE, PROCESS and CHUNK operations directly. Some capabilities have additional deployment dependencies:
 
 - `APP_RUN` uses a compatible controller broker at the controller socket expected by the source.
-- FlowPilot ingress is optional and requires its own tokens/callback configuration.
+- Windmill is an external orchestrator and can use the public GitHub Issue transport without a Windmill-specific daemon inside RBridge.
 - current built-in PROCESS profiles include runtime-specific executable paths; review [Configuration](docs/CONFIGURATION.md) before enabling them on a new host.
 - the default source-controlled FILE root is `/mnt/data`.
 

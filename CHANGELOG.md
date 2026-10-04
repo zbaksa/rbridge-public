@@ -8,21 +8,21 @@ RBridge is currently pre-1.0. This changelog records public-facing behavior and 
 
 - expanded README into a product overview and Quick Start;
 - added installation, architecture, security, configuration and protocol guides;
-- documented FlowPilot integration;
+- documented Windmill orchestration through the public GitHub transport;
 - added operations and troubleshooting guides;
 - added comparison with Desktop Commander, SSH and MCP;
 - added roadmap and contribution guidance;
 - added issue templates.
 
-## 2026-10-04 — FlowPilot parity / standalone cutover line
+## 2026-10-04 — workflow compatibility / standalone cutover line
 
 Public main includes:
 
-- durable FlowPilot APP_PROBE support;
-- COCWIN master-policy health action;
-- COCWIN snapshot-refresh action;
-- COCWIN continuous-qualification action;
-- public-safe deployment-configured COCWIN endpoint derivation;
+- durable workflow APP_PROBE support;
+- bounded policy-health workflow action;
+- bounded snapshot-refresh workflow action;
+- bounded continuous-qualification workflow action;
+- public-safe deployment-configured endpoint derivation;
 - action-specific callback evidence;
 - exact-SHA CI coverage.
 

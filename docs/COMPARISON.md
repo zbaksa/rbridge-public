@@ -88,6 +88,19 @@ RBridge's execution/durability model could sit **behind** a future MCP adapter. 
 
 That is on the roadmap rather than claimed as a current feature.
 
+## Windmill
+
+Windmill is complementary to RBridge rather than a direct replacement.
+
+Windmill is a workflow/orchestration platform with scripts, flows, schedules, webhooks, resources/secrets and monitoring. In the recommended public architecture, Windmill creates and monitors normal RBridge GitHub requests while RBridge remains the host-side bounded execution boundary.
+
+That separation is useful:
+
+- Windmill decides **when and in what workflow** work should happen;
+- RBridge decides **what the remote host will accept and how execution is durably recorded**.
+
+See [Windmill integration](WINDMILL.md).
+
 ## CI runners / job agents
 
 CI runners are another adjacent category. They are excellent at executing declared repository pipelines.

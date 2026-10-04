@@ -160,26 +160,21 @@ CHUNK operations include:
 
 A FINALIZE succeeds only after all chunks are present and the reconstructed object digest matches.
 
-## Optional FlowPilot ingress
+## Windmill orchestration
 
-FlowPilot mode is disabled unless:
+Windmill is an upstream orchestrator, not an additional trusted inbound RBridge port in the recommended public setup.
 
-```text
-COCWIN_FLOWPILOT_INGRESS_ENABLED=true
-```
+A Windmill flow creates a standard GitHub Issue request using the same repository/author identity that RBridge already validates. RBridge then executes and publishes the same structured result it would for any other client.
 
-When enabled:
+Security consequences:
 
-- ingress host is limited to literal loopback (`127.0.0.1` or `::1`);
-- remote-bridge token is required;
-- callback token is required;
-- the two tokens must differ;
-- callback URL is validated;
-- body size is bounded;
-- operation state is durable;
-- evidence excludes raw controller stdout/stderr.
+- keep the GitHub token in a Windmill secret/resource;
+- use the least GitHub permissions required for the RBridge control repository;
+- the token identity must match the configured trusted RBridge author;
+- a compromised Windmill workspace with access to that token can request any capability the RBridge deployment itself allows;
+- Windmill does not bypass RBridge path/process/TTL/replay policy.
 
-See [FLOWPILOT.md](FLOWPILOT.md).
+This preserves one public authorization boundary instead of introducing a second network control plane.
 
 ## systemd hardening
 

@@ -19,8 +19,7 @@ This roadmap separates **implemented capabilities** from **future work**. It is 
 - explicit BLOCKED/UNKNOWN handling
 - large result publication via chunked Issue comments
 - systemd hardening template
-- optional FlowPilot loopback ingress
-- durable FlowPilot state/callback evidence
+- Windmill orchestration guide over the public GitHub transport
 - exact-commit CI and public-source scrub
 - MIT public repository
 
@@ -58,7 +57,16 @@ Potential examples:
 - service health probes;
 - application-specific diagnostics.
 
-### 4. First-class examples/SDK
+### 4. Windmill templates/helpers
+
+Goal:
+
+- reusable Windmill scripts/flows for request creation and result polling;
+- sample HEALTH/FILE/PROCESS workflows;
+- safe token/resource setup guidance;
+- preserve RBridge requestId/TTL/replay semantics.
+
+### 5. First-class examples/SDK
 
 Goal:
 
@@ -67,7 +75,7 @@ Goal:
 - CLI helper for Issue creation/status;
 - schema export.
 
-### 5. Release packaging
+### 6. Release packaging
 
 Goal:
 

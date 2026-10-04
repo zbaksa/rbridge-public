@@ -13,7 +13,7 @@ A checkout does not imply an active deployment or host authorization.
 - FILE, PROCESS, CHUNK, HEALTH and APP_RUN capabilities are bounded by source-controlled/runtime contracts.
 - Durable request identity, replay and collision protection are preserved across restart.
 - Process executable selection is source-controlled, not request-controlled.
-- FlowPilot ingress is optional, loopback-only and separately authenticated.
+- Windmill is the recommended public orchestrator and uses the standard GitHub request/result transport.
 - Deployment-specific secrets/private host details do not belong in public source or documentation.
 
 ## Maintainer rule
@@ -45,6 +45,7 @@ Live deployment acceptance is separate from source/CI acceptance.
 - `docs/SECURITY_MODEL.md` — trust/security
 - `docs/PROTOCOL.md` — public wire contract
 - `docs/CONFIGURATION.md` — deployment configuration
+- `docs/WINDMILL.md` — public workflow orchestration
 - `docs/OPERATIONS.md` — operating procedures
 - `docs/TROUBLESHOOTING.md` — failure diagnosis
 - `docs/COMPARISON.md` — adjacent tools

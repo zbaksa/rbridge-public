@@ -57,11 +57,7 @@ Request repository does not match configuration.
 
 ### `REMOTE_BRIDGE_V2_TITLE_INVALID`
 
-Title must start with:
-
-```text
-[COCWIN BRIDGE REQUEST] 
-```
+Title must start with the exact request prefix defined in the current [Protocol reference](PROTOCOL.md).
 
 ### `REMOTE_BRIDGE_V2_TITLE_REQUEST_ID_MISMATCH`
 
@@ -179,33 +175,33 @@ All chunks were present, but reconstructed object SHA-256 did not match.
 
 Create a fresh transfer ID and expiry; do not mutate the old manifest.
 
-## FlowPilot errors
+## Windmill orchestration
 
-### `FLOWPILOT_INGRESS_SECRET_MISSING`
+### Windmill created an Issue but RBridge does not process it
 
-Ingress is enabled without a valid >=32-character token.
+Check:
 
-### `FLOWPILOT_INGRESS_SECRETS_MUST_DIFFER`
+1. the Issue is in `RBRIDGE_GITHUB_REPOSITORY`;
+2. the Issue author exactly equals `RBRIDGE_GITHUB_AUTHOR`;
+3. the title uses the exact request prefix documented in [Protocol reference](PROTOCOL.md);
+4. timestamps are fresh and TTL <= 30 minutes;
+5. RBridge runtime GitHub credentials can list/read the Issue.
 
-Remote-bridge and callback tokens must not be identical.
+### Windmill cannot create/read Issues
 
-### `FLOWPILOT_INGRESS_HOST_INVALID`
+Verify the GitHub token/resource used by Windmill has the permissions required for the control repository. Keep the token in Windmill secret storage, not directly in flow source.
 
-Ingress may bind only to `127.0.0.1` or `::1`.
+### Windmill flow retried and may have created duplicate request Issues
 
-### `FLOWPILOT_POLICY_URL_INVALID`
+Do not generate a new semantic request under the same requestId with different content. RBridge will report a collision.
 
-The configured policy URL does not match the strict expected HTTP/path shape.
+Prefer a flow design where the create-request step runs once, returns the Issue number/requestId, and later retryable steps only poll the existing Issue/result.
 
-### `FLOWPILOT_OPERATION_COLLISION`
+### Windmill waits forever
 
-An existing operationId has a different immutable digest.
+Set a bounded polling timeout that is shorter than the RBridge request expiry. If the RBridge result is `UNKNOWN`, treat it as an uncertainty event rather than automatically creating a replacement side effect.
 
-### `FLOWPILOT_BRIDGE_STORE_CORRUPT`
-
-Durable store content or metadata failed validation.
-
-Stop the service and investigate. Do not "repair" it by deleting records unless you have separately proven they are disposable.
+See [Windmill integration](WINDMILL.md).
 
 ## Result status is UNKNOWN
 
