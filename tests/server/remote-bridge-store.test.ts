@@ -1,4 +1,4 @@
-import {mkdtemp,readdir,rm,stat} from 'node:fs/promises';
+import {mkdtemp,readdir,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,describe,expect,it} from 'vitest';
@@ -7,7 +7,7 @@ import {acquireRemoteBridgeProcessLock,createRemoteBridgeStore} from '../../src/
 const roots:string[]=[];
 async function root(){const p=await mkdtemp(join(tmpdir(),'cocwin-bridge-store-'));roots.push(p);return p;}
 afterEach(async()=>{await Promise.all(roots.splice(0).map(p=>rm(p,{recursive:true,force:true})));});
-const base={requestId:'bridge.req.1',requestSha256:'a'.repeat(64),issueNumber:49,jobId:'bridge-probe-1'};
+const base={requestId:'bridge.req.1',requestSha256:'a'.repeat(64),scopeSha256:'d'.repeat(64),issueNumber:49,jobId:'bridge-probe-1'};
 const result={schema:'COCWIN_REMOTE_BRIDGE_RESULT_V1' as const,requestId:'bridge.req.1',issueNumber:49,status:'PASS' as const,requestSha256:'a'.repeat(64),resultSha256:'b'.repeat(64),controllerResult:{state:'SUCCEEDED'},completedAt:'2026-09-16T18:20:00.000Z'};
 
 describe('remote bridge durable store',()=>{
@@ -16,6 +16,7 @@ describe('remote bridge durable store',()=>{
     const first=await store.claim(base);expect(first.state).toBe('CLAIMED');expect(first.record.phase).toBe('CLAIMED');
     const replay=await store.claim(base);expect(replay.state).toBe('REPLAY');expect(replay.record).toEqual(first.record);
     const collision=await store.claim({...base,requestSha256:'c'.repeat(64)});expect(collision.state).toBe('COLLISION');expect(collision.record.requestSha256).toBe(base.requestSha256);
+    const scopeMismatch=await store.claim({...base,scopeSha256:'e'.repeat(64)});expect(scopeMismatch.state).toBe('SCOPE_MISMATCH');
     const files=await readdir(dir);expect(files.some(f=>f.endsWith('.tmp'))).toBe(false);expect((await stat(join(dir,'bridge.req.1.json'))).mode&0o777).toBe(0o600);
   });
 
@@ -41,5 +42,18 @@ describe('remote bridge durable store',()=>{
     const dir=await root(),a=await acquireRemoteBridgeProcessLock(dir);
     await expect(acquireRemoteBridgeProcessLock(dir)).rejects.toThrow('REMOTE_BRIDGE_PROCESS_LOCKED');
     await a.release();const b=await acquireRemoteBridgeProcessLock(dir);await b.release();
+  });
+
+  it('fails closed on incomplete lock metadata instead of deleting an in-progress lock',async()=>{
+    const dir=await root();await writeFile(join(dir,'relay.lock'),'',{mode:0o600});
+    await expect(acquireRemoteBridgeProcessLock(dir)).rejects.toThrow('REMOTE_BRIDGE_PROCESS_LOCKED');
+    expect((await stat(join(dir,'relay.lock'))).isFile()).toBe(true);
+  });
+
+  it('reclaims a complete stale lock without an ABA unlink race',async()=>{
+    const dir=await root();await writeFile(join(dir,'relay.lock'),'2147483647\n',{mode:0o600});
+    const lock=await acquireRemoteBridgeProcessLock(dir);
+    await expect(acquireRemoteBridgeProcessLock(dir)).rejects.toThrow('REMOTE_BRIDGE_PROCESS_LOCKED');
+    await lock.release();
   });
 });
