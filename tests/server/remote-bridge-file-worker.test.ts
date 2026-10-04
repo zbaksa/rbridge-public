@@ -34,4 +34,25 @@ describe('remote bridge worker FILE routing',()=>{
     await second.runOnce();
     expect(execute).toHaveBeenCalledOnce();expect(publish.mock.calls[0]![1]).toMatchObject({status:'PASS',operationResult:{text:'ok'}});
   });
+
+  it('never repeats a mutating FILE effect after execution succeeds but terminal persistence fails',async()=>{
+    const durable=await store(),requestId='bridge.file.append.recovery';
+    const appendIssue={number:82,title:`[COCWIN BRIDGE REQUEST] ${requestId}`,authorLogin:TRANSPORT.authorLogin,url:'https://github.com/example/rbridge-control/issues/82',body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V2',requestId,createdAt:'2026-09-16T18:00:00.000Z',expiresAt:'2026-09-16T18:20:00.000Z',operation:{kind:'FILE',action:'APPEND_TEXT',target:'/mnt/data/recovery.txt',args:{text:'once'}}})};
+    let value='',terminalWrites=0;
+    const execute=vi.fn(async()=>{value+='once';return {path:'/mnt/data/recovery.txt',appended:true};});
+    const unstable={...durable,markTerminal:async(...args:Parameters<typeof durable.markTerminal>)=>{terminalWrites+=1;if(terminalWrites===1)throw new Error('simulated terminal persistence failure');return await durable.markTerminal(...args);}};
+    const first=createRemoteBridgeWorker({...TRANSPORT,now,store:unstable,github:{listOpenRequests:async()=>[appendIssue],publishResult:vi.fn()},controller:controller(),fileOps:{execute}});
+    const firstOut=await first.runOnce();
+    expect(firstOut).toMatchObject({seen:1,pending:1,published:0,errors:1});
+    expect(value).toBe('once');expect(execute).toHaveBeenCalledOnce();expect((await durable.get(requestId))?.phase).toBe('SUBMITTED');
+
+    const publish=vi.fn();
+    const resumed=createRemoteBridgeWorker({...TRANSPORT,now,store:durable,github:{listOpenRequests:async()=>[appendIssue],publishResult:publish},controller:controller(),fileOps:{execute}});
+    const secondOut=await resumed.runOnce();
+    expect(secondOut).toMatchObject({seen:1,pending:0,published:1,blocked:0,errors:0});
+    expect(value).toBe('once');expect(execute).toHaveBeenCalledOnce();
+    expect(publish.mock.calls[0]![1]).toMatchObject({status:'UNCERTAIN',reason:'REMOTE_BRIDGE_FILE_EFFECT_UNCERTAIN'});
+    expect((await durable.get(requestId))?.phase).toBe('PUBLISHED');
+  });
+
 });
