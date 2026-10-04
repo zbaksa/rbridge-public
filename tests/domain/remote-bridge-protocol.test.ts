@@ -39,6 +39,7 @@ describe('COCWIN remote bridge request protocol',()=>{
     code(()=>parse({expiresAt:'2026-09-16T18:00:00.000Z'}),'REMOTE_BRIDGE_TIME_ORDER_INVALID');
     code(()=>parse({expiresAt:'2026-09-16T18:30:00.001Z'}),'REMOTE_BRIDGE_TTL_INVALID');
     code(()=>parseRemoteBridgeRequest({...issue(),now:new Date('2026-09-16T18:20:00.001Z')}),'REMOTE_BRIDGE_REQUEST_EXPIRED');
+    expect(parseRemoteBridgeRequest({...issue(),now:new Date('2026-09-16T18:20:00.001Z'),allowExpired:true}).requestId).toBe('bridge.req.1');
   });
 
   it('mirrors app-execution payload structural bounds before forwarding',()=>{

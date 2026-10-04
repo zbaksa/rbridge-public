@@ -10,9 +10,9 @@ describe('standalone RBridge systemd template',()=>{
    expect(unit).toContain('SupplementaryGroups=@CONTROLLER_GROUP@');
    expect(unit).toContain('Environment=RBRIDGE_RUNTIME_USER=@RBRIDGE_USER@');
    expect(unit).toContain('EnvironmentFile=@RBRIDGE_ENV_FILE@');
-   expect(unit).toContain('EnvironmentFile=/etc/rbridge/flowpilot.env');
+   expect(unit).not.toContain('/etc/rbridge/flowpilot.env');
    expect(unit).not.toContain('/etc/cocwin-remote-bridge-stage2-flowpilot.env');
-   expect(unit).toContain('ReadWritePaths=@RBRIDGE_STATE_ROOT@');
+   expect(unit).toContain('ReadWritePaths=@RBRIDGE_STATE_ROOT@ /mnt/data');
    expect(unit).not.toContain('bai');
    expect(unit).not.toContain('cocwin-private');
    expect(unit).not.toContain(['aether','engine'].join('-'));

@@ -46,7 +46,7 @@ function validateJobId(jobId:string):void{if(typeof jobId!=='string'||!JOB_RE.te
 function isSafePath(path:unknown):boolean{if(typeof path!=='string'||path.length>1024||path.startsWith('//')||/\s|\0/.test(path))return false;const parts=path.split('/').slice(1);if(parts.some(part=>!part||part==='.'||part==='..'))return false;return path.startsWith('/');}
 function validateProcessSessionId(id:unknown):void{if(typeof id!=='string'||!/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(id))fail('REMOTE_BRIDGE_V2_SESSION_ID_INVALID');}
 
-export function parseRemoteBridgeRequestV2(input:{title:string;body:string;author:string;repository:string;expectedAuthor:string;expectedRepository:string;now:Date}):RemoteBridgeRequestV2{
+export function parseRemoteBridgeRequestV2(input:{title:string;body:string;author:string;repository:string;expectedAuthor:string;expectedRepository:string;now:Date;allowExpired?:boolean}):RemoteBridgeRequestV2{
   if(typeof input.expectedAuthor!=='string'||!/^[A-Za-z0-9-]{1,39}$/.test(input.expectedAuthor))fail('REMOTE_BRIDGE_V2_AUTHOR_CONFIG_INVALID');
   if(typeof input.expectedRepository!=='string'||!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.expectedRepository))fail('REMOTE_BRIDGE_V2_REPOSITORY_CONFIG_INVALID');
   if(input.author!==input.expectedAuthor)fail('REMOTE_BRIDGE_V2_AUTHOR_INVALID');
@@ -62,7 +62,7 @@ export function parseRemoteBridgeRequestV2(input:{title:string;body:string;autho
   const created=iso(row.createdAt,'REMOTE_BRIDGE_V2_CREATED_AT_INVALID'),expires=iso(row.expiresAt,'REMOTE_BRIDGE_V2_EXPIRES_AT_INVALID');
   if(expires.ms<=created.ms)fail('REMOTE_BRIDGE_V2_TIME_ORDER_INVALID');
   if(expires.ms-created.ms>MAX_TTL_MS)fail('REMOTE_BRIDGE_V2_TTL_INVALID');
-  const now=input.now??new Date();const nowMs=now.getTime();if(!Number.isFinite(nowMs))fail("REMOTE_BRIDGE_V2_NOW_INVALID");if(created.ms>nowMs+MAX_FUTURE_SKEW_MS)fail("REMOTE_BRIDGE_V2_CREATED_AT_FUTURE");if(expires.ms<=nowMs)fail("REMOTE_BRIDGE_V2_REQUEST_EXPIRED");
+  const now=input.now??new Date();const nowMs=now.getTime();if(!Number.isFinite(nowMs))fail("REMOTE_BRIDGE_V2_NOW_INVALID");if(created.ms>nowMs+MAX_FUTURE_SKEW_MS)fail("REMOTE_BRIDGE_V2_CREATED_AT_FUTURE");if(!input.allowExpired&&expires.ms<=nowMs)fail("REMOTE_BRIDGE_V2_REQUEST_EXPIRED");
   const operation=record(row.operation,'REMOTE_BRIDGE_V2_OPERATION_INVALID');
   if(operation.kind==='APP_RUN'){
     exactFields(operation,APP_RUN_FIELDS,'REMOTE_BRIDGE_V2_OPERATION_FIELDS_INVALID');

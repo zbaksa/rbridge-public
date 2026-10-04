@@ -46,6 +46,17 @@ RBRIDGE_GITHUB_AUTHOR=automation-owner
 
 40-character lowercase/hex Git commit identifying the deployed source release.
 
+### `RBRIDGE_INSTANCE_ID` — optional explicit target identity
+
+RBridge binds new durable request records to the configured GitHub repository, trusted author and target instance.
+
+If `RBRIDGE_INSTANCE_ID` is set, it must be a short safe identifier and is used as the target-instance identity.
+
+If it is not set, the Linux runtime derives the instance identity from `/etc/machine-id`.
+
+This binding prevents a state directory from silently replaying a result after the control repository/author changes or after state is moved to a different target instance.
+
+
 ## Durable state
 
 State root is derived as:

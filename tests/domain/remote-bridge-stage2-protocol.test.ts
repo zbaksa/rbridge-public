@@ -51,6 +51,9 @@ describe('COCWIN remote bridge Stage-2 protocol',()=>{
     expect(parseRemoteBridgeRequestV2({...INPUT_BASE,body:JSON.stringify(skewed)}).createdAt).toBe("2026-09-16T20:42:00.000Z");
     const future=body(fileOp,{createdAt:"2026-09-16T20:42:00.001Z",expiresAt:"2026-09-16T20:52:00.001Z"});
     expect(()=>parseRemoteBridgeRequestV2({...INPUT_BASE,body:JSON.stringify(future)})).toThrow(/REMOTE_BRIDGE_V2_CREATED_AT_FUTURE/);
+    const expired=body(fileOp,{expiresAt:'2026-09-16T20:40:00.000Z'});
+    expect(()=>parseRemoteBridgeRequestV2({...INPUT_BASE,body:JSON.stringify(expired)})).toThrow(/REMOTE_BRIDGE_V2_REQUEST_EXPIRED/);
+    expect(parseRemoteBridgeRequestV2({...INPUT_BASE,body:JSON.stringify(expired),allowExpired:true}).requestId).toBe(REQUEST_ID);
   });
   it('rejects request-controlled PROCESS executable paths',()=>{
     expect(()=>parse({kind:'PROCESS',action:'START',args:{profileId:'git-read',executable:'/bin/sh'}})).toThrow(/REMOTE_BRIDGE_V2_PROCESS_EXECUTABLE_REQUEST_CONTROLLED/);

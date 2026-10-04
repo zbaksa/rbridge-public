@@ -6,7 +6,7 @@ import {createRemoteBridgeStore} from '../../src/server/remoteBridgeStore.js';
 import {createRemoteBridgeWorker} from '../../src/server/remoteBridgeWorker.js';
 
 const roots:string[]=[];
-const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner'} as const;
+const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner',instanceId:'test-instance'} as const;
 const NOW=()=>new Date('2026-09-27T12:00:00.000Z');
 
 afterEach(async()=>{await Promise.all(roots.splice(0).map(p=>rm(p,{recursive:true,force:true})));});

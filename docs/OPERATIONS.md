@@ -76,6 +76,19 @@ Do not use a casual recursive copy as a live-state migration while the service i
 
 ## Upgrade
 
+### V1 durable-scope migration note
+
+Current V1 hotfixes bind newly claimed durable requests to repository + trusted author + target instance. Older durable records do not contain that scope.
+
+Before upgrading from an older unscoped release:
+
+- ensure there are no in-flight `CLAIMED` or `SUBMITTED` requests that must be resumed by the new release;
+- preserve the old state as backup;
+- expect attempts to replay old unscoped request IDs to fail closed with a scope mismatch;
+- use new request IDs for new work after upgrade.
+
+This is intentional: silently trusting an old record after repository/author/target identity changes would reintroduce the replay problem.
+
 Recommended release workflow:
 
 1. identify exact candidate SHA;

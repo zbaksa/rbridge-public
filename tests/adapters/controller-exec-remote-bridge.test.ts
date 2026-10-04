@@ -60,6 +60,16 @@ describe('controller-exec remote bridge adapter',()=>{
     await expect(bridge.status('bai','bridge-probe-1')).rejects.toThrow('CONTROLLER_EXEC_TRANSPORT_FAILED:ECONNRESET');
   });
 
+  it.each([
+    'application job state is busy',
+    '[Errno 11] Resource temporarily unavailable',
+  ])('keeps transient broker contention non-definitive: %s',async reason=>{
+    const c=fakeClient();
+    c.status.mockRejectedValueOnce(new Error(`APP_EXECUTION_BROKER_REJECTED:${reason}`));
+    const bridge=createControllerExecRemoteBridge({client:c.client});
+    await expect(bridge.status('bai','bridge-probe-1')).rejects.toThrow(`CONTROLLER_EXEC_TRANSIENT:${reason}`);
+  });
+
   it('passes an explicit bounded timeout to the bridge socket client factory',()=>{
     const c=fakeClient();
     const factory=vi.fn<RemoteBridgeControllerClientFactory>(()=>c.client);
