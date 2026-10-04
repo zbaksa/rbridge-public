@@ -11,12 +11,13 @@ interface FilePort {execute(operation:Extract<RemoteBridgeRequestV2['operation']
 interface ChunkPort {putChunk(input:{transferId:string;index:number;count:number;dataBase64:string;chunkSha256:string;objectSha256:string;expiresAt:string}):Promise<unknown>;getChunk(transferId:string,index:number):Promise<unknown>;finalizeTransfer(transferId:string):Promise<unknown>;}
 interface HealthPort {snapshot():unknown|Promise<unknown>;}
 interface ProcessPort {execute(operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'PROCESS'}>,requestDigest:string):Promise<unknown>;}
-export interface RemoteBridgeWorkerOptions {store:Store;github:GitHubPort;controller:ControllerPort;fileOps?:FilePort;chunkStore?:ChunkPort;health?:HealthPort;processSessions?:ProcessPort;now?:()=>Date;maxIssues?:number;repository:string;authorLogin:string;}
+export interface RemoteBridgeWorkerOptions {store:Store;github:GitHubPort;controller:ControllerPort;fileOps?:FilePort;chunkStore?:ChunkPort;health?:HealthPort;processSessions?:ProcessPort;now?:()=>Date;maxIssues?:number;repository:string;authorLogin:string;instanceId:string;}
 export interface RemoteBridgeRunSummary {seen:number;pending:number;published:number;blocked:number;errors:number;}
 interface BridgeResultV1 {schema:'COCWIN_REMOTE_BRIDGE_RESULT_V1';requestId:string;issueNumber:number;status:'PASS'|'FAIL'|'BLOCKED'|'UNCERTAIN';requestSha256:string;resultSha256?:string;controllerResult?:Record<string,unknown>;reason?:string;completedAt:string;}
 interface BridgeResultV2 {schema:'COCWIN_REMOTE_BRIDGE_RESULT_V2';requestId:string;issueNumber:number;status:'PASS'|'FAIL'|'BLOCKED'|'UNCERTAIN';requestSha256:string;resultSha256?:string;operationResult?:unknown;reason?:string;completedAt:string;}
 const PREFIX='[COCWIN BRIDGE REQUEST] ',SAFE_ID=/^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const REMOTE_BRIDGE_STAGE2_FILE_NOT_CONFIGURED='REMOTE_BRIDGE_STAGE2_FILE_NOT_CONFIGURED';
+const READ_ONLY_FILE_ACTIONS=new Set(['LIST','STAT','READ','READ_MANY','READ_BINARY','SEARCH']);
 const sha=(value:string|Buffer)=>createHash('sha256').update(value).digest('hex');
 function errorCode(error:unknown){return error instanceof Error&&error.message?error.message.split('\n')[0]!.slice(0,512):'REMOTE_BRIDGE_UNKNOWN_ERROR';}
 function requestId(issue:GitHubBridgeIssue){const value=issue.title.startsWith(PREFIX)?issue.title.slice(PREFIX.length):'';return SAFE_ID.test(value)?value:`issue-${issue.number}`;}
@@ -41,7 +42,10 @@ async function executeFileOperation(port:FilePort,operation:Extract<RemoteBridge
 }
 
 export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
-  const now=options.now??(()=>new Date()),max=options.maxIssues??20,repository=options.repository,authorLogin=options.authorLogin;
+  const now=options.now??(()=>new Date()),max=options.maxIssues??20,repository=options.repository,authorLogin=options.authorLogin,instanceId=options.instanceId;
+  if(!Number.isInteger(max)||max<1||max>1000)throw new Error('REMOTE_BRIDGE_MAX_ISSUES_INVALID');
+  if(typeof instanceId!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(instanceId))throw new Error('REMOTE_BRIDGE_INSTANCE_ID_INVALID');
+  const scopeSha256=sha(JSON.stringify({repository,authorLogin,instanceId}));let issueCursor=0;
   async function publishStored(requestIdValue:string,digest:string,issue:GitHubBridgeIssue,result:BridgeResultV1|BridgeResultV2,summary:RemoteBridgeRunSummary){await options.store.markTerminal(requestIdValue,digest,result);try{await options.github.publishResult(issue.number,result);await options.store.markPublished(requestIdValue,digest);summary.published++;if(result.status==='BLOCKED')summary.blocked++;}catch{summary.errors++;}}
   async function publishReplay(recordResult:unknown,issue:GitHubBridgeIssue,requestIdValue:string,digest:string,phase:string,summary:RemoteBridgeRunSummary){if(!recordResult||typeof recordResult!=='object'||Array.isArray(recordResult)){summary.errors++;return;}const result:Record<string,unknown>={...(recordResult as Record<string,unknown>),issueNumber:issue.number,reason:'REPLAY'};try{await options.github.publishResult(issue.number,result);if(phase==='TERMINAL')await options.store.markPublished(requestIdValue,digest);summary.published++;if(result.status==='BLOCKED')summary.blocked++;}catch{summary.errors++;}}
   async function reconcileV1(request:RemoteBridgeRequest,issue:GitHubBridgeIssue,digest:string,summary:RemoteBridgeRunSummary){let status:Record<string,unknown>;try{status=await options.controller.status(request.appId,request.jobId);}catch{summary.pending++;summary.errors++;return;}if(appExecutionPending(status)){summary.pending++;return;}if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,status,now()),summary);return;}try{await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,await options.controller.result(request.appId,request.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}}
@@ -59,7 +63,122 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
       await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,value,now()),summary);
     }catch(error){const code=errorCode(error);if(request.operation.kind==='PROCESS'&&processErrorMayHaveExecuted(code))await publishStored(request.requestId,digest,issue,uncertainV2(issue,request.requestId,digest,code,now()),summary);else if(code==='REMOTE_BRIDGE_STAGE2_CHUNK_NOT_CONFIGURED'||code==='REMOTE_BRIDGE_STAGE2_HEALTH_NOT_CONFIGURED'||code==='REMOTE_BRIDGE_STAGE2_PROCESS_NOT_CONFIGURED'||code.startsWith('REMOTE_BRIDGE_CHUNK_')||code.startsWith('REMOTE_BRIDGE_HEALTH_')||code.startsWith('REMOTE_BRIDGE_PROCESS_'))await publishStored(request.requestId,digest,issue,blockedV2(issue,request.requestId,digest,code,now()),summary);else{summary.pending++;summary.errors++;}}
   }
-  async function handleV1(issue:GitHubBridgeIssue,summary:RemoteBridgeRunSummary){let request:RemoteBridgeRequest,digest:string;try{request=parseRemoteBridgeRequest({title:issue.title,body:issue.body,authorLogin:issue.authorLogin,expectedAuthorLogin:authorLogin,now:now()});digest=remoteBridgeRequestDigest(request);}catch(error){const result=blockedV1(issue,sha(issue.body),errorCode(error),now());try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}return;}const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,issueNumber:issue.number,jobId:request.jobId});if(claim.state==='COLLISION'){try{await options.github.publishResult(issue.number,blockedV1(issue,digest,'REQUEST_ID_COLLISION',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}return;}if(claim.state==='REPLAY'&&(claim.record.phase==='TERMINAL'||claim.record.phase==='PUBLISHED')&&claim.record.result){await publishReplay(claim.record.result,issue,request.requestId,digest,claim.record.phase,summary);return;}if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){await reconcileV1(request,issue,digest,summary);return;}if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}await options.store.markSubmitted(request.requestId,digest);let status:Record<string,unknown>;try{status=await options.controller.submit(request.appId,request.jobId,request.payload);}catch{summary.pending++;summary.errors++;return;}if(appExecutionPending(status)){summary.pending++;return;}if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,status,now()),summary);return;}try{await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,await options.controller.result(request.appId,request.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}}
-  async function handleV2(issue:GitHubBridgeIssue,summary:RemoteBridgeRunSummary){let request:RemoteBridgeRequestV2,digest:string;try{request=parseRemoteBridgeRequestV2({title:issue.title,body:issue.body,author:issue.authorLogin,repository,expectedAuthor:authorLogin,expectedRepository:repository,now:now()});digest=remoteBridgeRequestV2Digest(request);}catch(error){const result=blockedV2(issue,requestId(issue),sha(issue.body),errorCode(error),now());try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}return;}const operation=request.operation,jobId=operation.kind==='APP_RUN'?operation.jobId:`host-${digest.slice(0,48)}`;const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,issueNumber:issue.number,jobId});if(claim.state==='COLLISION'){try{await options.github.publishResult(issue.number,blockedV2(issue,request.requestId,digest,'REQUEST_ID_COLLISION',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}return;}if(claim.state==='REPLAY'&&(claim.record.phase==='TERMINAL'||claim.record.phase==='PUBLISHED')&&claim.record.result){await publishReplay(claim.record.result,issue,request.requestId,digest,claim.record.phase,summary);return;}if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){if(operation.kind==='APP_RUN'){await reconcileV2App(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue,digest,summary);return;}if(operation.kind==='FILE'){await executeV2File(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'FILE'}>},issue,digest,summary);return;}if(operation.kind==='CHUNK'||operation.kind==='HEALTH'||operation.kind==='PROCESS'){await executeV2Dispatch(request,issue,digest,summary);return;}summary.errors++;return;}if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}await options.store.markSubmitted(request.requestId,digest);if(operation.kind==='APP_RUN'){let status:Record<string,unknown>;try{status=await options.controller.submit(operation.appId,operation.jobId,operation.payload);}catch{summary.pending++;summary.errors++;return;}if(appExecutionPending(status)){summary.pending++;return;}if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,status,now()),summary);return;}try{await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,await options.controller.result(operation.appId,operation.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}return;}await executeV2Dispatch(request,issue,digest,summary);}
-  return {async runOnce():Promise<RemoteBridgeRunSummary>{const summary:RemoteBridgeRunSummary={seen:0,pending:0,published:0,blocked:0,errors:0};for(const issue of (await options.github.listOpenRequests()).slice(0,max)){summary.seen++;if(bodySchema(issue.body)==='COCWIN_REMOTE_BRIDGE_REQUEST_V2')await handleV2(issue,summary);else await handleV1(issue,summary);}return summary;}};
+  async function handleV1(issue:GitHubBridgeIssue,summary:RemoteBridgeRunSummary){
+    let request:RemoteBridgeRequest,digest:string;
+    try{
+      request=parseRemoteBridgeRequest({title:issue.title,body:issue.body,authorLogin:issue.authorLogin,expectedAuthorLogin:authorLogin,now:now()});
+      digest=remoteBridgeRequestDigest(request);
+    }catch(error){
+      const code=errorCode(error);
+      if(code==='REMOTE_BRIDGE_REQUEST_EXPIRED'){
+        try{
+          request=parseRemoteBridgeRequest({title:issue.title,body:issue.body,authorLogin:issue.authorLogin,expectedAuthorLogin:authorLogin,now:now(),allowExpired:true});
+          digest=remoteBridgeRequestDigest(request);
+          const existing=await options.store.get(request.requestId);
+          if(!existing||existing.requestSha256!==digest){
+            const result=blockedV1(issue,sha(issue.body),code,now());
+            try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}
+            return;
+          }
+        }catch{summary.errors++;return;}
+      }else{
+        const result=blockedV1(issue,sha(issue.body),code,now());
+        try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}
+        return;
+      }
+    }
+    const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,scopeSha256,issueNumber:issue.number,jobId:request.jobId});
+    if(claim.state==='SCOPE_MISMATCH'){
+      try{await options.github.publishResult(issue.number,blockedV1(issue,digest,'REQUEST_SCOPE_MISMATCH',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
+      return;
+    }
+    if(claim.state==='COLLISION'){
+      try{await options.github.publishResult(issue.number,blockedV1(issue,digest,'REQUEST_ID_COLLISION',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
+      return;
+    }
+    if(claim.state==='REPLAY'&&(claim.record.phase==='TERMINAL'||claim.record.phase==='PUBLISHED')&&claim.record.result){
+      await publishReplay(claim.record.result,issue,request.requestId,digest,claim.record.phase,summary);return;
+    }
+    if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){await reconcileV1(request,issue,digest,summary);return;}
+    if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}
+    await options.store.markSubmitted(request.requestId,digest);
+    let status:Record<string,unknown>;
+    try{status=await options.controller.submit(request.appId,request.jobId,request.payload);}catch{summary.pending++;summary.errors++;return;}
+    if(appExecutionPending(status)){summary.pending++;return;}
+    if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,status,now()),summary);return;}
+    try{await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,await options.controller.result(request.appId,request.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}
+  }
+
+  async function handleV2(issue:GitHubBridgeIssue,summary:RemoteBridgeRunSummary){
+    let request:RemoteBridgeRequestV2,digest:string;
+    try{
+      request=parseRemoteBridgeRequestV2({title:issue.title,body:issue.body,author:issue.authorLogin,repository,expectedAuthor:authorLogin,expectedRepository:repository,now:now()});
+      digest=remoteBridgeRequestV2Digest(request);
+    }catch(error){
+      const code=errorCode(error);
+      if(code==='REMOTE_BRIDGE_V2_REQUEST_EXPIRED'){
+        try{
+          request=parseRemoteBridgeRequestV2({title:issue.title,body:issue.body,author:issue.authorLogin,repository,expectedAuthor:authorLogin,expectedRepository:repository,now:now(),allowExpired:true});
+          digest=remoteBridgeRequestV2Digest(request);
+          const existing=await options.store.get(request.requestId);
+          if(!existing||existing.requestSha256!==digest){
+            const result=blockedV2(issue,requestId(issue),sha(issue.body),code,now());
+            try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}
+            return;
+          }
+        }catch{summary.errors++;return;}
+      }else{
+        const result=blockedV2(issue,requestId(issue),sha(issue.body),code,now());
+        try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}
+        return;
+      }
+    }
+    const operation=request.operation,jobId=operation.kind==='APP_RUN'?operation.jobId:`host-${digest.slice(0,48)}`;
+    const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,scopeSha256,issueNumber:issue.number,jobId});
+    if(claim.state==='SCOPE_MISMATCH'){
+      try{await options.github.publishResult(issue.number,blockedV2(issue,request.requestId,digest,'REQUEST_SCOPE_MISMATCH',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
+      return;
+    }
+    if(claim.state==='COLLISION'){
+      try{await options.github.publishResult(issue.number,blockedV2(issue,request.requestId,digest,'REQUEST_ID_COLLISION',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
+      return;
+    }
+    if(claim.state==='REPLAY'&&(claim.record.phase==='TERMINAL'||claim.record.phase==='PUBLISHED')&&claim.record.result){
+      await publishReplay(claim.record.result,issue,request.requestId,digest,claim.record.phase,summary);return;
+    }
+    if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){
+      if(operation.kind==='APP_RUN'){await reconcileV2App(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue,digest,summary);return;}
+      if(operation.kind==='FILE'){
+        if(READ_ONLY_FILE_ACTIONS.has(operation.action))await executeV2File(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'FILE'}>},issue,digest,summary);
+        else await publishStored(request.requestId,digest,issue,uncertainV2(issue,request.requestId,digest,'REMOTE_BRIDGE_FILE_EFFECT_UNCERTAIN',now()),summary);
+        return;
+      }
+      if(operation.kind==='CHUNK'||operation.kind==='HEALTH'||operation.kind==='PROCESS'){await executeV2Dispatch(request,issue,digest,summary);return;}
+      summary.errors++;return;
+    }
+    if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}
+    await options.store.markSubmitted(request.requestId,digest);
+    if(operation.kind==='APP_RUN'){
+      let status:Record<string,unknown>;
+      try{status=await options.controller.submit(operation.appId,operation.jobId,operation.payload);}catch{summary.pending++;summary.errors++;return;}
+      if(appExecutionPending(status)){summary.pending++;return;}
+      if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,status,now()),summary);return;}
+      try{await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,await options.controller.result(operation.appId,operation.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}
+      return;
+    }
+    await executeV2Dispatch(request,issue,digest,summary);
+  }
+
+  return {async runOnce():Promise<RemoteBridgeRunSummary>{
+    const summary:RemoteBridgeRunSummary={seen:0,pending:0,published:0,blocked:0,errors:0};
+    const issues=await options.github.listOpenRequests();
+    const selected:GitHubBridgeIssue[]=[];
+    if(issues.length<=max){selected.push(...issues);issueCursor=0;}
+    else{
+      for(let offset=0;offset<max;offset++)selected.push(issues[(issueCursor+offset)%issues.length]!);
+      issueCursor=(issueCursor+max)%issues.length;
+    }
+    for(const issue of selected){summary.seen++;if(bodySchema(issue.body)==='COCWIN_REMOTE_BRIDGE_REQUEST_V2')await handleV2(issue,summary);else await handleV1(issue,summary);}
+    return summary;
+  }};
 }
