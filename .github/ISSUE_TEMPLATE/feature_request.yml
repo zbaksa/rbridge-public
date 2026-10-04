@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a new bounded capability, integration, or product improvement.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RBridge prioritizes fail-closed behavior and explicit capability boundaries. Proposals that expand execution authority should explain the security model.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What workflow cannot be done safely or conveniently today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Security/capability boundary
+      description: What new authority would this add? How should inputs be bounded?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Could this be solved with an existing profile, SSH, MCP, CI, or an external adapter?

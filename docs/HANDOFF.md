@@ -1,19 +1,53 @@
-# RBridge public handoff
+# RBridge maintainer handoff
 
 ## Repository role
 
-This tree contains the standalone RBridge source, tests and public provenance metadata. A checkout does not imply an active deployment or host authorization.
+This repository is the public RBridge source of truth for code, tests, deployment templates and public documentation.
 
-## Public-candidate contract
+A checkout does not imply an active deployment or host authorization.
 
-- GitHub repository and allowed GitHub author are runtime configuration, not compiled identities.
-- V1 and V2 parsing remains fail-closed against the configured transport identity.
-- FILE, PROCESS, CHUNK, HEALTH and APP_RUN capabilities remain bounded by source-controlled contracts.
-- Durable request state, replay handling and collision protection are preserved.
-- Deployment-specific host details and internal operational metadata are excluded from public documentation.
+## Current product contract
+
+- GitHub repository and allowed GitHub author are deployment configuration, not compiled identities.
+- V2 parsing fails closed against configured transport identity and exact request schemas.
+- FILE, PROCESS, CHUNK, HEALTH and APP_RUN capabilities are bounded by source-controlled/runtime contracts.
+- Durable request identity, replay and collision protection are preserved across restart.
+- Process executable selection is source-controlled, not request-controlled.
+- FlowPilot ingress is optional, loopback-only and separately authenticated.
+- Deployment-specific secrets/private host details do not belong in public source or documentation.
+
+## Maintainer rule
+
+Do not describe a feature as supported merely because a test helper or internal module exists. Public capability claims should map to reachable product behavior and current source.
 
 ## Verification
 
-A candidate is eligible for publication only after dependency installation from the lockfile, typecheck, targeted tests, full tests, lint, server build, public scrub scan, git diff --check and CI tied to the exact candidate commit.
+A public candidate is eligible for merge only after:
 
-Live deployment acceptance is separate from source and CI acceptance.
+1. dependency installation from the lockfile;
+2. targeted tests for changed behavior;
+3. full tests;
+4. typecheck;
+5. lint;
+6. server build;
+7. public-source scrub;
+8. `git diff --check`;
+9. CI tied to the exact candidate commit.
+
+Live deployment acceptance is separate from source/CI acceptance.
+
+## Documentation map
+
+- `README.md` — product landing page
+- `docs/QUICKSTART.md` — first request
+- `docs/INSTALLATION.md` — deployment
+- `docs/ARCHITECTURE.md` — component model
+- `docs/SECURITY_MODEL.md` — trust/security
+- `docs/PROTOCOL.md` — public wire contract
+- `docs/CONFIGURATION.md` — deployment configuration
+- `docs/OPERATIONS.md` — operating procedures
+- `docs/TROUBLESHOOTING.md` — failure diagnosis
+- `docs/COMPARISON.md` — adjacent tools
+- `docs/ROADMAP.md` — future direction
+
+Update these when behavior changes.
