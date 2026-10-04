@@ -34,6 +34,21 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ---
 
+## 2026-10-04 — Dependency security baseline
+
+The locked dependency audit reported affected Fastify, fast-uri and brace-expansion versions. Apply only patched versions within the existing supported dependency ranges; no application capability or authorization boundary changes.
+
+| Locked package | Before | After |
+| --- | --- | --- |
+| `fastify` | 5.12.3 | 5.12.5 |
+| `fast-uri` | 4.1.4 | 4.1.5 |
+| `ajv`'s nested `fast-uri` | 3.1.7 | 3.1.8 |
+| `brace-expansion` | 5.0.9 | 5.0.12 |
+
+Verification is recorded with the implementation PR and exact candidate CI. The dependency audit is a dated advisory check, not proof of universal absence of vulnerabilities. **Live deployment: NOT DEPLOYED.**
+
+Primary advisories: [Fastify](https://github.com/fastify/fastify/security/advisories/GHSA-4mh8-r7rc-xpvc), [fast-uri host normalization](https://github.com/fastify/fast-uri/security/advisories/GHSA-hrr3-gc8f-f4qj), [fast-uri header parsing](https://github.com/fastify/fast-uri/security/advisories/GHSA-jvvf-x445-j334), [brace-expansion recursion](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-qhr7-859c-m2p7) and [brace-expansion rewrite bounds](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-q2hr-2g5m-vwhr).
+
 ## 2026-10-04 — P1 MCP SAFE transport foundation
 
 - Added `rbridgeMcpMain` as a reachable non-root stdio entrypoint and `rbridgeMcpSafe` as an adapter to the frozen P0 normalized submission/receipt contract.
