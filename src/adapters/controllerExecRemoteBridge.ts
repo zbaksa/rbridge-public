@@ -29,6 +29,7 @@ function definitiveBlocked(error:unknown,app:string,job:string):Record<string,un
   const raw=errorMessage(error),prefix='APP_EXECUTION_BROKER_REJECTED:';
   if(!raw.startsWith(prefix))throw new Error(`CONTROLLER_EXEC_TRANSPORT_FAILED:${raw}`);
   const reason=raw.slice(prefix.length).replace(/\s+/g,' ').trim().slice(0,256)||'BROKER_REJECTED';
+  if(reason==='application job state is busy'||reason==='[Errno 11] Resource temporarily unavailable')throw new Error(`CONTROLLER_EXEC_TRANSIENT:${reason}`);
   return {schema:'COCWIN_APP_EXECUTION_STATUS_V1',app,job,state:'BLOCKED',reason};
 }
 
