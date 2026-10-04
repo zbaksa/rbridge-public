@@ -27,39 +27,44 @@ This roadmap separates implemented capabilities from future work. It is directio
 
 ## RBridge 2.0.0 — primary next milestone
 
-### P1 — MCP foundation
+**2.0.0 is a SAFE release.** WORKSTATION moves to 2.1 after isolation is proven; FULL ACCESS and GUI remain later work.
 
-MCP becomes a first-class transport while SAFE remains the default capability policy.
+See **[V2 P0 Contract & Security Freeze](V2_P0_CONTRACT.md)**.
 
-### P2 — MCP capability mapping
+### P0 — contract & security freeze
 
-Expose bounded HEALTH, FILE, PROCESS and transfer operations through MCP without bypassing the durable execution model.
+Freeze transport-neutral operation identity, trust scope, recovery/uncertainty semantics, cancel evidence, execution receipts and the SAFE capability boundary.
 
-### P3 — WORKSTATION mode
+### P1 — MCP SAFE foundation
 
-Add a reviewed developer-capability profile for users migrating from broader interactive AI-computer tools.
+Add MCP without creating a second authorization/retry model. Support the modern 2026-07-28 era plus required legacy compatibility for tested clients.
 
-### P4 — FULL ACCESS shell
+### P2 — SAFE capability mapping
 
-Add unrestricted shell only as a separately enabled, explicit opt-in capability.
+Expose bounded HEALTH, FILE, source-controlled PROCESS and transfer operations through the same durable core. Do not expose arbitrary shell/general APP_RUN in the new SAFE MCP surface.
 
-### P5 — security and compatibility qualification
+### P3 — control & recovery surface
 
-Prove mode boundaries, negative security cases, replay/uncertainty behavior, major cloud clients, free clients and at least one local/offline model path.
+Add queue/status/log/cancel visibility with explicit evidence semantics, fair scheduling and bounded concurrency.
 
-### P6 — productization
+### P4 — compatibility qualification
 
+Test major cloud clients, free/open clients and a fully local/offline path. Security/negative tests remain mandatory in every patch.
+
+### P5 — packaging & productization
+
+- portable installer;
+- upgrade/rollback tooling;
 - Desktop Commander migration guide;
 - Windmill templates/helpers;
-- portable installer and release packaging improvements;
 - AI/client compatibility matrix;
-- funding/donation surface once real accounts are configured:
-  - GitHub Sponsors;
-  - Ko-fi or equivalent fiat option;
-  - Bitcoin/Lightning through BTCPay Server;
-  - optional corporate sponsorship.
+- optional funding/donation surface once real accounts are configured.
 
 Core functionality remains free/open-source and donations do not unlock hidden capabilities.
+
+### P6 — release qualification
+
+Clean-machine installation, upgrade/rollback, exact-commit CI, security gates, durability/recovery demo and live acceptance. V2 production promotion remains blocked until unresolved V1 durable-state/cutover work is explicitly resolved.
 
 ### P7 — launch & adoption
 
@@ -100,6 +105,16 @@ Add reviewed source-controlled profiles for common development/diagnostic work.
 - checksums;
 - reproducible build guidance;
 - install/upgrade tooling.
+
+## After 2.0
+
+### RBridge 2.1 — WORKSTATION
+
+Broader developer-code execution only through a proven isolated executor with explicit filesystem, network, secret and resource boundaries.
+
+### Later — FULL ACCESS
+
+Explicit unrestricted-shell opt-in for users who consciously accept the reduced command-level boundary.
 
 ## Later — integrations
 
