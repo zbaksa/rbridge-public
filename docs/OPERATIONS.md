@@ -199,3 +199,24 @@ Useful operational signals:
 - age/state of Windmill flow runs that are waiting on RBridge results.
 
 RBridge does not currently ship a Prometheus exporter; integrate these checks with your monitoring system as appropriate.
+
+## Durable-state cutover audit
+
+Before a release that changes durable identity/scope semantics, use the read-only audit utility:
+
+```bash
+node dist/server/server/remoteBridgeDurableAudit.js \
+  --state-root /path/to/rbridge-state \
+  --repository owner/control-repo \
+  --author trusted-github-login
+```
+
+The utility does **not** mutate state or GitHub Issues. It:
+
+- classifies `CLAIMED`, `SUBMITTED` and unpublished `TERMINAL` durable records;
+- verifies the corresponding GitHub Issue is the expected request, author and repository;
+- distinguishes trusted `OPEN` unresolved work from historical `CLOSED` records;
+- counts active PROCESS sessions;
+- returns `cutoverGate: PASS|BLOCKED|UNKNOWN`.
+
+A `CLOSED` historical durable record is not automatically rewritten or deleted. It remains evidence. A future replay under a different scope must still fail closed.

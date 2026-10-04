@@ -36,6 +36,27 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ## 2026-10-04
 
+### Read-only durable-state cutover audit
+
+**Type:** V1 operations / upgrade safety  
+**PR:** [#24](https://github.com/zbaksa/rbridge-public/pull/24)
+
+Added a read-only audit utility for upgrades that change durable identity/scope semantics.
+
+The audit:
+
+- correlates unresolved durable records with their GitHub Issues;
+- distinguishes trusted open work from closed historical evidence;
+- checks issue identity instead of trusting state alone;
+- counts active process sessions;
+- returns PASS / BLOCKED / UNKNOWN without deleting, rewriting, closing or terminalizing anything.
+
+This was added to resolve production-upgrade gates without weakening RBridge's durable-history guarantees.
+
+**Source status:** **SOURCE PASS**
+
+---
+
 ### RBridge 2.0 P0 contract & security freeze
 
 **Type:** V2 architecture / security contract  
