@@ -82,6 +82,7 @@ const FILE_ACTIONS=new Set<RBridgeSafeFileAction>(['LIST','STAT','READ','READ_MA
 const PROCESS_ACTIONS=new Set<RBridgeSafeProcessAction>(['START','STATUS','READ_OUTPUT','WRITE_INPUT','TERMINATE']);
 const CHUNK_ACTIONS=new Set<RBridgeSafeChunkAction>(['PUT','GET','FINALIZE']);
 const FORBIDDEN_PROCESS_KEYS=new Set(['executable','executablePath','command','shell']);
+const FORBIDDEN_JSON_KEYS=new Set(['__proto__','constructor','prototype']);
 const PHASE_TRANSITIONS:Readonly<Record<RBridgeExecutionPhase,readonly RBridgeExecutionPhase[]>>={
   CLAIMED:['AUTHORIZED','TERMINAL'],
   AUTHORIZED:['STARTING','TERMINAL'],
@@ -101,7 +102,7 @@ function jsonValue(value:unknown,code:string):RBridgeJsonValue{
   if(value&&typeof value==='object'){
     const out:RBridgeJsonObject={};
     for(const [key,item] of Object.entries(value as Record<string,unknown>)){
-      if(!key||key.includes('\0'))fail(code);
+      if(!key||key.includes('\0')||FORBIDDEN_JSON_KEYS.has(key))fail(code);
       out[key]=jsonValue(item,code);
     }
     return out;

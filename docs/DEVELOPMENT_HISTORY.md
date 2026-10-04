@@ -34,6 +34,12 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ---
 
+## 2026-10-04 — Shared intent argument guard
+
+P2 preparation reproduced a shared-contract normalization defect: an own JSON `__proto__` argument could become an inherited handler value while its intent digest collapsed to the empty-argument digest. The MCP adapter already rejected this input; the shared P0 parser now rejects the same prototype-sensitive keys recursively for FILE, PROCESS and CHUNK arguments before either intent or scope hashing. String values and ordinary semantic digests remain unchanged.
+
+Regression tests first reproduced four failures, including the hidden FILE mutation intent, before the narrow parser correction. Exact-candidate verification is recorded with the implementation PR. This hardens the existing contract; it does not connect the P2 execution core. **Live deployment: NOT DEPLOYED.**
+
 ## 2026-10-04 — Dependency security baseline
 
 The locked dependency audit reported affected Fastify, fast-uri and brace-expansion versions. Apply only patched versions within the existing supported dependency ranges; no application capability or authorization boundary changes.

@@ -101,6 +101,8 @@ That lets the same already-known operation be reconciled through another transpo
 
 Transport metadata remains audit evidence, but it is not permission.
 
+Prototype-sensitive JSON argument keys (`__proto__`, `constructor`, `prototype`) are rejected at every nesting level before normalization or hashing. A key must not disappear from the canonical intent while leaving an inherited value visible to a handler. These names remain valid inside string values, including file contents.
+
 ## 4. Acceptance TTL is not execution TTL
 
 A transport may impose a TTL on **initial acceptance**.

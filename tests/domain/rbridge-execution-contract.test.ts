@@ -52,6 +52,36 @@ describe('RBridge 2.0 P0 transport-neutral execution contract',()=>{
     expect(()=>parseRBridgeOperationSubmissionV1({...base(),operation:{kind:'PROCESS',action:'START',args:{profileId:'git-read',bad:undefined}}})).toThrow('RBRIDGE_OPERATION_ARGS_INVALID');
   });
 
+  it.each(['__proto__','constructor','prototype'])('rejects prototype-sensitive JSON key %s in FILE, PROCESS and CHUNK arguments',key=>{
+    const sensitive=JSON.parse(JSON.stringify({[key]:{text:'hidden-intent'}})) as Record<string,unknown>;
+    const operations=[
+      {kind:'FILE',action:'WRITE_TEXT',target:'/mnt/data/project/a.txt',args:sensitive},
+      {kind:'PROCESS',action:'START',args:{profileId:'git-read',nested:sensitive}},
+      {kind:'CHUNK',action:'PUT',transferId:'transfer-001',args:{manifest:[sensitive]}},
+    ];
+    for(const operation of operations){
+      const submission={...base(),operation};
+      expect(()=>parseRBridgeOperationSubmissionV1(submission)).toThrow('RBRIDGE_OPERATION_ARGS_INVALID');
+      expect(()=>rbridgeOperationIntentDigest(submission)).toThrow('RBRIDGE_OPERATION_ARGS_INVALID');
+      expect(()=>rbridgeOperationScopeDigest(submission)).toThrow('RBRIDGE_OPERATION_ARGS_INVALID');
+    }
+  });
+
+  it('does not collapse a prototype-carried FILE mutation into an empty-args intent',()=>{
+    const operation={kind:'FILE',action:'WRITE_TEXT',target:'/mnt/data/project/a.txt',args:JSON.parse('{"__proto__":{"text":"different-effect"}}')};
+    const submission={...base(),operation};
+    // JSON.parse produces an own key; a JS object literal would test a different input.
+    expect(Object.hasOwn(operation.args,'__proto__')).toBe(true);
+    expect(()=>rbridgeOperationIntentDigest(submission)).toThrow('RBRIDGE_OPERATION_ARGS_INVALID');
+  });
+
+  it('preserves prototype-sensitive text values and their semantic digest',()=>{
+    const text='{"__proto__":{"constructor":"prototype"}}';
+    const submission={...base(),operation:{kind:'FILE',action:'WRITE_TEXT',target:'/mnt/data/project/a.txt',args:{text}}};
+    expect(parseRBridgeOperationSubmissionV1(submission).operation).toEqual(submission.operation);
+    expect(rbridgeOperationIntentDigest(submission)).not.toBe(rbridgeOperationIntentDigest({...submission,operation:{...submission.operation,args:{text:'different'}}}));
+  });
+
   it('freezes the monotonic core phase graph and prevents reopening terminal work',()=>{
     expect(canTransitionRBridgeExecutionPhase('CLAIMED','AUTHORIZED')).toBe(true);
     expect(canTransitionRBridgeExecutionPhase('CLAIMED','TERMINAL')).toBe(true);
