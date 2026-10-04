@@ -290,6 +290,42 @@ A practical 2.0 sequence:
 - installer/release packaging improvements;
 - funding/donation surface once real accounts are configured.
 
+### P7 — launch & adoption
+
+The large public launch happens **only after RBridge 2.0.0 passes all release and live-acceptance gates**. V1 can remain public for early adopters, but it should not be promoted as the finished cross-client product.
+
+Required launch assets:
+
+- signed/tagged GitHub Release with checksums and release notes;
+- copy/paste installation path and first-success Quick Start;
+- 60–90 second demo showing an AI client connecting through MCP and completing a real SAFE-mode task;
+- a second demo showing RBridge's core differentiator: disconnect/retry/recovery without blindly duplicating a side effect;
+- Desktop Commander → RBridge migration guide;
+- tested compatibility matrix for major cloud clients, free clients and at least one fully local/offline model path;
+- clear SAFE / WORKSTATION / FULL ACCESS explanation;
+- security model, known limitations and troubleshooting;
+- sponsor/donation links only after real accounts/URLs are configured.
+
+Launch sequence:
+
+1. **GitHub-first release** — tag/release, README, demo assets and documentation are the canonical landing point.
+2. **Developer launch** — Show HN and relevant developer/MCP communities, focused on what is technically different rather than generic promotion.
+3. **Self-hosted / automation launch** — communities interested in self-hosting, local AI, homelabs and workflow automation.
+4. **Migration outreach** — content specifically for users of Desktop Commander and similar AI-computer tools.
+5. **Broad launch** — Product Hunt plus LinkedIn/X and other public channels after real early-user feedback confirms onboarding works.
+6. **Follow-up proof** — publish fixes, compatibility results, benchmarks/recovery demonstrations and user examples instead of treating launch day as the end.
+
+Success should be measured by real adoption signals, not post impressions alone:
+
+- successful installs;
+- time-to-first-successful task;
+- GitHub stars/watchers/forks as secondary signals;
+- issues/discussions from real users;
+- repeat usage;
+- number of tested client/model combinations;
+- recovery/uncertainty incidents correctly handled;
+- sponsor/donation conversion only as an optional sustainability metric.
+
 GUI/desktop interaction remains a later independent workstream.
 
 ## Release gates
@@ -305,6 +341,9 @@ RBridge 2.0.0 is not complete until:
 - public-source scrub is green;
 - documentation clearly distinguishes implemented vs optional capabilities;
 - at least one major cloud client, one free client and one local/offline model path are acceptance-tested.
+- installer/upgrade path is acceptance-tested on a clean machine or VM;
+- launch demos use the same public release artifacts users receive;
+- no high-visibility launch occurs before live acceptance is PASS.
 
 ## Non-goals
 
