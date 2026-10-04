@@ -70,6 +70,21 @@ function qualificationEnvelope(extra: Record<string, unknown> = {}) {
   });
 }
 
+
+function supervisorEnvelope(extra: Record<string, unknown> = {}) {
+  return envelope({
+    operationId: 'op_run_0000000006_supervisor_a1',
+    runId: 'run_0000000006',
+    stepId: 'supervisor',
+    idempotencyKey: 'fp:run_0000000006:supervisor:1',
+    appId: 'cocwin',
+    action: 'COCWIN_DEVELOPMENT_SUPERVISOR_V1',
+    payload: {},
+    timeoutSeconds: 60,
+    ...extra,
+  });
+}
+
 it('valid canary envelope is sanitized and mapped to one source-controlled app profile', () => {
   const parsed = parseFlowPilotBridgeEnvelope(envelope(), authority);
   assert.equal(JSON.stringify(parsed).includes(callbackToken), false);
@@ -162,6 +177,38 @@ it('COCWIN continuous qualification maps to public-safe bounded read-only execut
   assert.throws(
     () => parseFlowPilotBridgeEnvelope(
       qualificationEnvelope({ payload: { url: 'http://example.invalid' } }),
+      authority,
+    ),
+    /FLOWPILOT_PAYLOAD_NOT_ALLOWED/,
+  );
+});
+
+it('COCWIN development supervisor maps to fixed Windmill-independent execution', () => {
+  const parsed = parseFlowPilotBridgeEnvelope(
+    supervisorEnvelope(),
+    authority,
+  );
+
+  const request = toFlowPilotAppExecution(parsed, policyUrl);
+
+  assert.equal(parsed.action, 'COCWIN_DEVELOPMENT_SUPERVISOR_V1');
+  assert.equal(request.appId, 'cocwin');
+  assert.match(request.jobId, /^fp-cw-[0-9a-f]{48}$/);
+  assert.equal(request.payload.tool, 'node');
+  assert.equal(request.payload.cwd, '/home/cocwin/backend');
+  assert.equal(request.payload.args[0], '-e');
+  assert.match(request.payload.args[1] ?? '', /\/etc\/cocwin\/refresh\.secret/);
+  assert.match(request.payload.args[1] ?? '', /\/internal\/automation-supervisor\/tick/);
+  assert.match(request.payload.args[1] ?? '', /COCWIN_AUTOMATION_SUPERVISOR_V1/);
+  assert.match(request.payload.args[1] ?? '', /55000/);
+  assert.match(request.payload.args[1] ?? '', /524288/);
+  assert.doesNotMatch(request.payload.args[1] ?? '', /WM_TOKEN|WM_WORKSPACE|192\.168\./);
+  assert.equal(request.payload.args[2], 'http://127.0.0.1:18088');
+  assert.equal(request.payload.timeout_ms, 60_000);
+
+  assert.throws(
+    () => parseFlowPilotBridgeEnvelope(
+      supervisorEnvelope({ payload: { command: 'id' } }),
       authority,
     ),
     /FLOWPILOT_PAYLOAD_NOT_ALLOWED/,

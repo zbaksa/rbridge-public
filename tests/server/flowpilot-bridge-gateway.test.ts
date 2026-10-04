@@ -63,6 +63,24 @@ function qualificationOperation() {
   }, authority);
 }
 
+
+function supervisorOperation() {
+  return parseFlowPilotBridgeEnvelope({
+    schema: 'FLOWPILOT_REMOTE_BRIDGE_V1',
+    operationId: 'op_run_0000000006_supervisor_a1',
+    runId: 'run_0000000006',
+    stepId: 'supervisor',
+    attempt: 1,
+    fencingToken: 11,
+    idempotencyKey: 'fp:run_0000000006:supervisor:1',
+    appId: 'cocwin',
+    action: 'COCWIN_DEVELOPMENT_SUPERVISOR_V1',
+    payload: {},
+    timeoutSeconds: 60,
+    callback: { url: callbackUrl, bearerToken: callbackToken },
+  }, authority);
+}
+
 class MemoryStore implements FlowPilotBridgeStore {
   records = new Map<string, FlowPilotBridgeRecord>();
   events: string[] = [];
@@ -253,6 +271,65 @@ it('COCWIN refresh and qualification use action-specific evidence', async () => 
       false,
     );
   }
+});
+
+it('COCWIN development supervisor uses cocwin identity and supervisor-specific evidence', async () => {
+  const store = new MemoryStore();
+  const delivered: Record<string, unknown>[] = [];
+  const submitted: Array<{ app: string; payload: unknown }> = [];
+
+  const gateway = createFlowPilotBridgeGateway({
+    store,
+    controller: {
+      async submit(app, _job, payload) {
+        submitted.push({ app, payload });
+        return { state: 'RUNNING' };
+      },
+      async status() { return { state: 'SUCCEEDED' }; },
+      async result() {
+        return {
+          state: 'SUCCEEDED',
+          returncode: 0,
+          timed_out: false,
+          truncated: false,
+          stdout: 'hidden-supervisor',
+        };
+      },
+    },
+    callback: {
+      async send(_url, _token, value) {
+        delivered.push(value);
+      },
+    },
+    callbackToken,
+    cocwinPolicyUrl: 'http://127.0.0.1:18088/api/v1/automation-engine/policy',
+  });
+
+  await gateway.accept(supervisorOperation());
+  await gateway.reconcile();
+
+  assert.equal(submitted[0]?.app, 'cocwin');
+
+  const payload = submitted[0]?.payload as Record<string, unknown>;
+  assert.equal(payload.tool, 'node');
+  assert.equal(payload.cwd, '/home/cocwin/backend');
+
+  const args = payload.args as string[];
+  assert.match(args[1] ?? '', /\/internal\/automation-supervisor\/tick/);
+  assert.match(args[1] ?? '', /refresh\.secret/);
+
+  assert.equal(delivered[0]?.outcome, 'PASS');
+
+  const evidence = delivered[0]?.evidence as Record<string, unknown>;
+  assert.equal(
+    evidence.schema,
+    'COCWIN_FLOWPILOT_DEVELOPMENT_SUPERVISOR_EVIDENCE_V1',
+  );
+  assert.equal(evidence.action, 'COCWIN_DEVELOPMENT_SUPERVISOR_V1');
+  assert.equal(
+    JSON.stringify(delivered[0]).includes('hidden-supervisor'),
+    false,
+  );
 });
 
 it('timed out or truncated execution resolves to UNKNOWN, never blind FAIL', async () => {

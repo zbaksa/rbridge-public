@@ -33,7 +33,7 @@ function policyRecord(): FlowPilotBridgeRecord {
 
 
 function cocwinEmptyActionRecord(
-  action: 'COCWIN_REFRESH_SNAPSHOT_V1' | 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+  action: 'COCWIN_REFRESH_SNAPSHOT_V1' | 'COCWIN_CONTINUOUS_QUALIFICATION_V1' | 'COCWIN_DEVELOPMENT_SUPERVISOR_V1',
   operationId: string,
   runId: string,
   stepId: string,
@@ -97,7 +97,7 @@ it('COCWIN policy-health operation survives durable-store reopen', async () => {
 });
 
 
-it('COCWIN refresh and continuous-qualification survive durable-store reopen', async () => {
+it('COCWIN fixed empty-payload actions survive durable-store reopen', async () => {
   const cases = [
     cocwinEmptyActionRecord(
       'COCWIN_REFRESH_SNAPSHOT_V1',
@@ -114,6 +114,14 @@ it('COCWIN refresh and continuous-qualification survive durable-store reopen', a
       'qualify',
       10,
       600,
+    ),
+    cocwinEmptyActionRecord(
+      'COCWIN_DEVELOPMENT_SUPERVISOR_V1',
+      'op_run_0000000006_supervisor_a1',
+      'run_0000000006',
+      'supervisor',
+      11,
+      60,
     ),
   ];
 
