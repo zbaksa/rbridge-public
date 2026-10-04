@@ -38,7 +38,8 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ### Read-only durable-state cutover audit
 
-**Type:** V1 operations / upgrade safety
+**Type:** V1 operations / upgrade safety  
+**PR:** [#24](https://github.com/zbaksa/rbridge-public/pull/24)
 
 Added a read-only audit utility for upgrades that change durable identity/scope semantics.
 
@@ -52,7 +53,7 @@ The audit:
 
 This was added to resolve production-upgrade gates without weakening RBridge's durable-history guarantees.
 
-**Source status:** **IN QUALIFICATION**
+**Source status:** **SOURCE PASS**
 
 ---
 
