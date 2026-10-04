@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {afterEach,describe,expect,it,vi} from 'vitest';
 import {createRemoteBridgeStore} from '../../src/server/remoteBridgeStore.js';import {createRemoteBridgeWorker} from '../../src/server/remoteBridgeWorker.js';
-const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner'} as const;
+const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner',instanceId:'test-instance'} as const;
 const roots:string[]=[];async function root(){const p=await mkdtemp(join(tmpdir(),'bridge-worker-'));roots.push(p);return p;}afterEach(async()=>{await Promise.all(roots.splice(0).map(p=>rm(p,{recursive:true,force:true})));});
 const body=(max=262144)=>JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1',requestId:'bridge.req.1',createdAt:'2026-09-16T18:00:00.000Z',expiresAt:'2026-09-16T18:20:00.000Z',appId:'cocwin',jobId:'bridge-probe-1',operation:'RUN',payload:{tool:'probe',cwd:'/home/cocwin/backend',args:[],timeout_ms:30000,max_bytes:max}});
 const issue=(number=49,max=262144)=>({number,title:'[COCWIN BRIDGE REQUEST] bridge.req.1',body:body(max),authorLogin:'bridge-owner',url:`https://github.com/example/rbridge-control/issues/${number}`});
