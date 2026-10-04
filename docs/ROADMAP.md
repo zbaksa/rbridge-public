@@ -1,8 +1,10 @@
 # Roadmap
 
-RBridge is functional today, but the public product surface is still pre-1.0.
+RBridge is functional today, and the next major product milestone is **RBridge 2.0.0**.
 
-This roadmap separates **implemented capabilities** from **future work**. It is directional, not a promise of dates.
+See the full plan: **[RBridge 2.0.0 Plan](V2_PLAN.md)**.
+
+This roadmap separates implemented capabilities from future work. It is directional, not a promise of dates.
 
 ## Now — implemented
 
@@ -23,61 +25,60 @@ This roadmap separates **implemented capabilities** from **future work**. It is 
 - exact-commit CI and public-source scrub
 - MIT public repository
 
-## Next — product usability
+## RBridge 2.0.0 — primary next milestone
 
-### 1. Portable installer
+### P1 — MCP foundation
 
-Goal: one supported installer that:
+MCP becomes a first-class transport while SAFE remains the default capability policy.
 
-- creates/verifies runtime account;
-- installs Node/runtime dependencies;
-- renders systemd unit;
-- prepares state permissions;
-- verifies GitHub CLI auth;
-- performs first HEALTH acceptance.
+### P2 — MCP capability mapping
 
-### 2. Deployment-neutral runtime paths
+Expose bounded HEALTH, FILE, PROCESS and transfer operations through MCP without bypassing the durable execution model.
 
-Some current process/controller integration paths come from the original deployment environment.
+### P3 — WORKSTATION mode
 
-Goal:
+Add a reviewed developer-capability profile for users migrating from broader interactive AI-computer tools.
 
-- make executable/controller paths explicit deployment configuration;
-- retain fail-closed validation;
-- keep request payloads unable to control executable paths.
+### P4 — FULL ACCESS shell
 
-### 3. Profile packs
+Add unrestricted shell only as a separately enabled, explicit opt-in capability.
 
-Goal: allow reviewed, source-controlled profile sets for common tasks without turning profiles into request-controlled commands.
+### P5 — security and compatibility qualification
 
-Potential examples:
+Prove mode boundaries, negative security cases, replay/uncertainty behavior, major cloud clients, free clients and at least one local/offline model path.
 
-- safe Git inspection;
-- bounded build/test;
-- service health probes;
-- application-specific diagnostics.
+### P6 — productization
 
-### 4. Windmill templates/helpers
+- Desktop Commander migration guide;
+- Windmill templates/helpers;
+- portable installer and release packaging improvements;
+- AI/client compatibility matrix;
+- funding/donation surface once real accounts are configured:
+  - GitHub Sponsors;
+  - Ko-fi or equivalent fiat option;
+  - Bitcoin/Lightning through BTCPay Server;
+  - optional corporate sponsorship.
 
-Goal:
+Core functionality remains free/open-source and donations do not unlock hidden capabilities.
 
-- reusable Windmill scripts/flows for request creation and result polling;
-- sample HEALTH/FILE/PROCESS workflows;
-- safe token/resource setup guidance;
-- preserve RBridge requestId/TTL/replay semantics.
+## Additional product usability
 
-### 5. First-class examples/SDK
+### Deployment-neutral runtime paths
 
-Goal:
+Make executable/controller paths explicit deployment configuration while keeping them outside request control.
+
+### Profile packs
+
+Add reviewed source-controlled profiles for common development/diagnostic work.
+
+### First-class examples/SDK
 
 - request-builder library;
 - validated JSON examples;
-- CLI helper for Issue creation/status;
+- CLI helper;
 - schema export.
 
-### 6. Release packaging
-
-Goal:
+### Release packaging
 
 - signed/tagged releases;
 - checksums;
@@ -85,12 +86,6 @@ Goal:
 - install/upgrade tooling.
 
 ## Later — integrations
-
-### MCP adapter
-
-Expose selected RBridge capabilities as MCP tools while keeping RBridge's durable execution engine behind the adapter.
-
-The adapter should not simply turn into "arbitrary shell over MCP".
 
 ### Additional transports
 
@@ -105,16 +100,22 @@ Every transport must preserve the same normalized request identity and authoriza
 
 ### Dashboard
 
-Read-only/operational UI for:
-
-- queue;
-- sessions;
-- transfers;
-- durable request history;
-- result states;
-- release identity.
+Read-only/operational UI for queue, sessions, transfers, durable request history, result states and release identity.
 
 Mutation controls should remain explicit and audited.
+
+### GUI / desktop adapter
+
+Potential optional capabilities:
+
+- screenshots;
+- mouse;
+- keyboard;
+- clipboard;
+- window/application focus;
+- multi-monitor support.
+
+Desktop control is not a 2.0 launch requirement and should remain separately enabled.
 
 ### Broader platform support
 
@@ -125,8 +126,6 @@ Possible future work:
 - macOS service packaging;
 - Windows service/agent;
 - containerized deployments.
-
-The security model must be re-evaluated for each platform rather than assuming Linux filesystem/process semantics translate directly.
 
 ### Policy/approval layer
 
@@ -142,11 +141,12 @@ Optional policies for higher-risk operations:
 
 RBridge should not become:
 
-- an unrestricted root shell;
+- an unrestricted root shell by default;
 - a hidden remote-access tool;
 - a replacement for OS access controls;
+- a product tied to one AI vendor;
 - a product that silently guesses success after uncertain side effects.
 
 New features should preserve the core invariant:
 
-> More capability must not require less certainty or weaker authorization.
+> **More capability must be explicit, auditable, and opt-in; it must not weaken SAFE mode.**
