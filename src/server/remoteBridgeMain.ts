@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {userInfo} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -30,6 +31,18 @@ export function resolveRemoteBridgeRuntimeConfig(env:Record<string,string|undefi
   if(!identity.homedir.startsWith('/')||identity.homedir==='/'||identity.homedir==='/root'||identity.homedir.includes('\0'))throw new Error('REMOTE_BRIDGE_HOME_INVALID');
   return {runtimeUser,stateRoot:join(identity.homedir,'.local','state','rbridge')};
 }
+
+export function resolveRemoteBridgeInstanceId(env:Record<string,string|undefined>,machineIdRaw?:string){
+  const configured=(env.RBRIDGE_INSTANCE_ID??'').trim();
+  if(configured){
+    if(!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(configured))throw new Error('REMOTE_BRIDGE_INSTANCE_ID_INVALID');
+    return configured;
+  }
+  const raw=machineIdRaw??readFileSync('/etc/machine-id','utf8');
+  const machineId=raw.trim().toLowerCase();
+  if(!/^[0-9a-f]{32}$/.test(machineId))throw new Error('REMOTE_BRIDGE_INSTANCE_ID_INVALID');
+  return `machine-${machineId}`;
+}
 export async function runRemoteBridgeLoop(options:RemoteBridgeLoopOptions):Promise<void>{
   const lock=await options.acquireLock(),now=options.now??(()=>new Date()),maxBackoffMs=Math.max(options.pollMs,options.maxBackoffMs??60_000);let errorStreak=0;
   try{await options.onLocked?.();while(options.shouldContinue()){
@@ -43,6 +56,7 @@ export async function runRemoteBridgeLoop(options:RemoteBridgeLoopOptions):Promi
 export async function runRemoteBridgeMain():Promise<void>{
   const user=userInfo(),uid=typeof process.getuid==='function'?process.getuid():user.uid;
   const {stateRoot:root}=resolveRemoteBridgeRuntimeConfig(process.env,{username:user.username,homedir:user.homedir,uid});
+  const instanceId=resolveRemoteBridgeInstanceId(process.env);
   const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env);
   const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
   const flowPilot=createFlowPilotBridgeRuntime({root,controller,env:process.env});
@@ -56,7 +70,7 @@ export async function runRemoteBridgeMain():Promise<void>{
     maxReadBytes:fileProfile.maxReadBytes,
     maxSearchResults:fileProfile.maxSearchResults
   });
-  const worker=createRemoteBridgeWorker({store,github,controller,chunkStore,health,processSessions,fileOps,repository,authorLogin});let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
+  const worker=createRemoteBridgeWorker({store,github,controller,chunkStore,health,processSessions,fileOps,repository,authorLogin,instanceId});let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
   try{
     await runRemoteBridgeLoop({
       acquireLock:async()=>await acquireRemoteBridgeProcessLock(root),
