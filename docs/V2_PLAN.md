@@ -6,23 +6,26 @@ The guiding rule is:
 
 > **One execution engine, multiple AI clients, multiple transports, one security model.**
 
-RBridge 1.x remains the conservative SAFE baseline. RBridge 2.x adds compatibility and convenience as explicitly selectable capability layers.
+RBridge 1.x remains the conservative production baseline while 2.x is built and qualified. **RBridge 2.0.0 is intentionally a SAFE release**; broader code-execution modes come only after the SAFE core and MCP path are proven.
 
 ## Product shape
 
 RBridge remains **one product and one core**, not separate forks.
 
 ```text
-                        RBridge Core
-                 durable + fail-closed engine
-                            |
-             +--------------+--------------+
-             |              |              |
-           SAFE        WORKSTATION      FULL ACCESS
-          default         opt-in           opt-in
+                    RBridge 2.0 Core
+              durable + fail-closed engine
+                         |
+                        SAFE
+                       default
+
+Later:
+  2.1 WORKSTATION  -> isolated developer-code execution
+  later FULL ACCESS -> explicit unrestricted shell
+  later GUI         -> separate desktop adapter
 ```
 
-### SAFE — default
+### SAFE — RBridge 2.0.0
 
 Preserves the current security philosophy:
 
@@ -35,33 +38,33 @@ Preserves the current security philosophy:
 - no arbitrary shell;
 - no desktop-control capability.
 
-### WORKSTATION — opt-in
+### WORKSTATION — planned for 2.1
 
-Designed for people migrating from interactive AI-computer tools.
+WORKSTATION is not a 2.0.0 launch requirement.
 
-Adds:
+It may add broader developer-code execution only after an isolated executor proves boundaries for:
 
-- MCP transport;
-- broader reviewed developer/tool profiles;
-- richer file/search/edit/process workflows;
-- Git, Node/npm, Python and similar developer capabilities where safely profiled;
-- the same durable request/replay/audit model as SAFE.
+- project filesystem access;
+- network access;
+- secrets;
+- process/resource limits;
+- cleanup and recovery.
 
-Arbitrary shell remains disabled.
+Python, Node, npm lifecycle scripts, Docker control or equivalent general code execution must not be treated as “safe” merely because they are hidden behind a named profile.
 
-### FULL ACCESS — explicit opt-in
+### FULL ACCESS — later explicit opt-in
 
-For trusted workstations, disposable VMs/containers, or users who consciously prefer convenience over the command-level boundary.
+FULL ACCESS is not a 2.0.0 launch requirement.
 
-Adds an unrestricted-shell capability only after an explicit configuration opt-in.
-
-The UI/docs must clearly state that enabling arbitrary shell removes one of RBridge's strongest command-level security boundaries. FULL ACCESS does not imply root; OS-account permissions still apply.
+A future unrestricted-shell capability must be a separate, explicit opt-in and must clearly state that it removes one of RBridge's strongest command-level boundaries. FULL ACCESS does not imply root; OS-account permissions still apply.
 
 ## V1 / V2 compatibility strategy
 
-- Preserve/tag the current SAFE line as the stable 1.x baseline.
-- Build 2.x from the same core rather than maintaining a separate product.
-- SAFE mode in 2.x should remain behaviorally compatible with the 1.x safety model.
+- Preserve/tag the current 1.x line as the production baseline while 2.x is built.
+- V2 source development may proceed in parallel with V1 production hotfix resolution.
+- Do not delete, rewrite or silently terminalize unresolved V1 durable work merely to permit an upgrade.
+- V2 production promotion is blocked until the V1 durable-state/cutover situation is explicitly resolved.
+- Build 2.x from the same durable core rather than maintaining a separate product fork.
 - New transports must not silently expand capabilities.
 - Protocol namespace cleanup should be backward-compatible so current clients/deployments can migrate gradually.
 
@@ -241,54 +244,75 @@ Do **not** commit placeholder wallet addresses, fake sponsor URLs, or private fi
 
 ## Proposed implementation patches
 
-A practical 2.0 sequence:
+The normative P0 contract is **[V2 P0 Contract & Security Freeze](V2_P0_CONTRACT.md)**.
 
-### P1 — MCP foundation
+Security/recovery qualification is required in every patch; it is not deferred to one late security phase.
+
+### P0 — Contract & Security Freeze
+
+- one transport-neutral operation identity;
+- stable principal + target-instance trust scope;
+- acceptance TTL separated from durable recovery;
+- monotonic execution phase graph;
+- explicit retry/UNCERTAIN rules;
+- cancel/STOP evidence separated from rollback claims;
+- execution receipt + policy snapshot contract;
+- SAFE-only 2.0 capability boundary.
+
+### P1 — MCP SAFE foundation
 
 - MCP server/adapter;
+- modern 2026-07-28 plus legacy-era compatibility as required by tested clients;
+- authentication-to-principal mapping;
 - tool discovery;
-- local/remote transport choices as appropriate;
-- configuration and authentication boundary;
-- no capability expansion beyond SAFE.
+- no authority expansion beyond the frozen SAFE contract.
 
-### P2 — MCP capability mapping
+### P2 — SAFE capability mapping
 
-- FILE;
-- PROCESS;
 - HEALTH;
+- FILE;
+- bounded source-controlled PROCESS;
 - CHUNK/transfer helpers;
 - structured errors/results;
-- replay/durability preservation.
+- all operations routed through the same durable core.
 
-### P3 — WORKSTATION mode
+The new MCP SAFE surface does not expose legacy APP_RUN or arbitrary code execution.
 
-- explicit mode selection;
-- reviewed developer profile pack;
-- migration-oriented defaults;
-- SAFE remains default.
+### P3 — Control & recovery surface
 
-### P4 — FULL ACCESS shell
+- status;
+- queue visibility;
+- incremental logs/output;
+- cancel/STOP with explicit evidence states;
+- operation receipt/postcondition display;
+- fair scheduling and bounded concurrency.
 
-- separate module/capability;
-- disabled by default;
-- explicit acknowledgement/configuration;
-- no silent fallback from profiled execution to shell.
+### P4 — compatibility qualification
 
-### P5 — security/compatibility qualification
-
-- negative/bypass tests;
-- mode-boundary tests;
+- major cloud clients;
+- at least five useful free/open client paths where practical;
+- at least one fully local/offline model path;
 - MCP abuse/error cases;
-- replay/collision/uncertainty regression tests;
-- compatibility tests for major AI clients plus free/local paths.
+- replay/collision/uncertainty regression tests for every supported transport.
 
-### P6 — productization
+### P5 — packaging & productization
 
+- portable installer;
+- upgrade/rollback tooling;
 - Desktop Commander migration guide;
 - AI/client compatibility matrix;
 - Windmill templates/examples;
-- installer/release packaging improvements;
 - funding/donation surface once real accounts are configured.
+
+### P6 — release qualification
+
+- clean-machine/VM install acceptance;
+- upgrade/rollback acceptance;
+- exact-commit CI;
+- security negative tests for every changed boundary;
+- public-source scrub;
+- durability/recovery demonstration;
+- live acceptance without bypassing unresolved durable state.
 
 ### P7 — launch & adoption
 
@@ -332,16 +356,17 @@ GUI/desktop interaction remains a later independent workstream.
 
 RBridge 2.0.0 is not complete until:
 
-- SAFE is still the default;
-- MCP works without enabling unrestricted shell;
-- WORKSTATION cannot silently escalate to FULL ACCESS;
-- FULL ACCESS requires explicit opt-in;
+- P0 identity/authorization/recovery contracts are implemented and green;
+- SAFE is the only 2.0 execution mode;
+- MCP works without exposing arbitrary shell or general APP_RUN execution;
+- GitHub and MCP use the same normalized operation identity and durable core;
+- each implementation patch includes relevant negative/security tests;
 - exact-commit CI is green;
-- security negative tests are green;
 - public-source scrub is green;
-- documentation clearly distinguishes implemented vs optional capabilities;
-- at least one major cloud client, one free client and one local/offline model path are acceptance-tested.
-- installer/upgrade path is acceptance-tested on a clean machine or VM;
+- documentation clearly distinguishes implemented vs future capability;
+- at least one major cloud client, one free client and one local/offline model path are acceptance-tested;
+- installer/upgrade/rollback paths are acceptance-tested on a clean machine or VM;
+- the V1 durable-state/cutover situation is explicitly resolved before V2 production promotion;
 - launch demos use the same public release artifacts users receive;
 - no high-visibility launch occurs before live acceptance is PASS.
 
