@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {createRemoteBridgeStore} from '../../src/server/remoteBridgeStore.js';
 import {createRemoteBridgeWorker} from '../../src/server/remoteBridgeWorker.js';
-const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner'} as const;
+const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner',instanceId:'test-instance'} as const;
 
 const roots:string[]=[];
 afterEach(async()=>{await Promise.all(roots.splice(0).map(path=>rm(path,{recursive:true,force:true})));});
