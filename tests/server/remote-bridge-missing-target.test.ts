@@ -7,7 +7,7 @@ import {createRemoteBridgeFileOps} from '../../src/server/remoteBridgeFileOps.js
 import {createRemoteBridgeStore} from '../../src/server/remoteBridgeStore.js';
 import {createRemoteBridgeWorker} from '../../src/server/remoteBridgeWorker.js';
 type FileOperation=Extract<RemoteBridgeStage2Operation,{kind:'FILE'}>;
-const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner'} as const,roots:string[]=[];
+const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner',instanceId:'test-instance'} as const,roots:string[]=[];
 const now=()=>new Date('2026-09-27T12:00:00.000Z'),requestId='rb001.missing-target';
 const controller={submit:async()=>{throw new Error('FILE must not submit an application job');},status:async()=>{throw new Error('FILE must not query application status');},result:async()=>{throw new Error('FILE must not query application results');}};
 afterEach(async()=>{await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
