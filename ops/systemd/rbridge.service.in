@@ -12,7 +12,6 @@ Environment=HOME=@RBRIDGE_HOME@
 Environment=PATH=/opt/ai-tool-fabric/runtime:/usr/local/bin:/usr/bin:/bin
 Environment=RBRIDGE_RUNTIME_USER=@RBRIDGE_USER@
 EnvironmentFile=@RBRIDGE_ENV_FILE@
-EnvironmentFile=/etc/rbridge/flowpilot.env
 ExecStart=/opt/ai-tool-fabric/runtime/node /usr/local/libexec/rbridge/current/dist/server/server/remoteBridgeMain.js
 Restart=on-failure
 RestartSec=2s
@@ -20,7 +19,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=@RBRIDGE_STATE_ROOT@
+ReadWritePaths=@RBRIDGE_STATE_ROOT@ /mnt/data
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
