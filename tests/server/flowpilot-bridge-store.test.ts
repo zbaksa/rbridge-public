@@ -32,6 +32,40 @@ function policyRecord(): FlowPilotBridgeRecord {
 }
 
 
+function cocwinEmptyActionRecord(
+  action: 'COCWIN_REFRESH_SNAPSHOT_V1' | 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+  operationId: string,
+  runId: string,
+  stepId: string,
+  fencingToken: number,
+  timeoutSeconds: number,
+): FlowPilotBridgeRecord {
+  const operation = parseFlowPilotBridgeEnvelope({
+    schema: 'FLOWPILOT_REMOTE_BRIDGE_V1',
+    operationId,
+    runId,
+    stepId,
+    attempt: 1,
+    fencingToken,
+    idempotencyKey: `fp:${runId}:${stepId}:1`,
+    appId: 'cocwin',
+    action,
+    payload: {},
+    timeoutSeconds,
+    callback: { url: callbackUrl, bearerToken: callbackToken },
+  }, { callbackToken, callbackUrl });
+
+  const app = flowPilotAppIdentity(operation);
+
+  return {
+    operation,
+    digest: flowPilotOperationDigest(operation),
+    appId: app.appId,
+    jobId: app.jobId,
+    phase: 'CLAIMED',
+  };
+}
+
 it('claim is durable, exact replay is stable, and changed digest collides', async () => {
   const root = await mkdtemp(join(tmpdir(), 'flowpilot-bridge-store-'));
   const store = createFlowPilotBridgeStore(root, () => new Date('2026-09-28T18:00:00.000Z'));
@@ -62,6 +96,46 @@ it('COCWIN policy-health operation survives durable-store reopen', async () => {
   assert.match(pending.records[0]?.jobId ?? '', /^fp-cw-[0-9a-f]{48}$/);
 });
 
+
+it('COCWIN refresh and continuous-qualification survive durable-store reopen', async () => {
+  const cases = [
+    cocwinEmptyActionRecord(
+      'COCWIN_REFRESH_SNAPSHOT_V1',
+      'op_run_0000000004_refresh_a1',
+      'run_0000000004',
+      'refresh',
+      9,
+      60,
+    ),
+    cocwinEmptyActionRecord(
+      'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+      'op_run_0000000005_qualify_a1',
+      'run_0000000005',
+      'qualify',
+      10,
+      600,
+    ),
+  ];
+
+  for (const value of cases) {
+    const root = await mkdtemp(join(tmpdir(), 'flowpilot-bridge-store-'));
+    const store = createFlowPilotBridgeStore(root);
+
+    assert.equal((await store.claim(value)).state, 'NEW');
+
+    const pending = await createFlowPilotBridgeStore(root).pending();
+
+    assert.equal(pending.failures, 0);
+    assert.equal(pending.records.length, 1);
+    assert.equal(pending.records[0]?.operation.appId, 'cocwin');
+    assert.equal(
+      pending.records[0]?.operation.action,
+      value.operation.action,
+    );
+    assert.deepEqual(pending.records[0]?.operation.payload, {});
+    assert.match(pending.records[0]?.jobId ?? '', /^fp-cw-[0-9a-f]{48}$/);
+  }
+});
 
 it('concurrent conflicting first claims have exactly one durable winner', async () => {
   const root = await mkdtemp(join(tmpdir(), 'flowpilot-bridge-store-'));

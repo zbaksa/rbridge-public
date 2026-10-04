@@ -83,6 +83,10 @@ function validateOperation(value: unknown): FlowPilotBridgeOperation {
   } else if (operation.appId === 'cocwin' && operation.action === 'COCWIN_MASTER_POLICY_HEALTH_V1') {
     if (Object.keys(payload).length !== 1 || typeof payload.expectedPolicySha256 !== 'string'
       || !SHA_RE.test(payload.expectedPolicySha256)) fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
+  } else if (operation.appId === 'cocwin' && operation.action === 'COCWIN_REFRESH_SNAPSHOT_V1') {
+    if (Object.keys(payload).length !== 0) fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
+  } else if (operation.appId === 'cocwin' && operation.action === 'COCWIN_CONTINUOUS_QUALIFICATION_V1') {
+    if (Object.keys(payload).length !== 0) fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
   } else {
     fail('FLOWPILOT_BRIDGE_STORE_CORRUPT');
   }

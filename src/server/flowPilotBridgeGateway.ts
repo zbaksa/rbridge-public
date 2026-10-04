@@ -63,17 +63,41 @@ function callbackFor(record: FlowPilotBridgeRecord, value: Record<string, unknow
       truncated: value.truncated === true,
       resultSha256: resultDigest(value),
     }
-    : {
-      schema: 'COCWIN_FLOWPILOT_APP_PROBE_EVIDENCE_V1',
-      appId: record.appId,
-      action: record.operation.action,
-      jobId: record.jobId,
-      state: String(value.state),
-      returncode: typeof value.returncode === 'number' ? value.returncode : null,
-      timedOut: value.timed_out === true,
-      truncated: value.truncated === true,
-      resultSha256: resultDigest(value),
-    };
+    : record.operation.action === 'COCWIN_REFRESH_SNAPSHOT_V1'
+      ? {
+        schema: 'COCWIN_FLOWPILOT_REFRESH_SNAPSHOT_EVIDENCE_V1',
+        appId: record.appId,
+        action: record.operation.action,
+        jobId: record.jobId,
+        state: String(value.state),
+        returncode: typeof value.returncode === 'number' ? value.returncode : null,
+        timedOut: value.timed_out === true,
+        truncated: value.truncated === true,
+        resultSha256: resultDigest(value),
+      }
+      : record.operation.action === 'COCWIN_CONTINUOUS_QUALIFICATION_V1'
+        ? {
+          schema: 'COCWIN_FLOWPILOT_CONTINUOUS_QUALIFICATION_EVIDENCE_V1',
+          appId: record.appId,
+          action: record.operation.action,
+          jobId: record.jobId,
+          state: String(value.state),
+          returncode: typeof value.returncode === 'number' ? value.returncode : null,
+          timedOut: value.timed_out === true,
+          truncated: value.truncated === true,
+          resultSha256: resultDigest(value),
+        }
+        : {
+          schema: 'COCWIN_FLOWPILOT_APP_PROBE_EVIDENCE_V1',
+          appId: record.appId,
+          action: record.operation.action,
+          jobId: record.jobId,
+          state: String(value.state),
+          returncode: typeof value.returncode === 'number' ? value.returncode : null,
+          timedOut: value.timed_out === true,
+          truncated: value.truncated === true,
+          resultSha256: resultDigest(value),
+        };
   return {
     schema: 'FLOWPILOT_CALLBACK_V1',
     operationId: record.operation.operationId,

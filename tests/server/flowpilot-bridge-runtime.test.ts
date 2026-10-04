@@ -24,6 +24,31 @@ function policyEnvelope(callbackUrl: string) { return {
 }; }
 
 
+function cocwinEmptyEnvelope(
+  callbackUrl: string,
+  action: 'COCWIN_REFRESH_SNAPSHOT_V1' | 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+  operationId: string,
+  runId: string,
+  stepId: string,
+  fencingToken: number,
+  timeoutSeconds: number,
+) {
+  return {
+    schema: 'FLOWPILOT_REMOTE_BRIDGE_V1',
+    operationId,
+    runId,
+    stepId,
+    attempt: 1,
+    fencingToken,
+    idempotencyKey: `fp:${runId}:${stepId}:1`,
+    appId: 'cocwin',
+    action,
+    payload: {},
+    timeoutSeconds,
+    callback: { url: callbackUrl, bearerToken: callbackToken },
+  };
+}
+
 it('runtime is absent unless explicitly enabled and secrets must be distinct', async () => {
   const root = await mkdtemp(join(tmpdir(), 'flowpilot-runtime-'));
   const controller = { async submit() { return { state: 'RUNNING' }; }, async status() { return { state: 'RUNNING' }; }, async result() { return {}; } };
@@ -129,5 +154,158 @@ it('policy-health ingress maps to cocwin fixed controller execution and specific
   } finally {
     await runtime.stop();
     await new Promise<void>((resolve) => callbackServer.close(() => resolve()));
+  }
+});
+
+
+it('public-safe refresh and qualification ingress map to cocwin action evidence', async () => {
+  const cases = [
+    {
+      action: 'COCWIN_REFRESH_SNAPSHOT_V1' as const,
+      operationId: 'op_run_0000000004_refresh_a1',
+      runId: 'run_0000000004',
+      stepId: 'refresh',
+      fencingToken: 9,
+      timeoutSeconds: 60,
+      schema: 'COCWIN_FLOWPILOT_REFRESH_SNAPSHOT_EVIDENCE_V1',
+      marker: 'COCWIN_REFRESH_NOT_ADVANCED',
+    },
+    {
+      action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1' as const,
+      operationId: 'op_run_0000000005_qualify_a1',
+      runId: 'run_0000000005',
+      stepId: 'qualify',
+      fencingToken: 10,
+      timeoutSeconds: 600,
+      schema: 'COCWIN_FLOWPILOT_CONTINUOUS_QUALIFICATION_EVIDENCE_V1',
+      marker: 'COCWIN_CONTINUOUS_QUALIFICATION_BLOCKED',
+    },
+  ];
+
+  for (const row of cases) {
+    const callbacks: Record<string, unknown>[] = [];
+
+    const callbackServer = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+
+      callbacks.push(
+        JSON.parse(
+          Buffer.concat(chunks).toString('utf8'),
+        ) as Record<string, unknown>,
+      );
+
+      response.writeHead(200);
+      response.end('{}');
+    });
+
+    await new Promise<void>((resolve) =>
+      callbackServer.listen(0, '127.0.0.1', resolve));
+
+    const address = callbackServer.address();
+
+    if (!address || typeof address === 'string') {
+      throw new Error('callback address');
+    }
+
+    const callbackUrl =
+      `http://127.0.0.1:${address.port}/api/v1/executor/callback`;
+
+    const root = await mkdtemp(join(tmpdir(), 'flowpilot-runtime-'));
+    const submitted: Array<{ app: string; payload: unknown }> = [];
+
+    const runtime = createFlowPilotBridgeRuntime({
+      root,
+      host: '127.0.0.1',
+      port: 0,
+      env: {
+        COCWIN_FLOWPILOT_INGRESS_ENABLED: 'true',
+        FLOWPILOT_REMOTE_BRIDGE_TOKEN: remoteBridgeToken,
+        FLOWPILOT_CALLBACK_TOKEN: callbackToken,
+        COCWIN_FLOWPILOT_CALLBACK_URL: callbackUrl,
+        RBRIDGE_COCWIN_POLICY_URL: policyUrl,
+      },
+      controller: {
+        async submit(app, _job, payload) {
+          submitted.push({ app, payload });
+          return { state: 'RUNNING' };
+        },
+        async status() {
+          return { state: 'SUCCEEDED' };
+        },
+        async result() {
+          return {
+            schema: 'COCWIN_APP_EXECUTION_RESULT_V1',
+            app: 'cocwin',
+            job: row.stepId,
+            state: 'SUCCEEDED',
+            returncode: 0,
+            timed_out: false,
+            truncated: false,
+          };
+        },
+      },
+    });
+
+    assert.ok(runtime);
+
+    try {
+      const ingress = await runtime.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${ingress.port}/v1/execute`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${remoteBridgeToken}`,
+          },
+          body: JSON.stringify(
+            cocwinEmptyEnvelope(
+              callbackUrl,
+              row.action,
+              row.operationId,
+              row.runId,
+              row.stepId,
+              row.fencingToken,
+              row.timeoutSeconds,
+            ),
+          ),
+        },
+      );
+
+      assert.equal(response.status, 202);
+
+      await runtime.reconcile();
+
+      assert.equal(submitted.length, 1);
+      assert.equal(submitted[0]?.app, 'cocwin');
+
+      const payload = submitted[0]?.payload as Record<string, unknown>;
+      const args = payload.args as string[];
+
+      assert.equal(payload.tool, 'node');
+      assert.equal(payload.cwd, '/home/cocwin/backend');
+      assert.match(args[1] ?? '', new RegExp(row.marker));
+      assert.doesNotMatch(args[1] ?? '', /192\.168\./);
+      assert.equal(args[2], 'http://127.0.0.1:18088');
+
+      assert.equal(callbacks.length, 1);
+      assert.equal(callbacks[0]?.outcome, 'PASS');
+
+      const evidence =
+        callbacks[0]?.evidence as Record<string, unknown>;
+
+      assert.equal(evidence.schema, row.schema);
+      assert.equal(evidence.action, row.action);
+    } finally {
+      await runtime.stop();
+
+      await new Promise<void>((resolve) =>
+        callbackServer.close(() => resolve()));
+    }
   }
 });

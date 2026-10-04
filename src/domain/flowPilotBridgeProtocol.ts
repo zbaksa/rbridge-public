@@ -27,6 +27,16 @@ export type FlowPilotBridgeOperation =
     appId: 'cocwin';
     action: 'COCWIN_MASTER_POLICY_HEALTH_V1';
     payload: { expectedPolicySha256: string };
+  })
+  | (FlowPilotBridgeOperationBase & {
+    appId: 'cocwin';
+    action: 'COCWIN_REFRESH_SNAPSHOT_V1';
+    payload: Record<string, never>;
+  })
+  | (FlowPilotBridgeOperationBase & {
+    appId: 'cocwin';
+    action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1';
+    payload: Record<string, never>;
   });
 
 export interface FlowPilotAppExecutionRequest {
@@ -61,6 +71,38 @@ const COCWIN_POLICY_HEALTH_PROGRAM = [
   'const body=await response.json();',
   "if(body?.state!=='PASS'||body?.policySha256!==expected)throw new Error('COCWIN_MASTER_POLICY_MISMATCH');",
   "process.stdout.write(JSON.stringify({schema:'COCWIN_MASTER_POLICY_HEALTH_V1',status:'PASS',policySha256:body.policySha256})+'\\n');",
+  "})().catch((error)=>{console.error(error instanceof Error?error.message:String(error));process.exitCode=1;});",
+].join('');
+
+const COCWIN_REFRESH_SNAPSHOT_PROGRAM = [
+  "const fs=require('node:fs');",
+  '(async()=>{',
+  'const baseUrl=process.argv[1];',
+  "const snapshotUrl=new URL('/api/v1/snapshot',baseUrl).toString();",
+  "const refreshUrl=new URL('/internal/refresh',baseUrl).toString();",
+  "const secret=fs.readFileSync('/etc/cocwin/refresh.secret','utf8').trim();",
+  "if(secret.length<16||secret.length>4096||/\s/.test(secret))throw new Error('COCWIN_REFRESH_SECRET_INVALID');",
+  "const read=async()=>{const r=await fetch(snapshotUrl,{headers:{accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});if(!r.ok)throw new Error('COCWIN_SNAPSHOT_HTTP_'+r.status);const x=await r.json();if(x?.version!=='COCKPIT_GLOBAL_SNAPSHOT_V1'||typeof x.generatedAt!=='string')throw new Error('COCWIN_SNAPSHOT_INVALID');return x;};",
+  'const before=await read();',
+  "const response=await fetch(refreshUrl,{method:'POST',headers:{authorization:'Bearer '+secret},signal:AbortSignal.timeout(30000),redirect:'error'});",
+  "if(!response.ok)throw new Error('COCWIN_REFRESH_HTTP_'+response.status);",
+  'const body=await response.json();',
+  "if(body?.ok!==true)throw new Error('COCWIN_REFRESH_BODY_INVALID');",
+  'const after=await read();',
+  'const beforeMs=Date.parse(before.generatedAt),afterMs=Date.parse(after.generatedAt);',
+  "if(!Number.isFinite(beforeMs)||!Number.isFinite(afterMs)||afterMs<=beforeMs)throw new Error('COCWIN_REFRESH_NOT_ADVANCED');",
+  "process.stdout.write(JSON.stringify({schema:'COCWIN_REFRESH_SNAPSHOT_V1',status:'PASS',beforeGeneratedAt:before.generatedAt,afterGeneratedAt:after.generatedAt})+'\\n');",
+  "})().catch((error)=>{console.error(error instanceof Error?error.message:String(error));process.exitCode=1;});",
+].join('');
+
+const COCWIN_CONTINUOUS_QUALIFICATION_PROGRAM = [
+  '(async()=>{',
+  'const baseUrl=process.argv[1];',
+  "const endpoints=[['health',new URL('/healthz',baseUrl).toString()],['export',new URL('/api/cocwin/export',baseUrl).toString()]];",
+  'const checks={};',
+  "for(const [name,url] of endpoints){const response=await fetch(url,{headers:{accept:'application/json'},signal:AbortSignal.timeout(15000),redirect:'error'});const body=await response.text();if(Buffer.byteLength(body,'utf8')>524288)throw new Error('COCWIN_'+name.toUpperCase()+'_RESPONSE_TOO_LARGE');checks[name]={ok:response.ok,status:response.status};}",
+  "if(!Object.values(checks).every((check)=>check.ok))throw new Error('COCWIN_CONTINUOUS_QUALIFICATION_BLOCKED');",
+  "process.stdout.write(JSON.stringify({schema:'COCWIN_CONTINUOUS_QUALIFICATION_V1',status:'READY_FOR_AI',checks,checked_at:new Date().toISOString(),limitations:['NO_LOCAL_WORKTREE_ACCESS_PROVEN','NO_GITHUB_CREDENTIAL_PROVEN']})+'\\n');",
   "})().catch((error)=>{console.error(error instanceof Error?error.message:String(error));process.exitCode=1;});",
 ].join('');
 
@@ -134,13 +176,24 @@ export function parseFlowPilotBridgeEnvelope(
     action = 'APP_PROBE_V1';
     parsedPayload = {};
   } else {
-    if (raw.action !== 'COCWIN_MASTER_POLICY_HEALTH_V1') fail('FLOWPILOT_ACTION_NOT_ALLOWED');
-    exactFields(payload, POLICY_PAYLOAD_FIELDS, 'FLOWPILOT_PAYLOAD_NOT_ALLOWED');
-    if (typeof payload.expectedPolicySha256 !== 'string' || !SHA256.test(payload.expectedPolicySha256)) {
-      fail('FLOWPILOT_POLICY_SHA_INVALID');
+    if (raw.action === 'COCWIN_MASTER_POLICY_HEALTH_V1') {
+      exactFields(payload, POLICY_PAYLOAD_FIELDS, 'FLOWPILOT_PAYLOAD_NOT_ALLOWED');
+      if (typeof payload.expectedPolicySha256 !== 'string' || !SHA256.test(payload.expectedPolicySha256)) {
+        fail('FLOWPILOT_POLICY_SHA_INVALID');
+      }
+      action = 'COCWIN_MASTER_POLICY_HEALTH_V1';
+      parsedPayload = { expectedPolicySha256: payload.expectedPolicySha256 };
+    } else if (raw.action === 'COCWIN_REFRESH_SNAPSHOT_V1') {
+      if (Object.keys(payload).length !== 0) fail('FLOWPILOT_PAYLOAD_NOT_ALLOWED');
+      action = 'COCWIN_REFRESH_SNAPSHOT_V1';
+      parsedPayload = {};
+    } else if (raw.action === 'COCWIN_CONTINUOUS_QUALIFICATION_V1') {
+      if (Object.keys(payload).length !== 0) fail('FLOWPILOT_PAYLOAD_NOT_ALLOWED');
+      action = 'COCWIN_CONTINUOUS_QUALIFICATION_V1';
+      parsedPayload = {};
+    } else {
+      fail('FLOWPILOT_ACTION_NOT_ALLOWED');
     }
-    action = 'COCWIN_MASTER_POLICY_HEALTH_V1';
-    parsedPayload = { expectedPolicySha256: payload.expectedPolicySha256 };
   }
 
   const callback = record(raw.callback, 'FLOWPILOT_CALLBACK_INVALID');
@@ -159,11 +212,27 @@ export function parseFlowPilotBridgeEnvelope(
   if (appId === 'fpilot') {
     return { ...base, appId: 'fpilot', action: 'APP_PROBE_V1', payload: parsedPayload as Record<string, never> };
   }
+  if (action === 'COCWIN_MASTER_POLICY_HEALTH_V1') {
+    return {
+      ...base,
+      appId: 'cocwin',
+      action,
+      payload: parsedPayload as { expectedPolicySha256: string },
+    };
+  }
+  if (action === 'COCWIN_REFRESH_SNAPSHOT_V1') {
+    return {
+      ...base,
+      appId: 'cocwin',
+      action,
+      payload: {},
+    };
+  }
   return {
     ...base,
     appId: 'cocwin',
-    action: action as 'COCWIN_MASTER_POLICY_HEALTH_V1',
-    payload: parsedPayload as { expectedPolicySha256: string },
+    action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+    payload: {},
   };
 }
 
@@ -195,6 +264,44 @@ export function toFlowPilotAppExecution(
     };
   }
   const policyUrl = cocwinPolicyUrl(configuredCocwinPolicyUrl);
+
+  if (operation.action === 'COCWIN_MASTER_POLICY_HEALTH_V1') {
+    return {
+      ...identity,
+      payload: {
+        tool: 'node',
+        cwd: '/home/cocwin/backend',
+        args: [
+          '-e',
+          COCWIN_POLICY_HEALTH_PROGRAM,
+          operation.payload.expectedPolicySha256,
+          policyUrl,
+        ],
+        timeout_ms: operation.timeoutSeconds * 1000,
+        max_bytes: 32768,
+      },
+    };
+  }
+
+  const cocwinBaseUrl = new URL(policyUrl).origin;
+
+  if (operation.action === 'COCWIN_REFRESH_SNAPSHOT_V1') {
+    return {
+      ...identity,
+      payload: {
+        tool: 'node',
+        cwd: '/home/cocwin/backend',
+        args: [
+          '-e',
+          COCWIN_REFRESH_SNAPSHOT_PROGRAM,
+          cocwinBaseUrl,
+        ],
+        timeout_ms: operation.timeoutSeconds * 1000,
+        max_bytes: 32768,
+      },
+    };
+  }
+
   return {
     ...identity,
     payload: {
@@ -202,9 +309,8 @@ export function toFlowPilotAppExecution(
       cwd: '/home/cocwin/backend',
       args: [
         '-e',
-        COCWIN_POLICY_HEALTH_PROGRAM,
-        operation.payload.expectedPolicySha256,
-        policyUrl,
+        COCWIN_CONTINUOUS_QUALIFICATION_PROGRAM,
+        cocwinBaseUrl,
       ],
       timeout_ms: operation.timeoutSeconds * 1000,
       max_bytes: 32768,

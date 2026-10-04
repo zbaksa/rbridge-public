@@ -43,6 +43,33 @@ function policyEnvelope(extra: Record<string, unknown> = {}) {
   });
 }
 
+function refreshEnvelope(extra: Record<string, unknown> = {}) {
+  return envelope({
+    operationId: 'op_run_0000000004_refresh_a1',
+    runId: 'run_0000000004',
+    stepId: 'refresh',
+    idempotencyKey: 'fp:run_0000000004:refresh:1',
+    appId: 'cocwin',
+    action: 'COCWIN_REFRESH_SNAPSHOT_V1',
+    payload: {},
+    ...extra,
+  });
+}
+
+function qualificationEnvelope(extra: Record<string, unknown> = {}) {
+  return envelope({
+    operationId: 'op_run_0000000005_qualify_a1',
+    runId: 'run_0000000005',
+    stepId: 'qualify',
+    idempotencyKey: 'fp:run_0000000005:qualify:1',
+    appId: 'cocwin',
+    action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+    payload: {},
+    timeoutSeconds: 600,
+    ...extra,
+  });
+}
+
 it('valid canary envelope is sanitized and mapped to one source-controlled app profile', () => {
   const parsed = parseFlowPilotBridgeEnvelope(envelope(), authority);
   assert.equal(JSON.stringify(parsed).includes(callbackToken), false);
@@ -82,6 +109,63 @@ it('COCWIN policy health maps only to a fixed read-only execution program', () =
   );
   assert.equal(request.payload.timeout_ms, 60_000);
   assert.equal(request.payload.max_bytes, 32_768);
+});
+
+it('COCWIN refresh snapshot maps to public-safe fixed execution', () => {
+  const parsed = parseFlowPilotBridgeEnvelope(refreshEnvelope(), authority);
+  const request = toFlowPilotAppExecution(parsed, policyUrl);
+
+  assert.equal(parsed.action, 'COCWIN_REFRESH_SNAPSHOT_V1');
+  assert.equal(request.appId, 'cocwin');
+  assert.match(request.jobId, /^fp-cw-[0-9a-f]{48}$/);
+  assert.equal(request.payload.tool, 'node');
+  assert.equal(request.payload.cwd, '/home/cocwin/backend');
+  assert.match(request.payload.args[1] ?? '', /COCWIN_REFRESH_NOT_ADVANCED/);
+  assert.match(request.payload.args[1] ?? '', /refresh\.secret/);
+  assert.doesNotMatch(request.payload.args[1] ?? '', /192\.168\./);
+  assert.equal(request.payload.args[2], 'http://127.0.0.1:18088');
+
+  assert.throws(
+    () => parseFlowPilotBridgeEnvelope(
+      refreshEnvelope({ payload: { command: 'id' } }),
+      authority,
+    ),
+    /FLOWPILOT_PAYLOAD_NOT_ALLOWED/,
+  );
+});
+
+it('COCWIN continuous qualification maps to public-safe bounded read-only execution', () => {
+  const parsed = parseFlowPilotBridgeEnvelope(
+    qualificationEnvelope(),
+    authority,
+  );
+
+  const request = toFlowPilotAppExecution(parsed, policyUrl);
+
+  assert.equal(parsed.action, 'COCWIN_CONTINUOUS_QUALIFICATION_V1');
+  assert.equal(request.appId, 'cocwin');
+  assert.match(request.jobId, /^fp-cw-[0-9a-f]{48}$/);
+  assert.equal(request.payload.tool, 'node');
+  assert.equal(request.payload.cwd, '/home/cocwin/backend');
+  assert.match(request.payload.args[1] ?? '', /\/healthz/);
+  assert.match(request.payload.args[1] ?? '', /\/api\/cocwin\/export/);
+  assert.match(request.payload.args[1] ?? '', /524288/);
+  assert.match(request.payload.args[1] ?? '', /READY_FOR_AI/);
+  assert.match(
+    request.payload.args[1] ?? '',
+    /COCWIN_CONTINUOUS_QUALIFICATION_BLOCKED/,
+  );
+  assert.doesNotMatch(request.payload.args[1] ?? '', /192\.168\./);
+  assert.equal(request.payload.args[2], 'http://127.0.0.1:18088');
+  assert.equal(request.payload.timeout_ms, 600_000);
+
+  assert.throws(
+    () => parseFlowPilotBridgeEnvelope(
+      qualificationEnvelope({ payload: { url: 'http://example.invalid' } }),
+      authority,
+    ),
+    /FLOWPILOT_PAYLOAD_NOT_ALLOWED/,
+  );
 });
 
 it('policy health payload is exact and SHA constrained', () => {

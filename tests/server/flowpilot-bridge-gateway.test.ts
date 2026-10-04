@@ -29,6 +29,40 @@ function policyOperation() {
 }
 
 
+function refreshOperation() {
+  return parseFlowPilotBridgeEnvelope({
+    schema: 'FLOWPILOT_REMOTE_BRIDGE_V1',
+    operationId: 'op_run_0000000004_refresh_a1',
+    runId: 'run_0000000004',
+    stepId: 'refresh',
+    attempt: 1,
+    fencingToken: 9,
+    idempotencyKey: 'fp:run_0000000004:refresh:1',
+    appId: 'cocwin',
+    action: 'COCWIN_REFRESH_SNAPSHOT_V1',
+    payload: {},
+    timeoutSeconds: 60,
+    callback: { url: callbackUrl, bearerToken: callbackToken },
+  }, authority);
+}
+
+function qualificationOperation() {
+  return parseFlowPilotBridgeEnvelope({
+    schema: 'FLOWPILOT_REMOTE_BRIDGE_V1',
+    operationId: 'op_run_0000000005_qualify_a1',
+    runId: 'run_0000000005',
+    stepId: 'qualify',
+    attempt: 1,
+    fencingToken: 10,
+    idempotencyKey: 'fp:run_0000000005:qualify:1',
+    appId: 'cocwin',
+    action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+    payload: {},
+    timeoutSeconds: 600,
+    callback: { url: callbackUrl, bearerToken: callbackToken },
+  }, authority);
+}
+
 class MemoryStore implements FlowPilotBridgeStore {
   records = new Map<string, FlowPilotBridgeRecord>();
   events: string[] = [];
@@ -144,6 +178,82 @@ it('COCWIN policy health uses cocwin controller identity and action-specific evi
   assert.equal(JSON.stringify(delivered[0]).includes('hidden'), false);
 });
 
+
+it('COCWIN refresh and qualification use action-specific evidence', async () => {
+  const cases = [
+    {
+      operation: refreshOperation(),
+      schema: 'COCWIN_FLOWPILOT_REFRESH_SNAPSHOT_EVIDENCE_V1',
+      action: 'COCWIN_REFRESH_SNAPSHOT_V1',
+      marker: 'COCWIN_REFRESH_NOT_ADVANCED',
+    },
+    {
+      operation: qualificationOperation(),
+      schema: 'COCWIN_FLOWPILOT_CONTINUOUS_QUALIFICATION_EVIDENCE_V1',
+      action: 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+      marker: 'COCWIN_CONTINUOUS_QUALIFICATION_BLOCKED',
+    },
+  ];
+
+  for (const row of cases) {
+    const store = new MemoryStore();
+    const delivered: Record<string, unknown>[] = [];
+    const submitted: Array<{ app: string; payload: unknown }> = [];
+
+    const gateway = createFlowPilotBridgeGateway({
+      store,
+      controller: {
+        async submit(app, _job, payload) {
+          submitted.push({ app, payload });
+          return { state: 'RUNNING' };
+        },
+        async status() {
+          return { state: 'SUCCEEDED' };
+        },
+        async result() {
+          return {
+            state: 'SUCCEEDED',
+            returncode: 0,
+            timed_out: false,
+            truncated: false,
+            stdout: 'must-not-leak',
+          };
+        },
+      },
+      callback: {
+        async send(_url, _token, value) {
+          delivered.push(value);
+        },
+      },
+      callbackToken,
+      cocwinPolicyUrl: policyUrl,
+    });
+
+    await gateway.accept(row.operation);
+    await gateway.reconcile();
+
+    assert.equal(submitted[0]?.app, 'cocwin');
+
+    const payload = submitted[0]?.payload as Record<string, unknown>;
+    const args = payload.args as string[];
+
+    assert.equal(payload.tool, 'node');
+    assert.equal(payload.cwd, '/home/cocwin/backend');
+    assert.match(args[1] ?? '', new RegExp(row.marker));
+    assert.doesNotMatch(args[1] ?? '', /192\.168\./);
+    assert.equal(args[2], 'http://127.0.0.1:18088');
+
+    const evidence = delivered[0]?.evidence as Record<string, unknown>;
+
+    assert.equal(delivered[0]?.outcome, 'PASS');
+    assert.equal(evidence.schema, row.schema);
+    assert.equal(evidence.action, row.action);
+    assert.equal(
+      JSON.stringify(delivered[0]).includes('must-not-leak'),
+      false,
+    );
+  }
+});
 
 it('timed out or truncated execution resolves to UNKNOWN, never blind FAIL', async () => {
   const store = new MemoryStore(); const delivered: Record<string, unknown>[] = [];
