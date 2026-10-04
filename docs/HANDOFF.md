@@ -50,5 +50,6 @@ Live deployment acceptance is separate from source/CI acceptance.
 - `docs/TROUBLESHOOTING.md` — failure diagnosis
 - `docs/COMPARISON.md` — adjacent tools
 - `docs/ROADMAP.md` — future direction
+- `docs/DEVELOPMENT_HISTORY.md` — chronological milestones, bug fixes, CI and deployment status
 
-Update these when behavior changes.
+Update these when behavior changes. Material features, bug/security fixes, releases and production migration milestones must also update `docs/DEVELOPMENT_HISTORY.md` in the same PR.

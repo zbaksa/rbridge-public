@@ -106,6 +106,12 @@ If a deployment requirement changes, update:
 - `docs/INSTALLATION.md`
 - systemd guidance if relevant.
 
+For any material feature, bug fix, security/recovery change, compatibility break, release or production migration milestone, also update:
+
+- `docs/DEVELOPMENT_HISTORY.md`
+
+The history entry should record the date, what changed, the relevant PR/commit, CI status, and deployment status when separately verified.
+
 ## Commit/PR guidance
 
 Good PR descriptions include:

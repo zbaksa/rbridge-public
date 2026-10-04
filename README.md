@@ -120,6 +120,7 @@ Full walkthrough: **[Quick Start](docs/QUICKSTART.md)**.
 - [Roadmap](docs/ROADMAP.md) — now / next / later
 - [FAQ](docs/FAQ.md) — common product and deployment questions
 - [Known issues](docs/KNOWN_ISSUES.md)
+- [Development history](docs/DEVELOPMENT_HISTORY.md) — chronological milestones, fixes, CI and deployment status
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
