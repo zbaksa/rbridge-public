@@ -57,7 +57,7 @@ The P0 candidate defines:
 
 The public roadmap was corrected so **2.0.0 targets SAFE**, WORKSTATION moves to 2.1 after isolation is proven, and FULL ACCESS/GUI remain later work.
 
-**Source status:** **IN QUALIFICATION**
+**Source status:** **SOURCE PASS**
 
 ---
 
