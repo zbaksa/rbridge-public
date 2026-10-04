@@ -40,7 +40,7 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 - Deployment-controlled OS-user/principal/target binding is independent of client names, tool arguments and MCP metadata.
 - Discovery and strict SAFE submissions are covered with official SDK modern/legacy clients. The adapter preserves operation IDs, validates receipt scope/phase evidence and forwards cancellation without automatic resubmission or stop/rollback claims.
 - The shipped entrypoint returns explicit BLOCKED until P2 connects the shared durable core. It exposes no legacy APP_RUN executor, arbitrary shell, request-selected module or network listener.
-- Verification is recorded with this implementation's GitHub PR and exact candidate CI. Local Unix-socket restrictions remain separate from canonical runner acceptance.
+- Verification is recorded in [PR #26](https://github.com/zbaksa/rbridge-public/pull/26) and exact candidate CI. Local Unix-socket restrictions remain separate from canonical runner acceptance.
 - **Live deployment:** NOT DEPLOYED. V1 durable-state resolution and all later V2 release gates remain required.
 
 - Design and limits: [MCP.md](MCP.md), [implementation plan](plans/2026-10-04-mcp-safe-foundation.md).
