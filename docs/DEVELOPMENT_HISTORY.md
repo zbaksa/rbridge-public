@@ -36,6 +36,31 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ## 2026-10-04
 
+### RBridge 2.0 P0 contract & security freeze
+
+**Type:** V2 architecture / security contract  
+**PR:** [#23](https://github.com/zbaksa/rbridge-public/pull/23)
+
+RBridge 2.0 implementation began with a transport-neutral contract freeze before MCP runtime code.
+
+The P0 candidate defines:
+
+- one normalized operation identity across transports;
+- principal + target-instance trust scope;
+- transport authentication separated from core authorization;
+- acceptance TTL separated from durable recovery;
+- a monotonic CLAIMED / AUTHORIZED / STARTING / RUNNING / TERMINAL phase graph;
+- explicit no-blind-retry / UNCERTAIN semantics;
+- cancellation evidence separated from rollback claims;
+- execution receipts with policy snapshot, transitions and postconditions;
+- SAFE-only 2.0 capability scope.
+
+The public roadmap was corrected so **2.0.0 targets SAFE**, WORKSTATION moves to 2.1 after isolation is proven, and FULL ACCESS/GUI remain later work.
+
+**Source status:** **IN QUALIFICATION**
+
+---
+
 ### V1 recovery and duplicate-effect safety hotfix
 
 **Type:** reliability / security / recovery hotfix  
