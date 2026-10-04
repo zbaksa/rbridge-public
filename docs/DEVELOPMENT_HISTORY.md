@@ -44,7 +44,7 @@ Regression tests reproduced false PASS paths in the original read-only audit: mi
 
 The correction rejects incomplete evidence, checks session/START-claim ownership and durable filename/digest identity, bounds reads and lookups, compares state fingerprints, and returns nonzero gate exit codes with machine-readable UNKNOWN reports. It remains read-only and requires a fresh audit with writers quiesced before production switching.
 
-**Source status:** **CANDIDATE — verification pending**
+**Source acceptance:** exact-candidate verification is recorded in [PR #25](https://github.com/zbaksa/rbridge-public/pull/25).
 **Live status:** **NOT DEPLOYED**
 
 ---

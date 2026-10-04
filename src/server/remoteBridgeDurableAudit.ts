@@ -58,6 +58,7 @@ function record(value:unknown,code:string):Record<string,unknown>{
   if(!value||typeof value!=='object'||Array.isArray(value))fail(code);
   return value as Record<string,unknown>;
 }
+function timestamp(value:unknown):value is string{return typeof value==='string'&&Number.isFinite(Date.parse(value));}
 function parseDurableRecord(value:unknown):DurableRecord{
   const row=record(value,'RBRIDGE_DURABLE_AUDIT_RECORD_INVALID');
   if(row.schema!=='COCWIN_REMOTE_BRIDGE_STORE_V1')fail('RBRIDGE_DURABLE_AUDIT_RECORD_SCHEMA_INVALID');
@@ -66,6 +67,7 @@ function parseDurableRecord(value:unknown):DurableRecord{
   if(!Number.isSafeInteger(row.issueNumber)||Number(row.issueNumber)<1)fail('RBRIDGE_DURABLE_AUDIT_ISSUE_NUMBER_INVALID');
   if(typeof row.jobId!=='string'||!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(row.jobId))fail('RBRIDGE_DURABLE_AUDIT_JOB_ID_INVALID');
   if(typeof row.phase!=='string'||!['CLAIMED','SUBMITTED','TERMINAL','PUBLISHED'].includes(row.phase))fail('RBRIDGE_DURABLE_AUDIT_PHASE_INVALID');
+  if(!timestamp(row.createdAt))fail('RBRIDGE_DURABLE_AUDIT_CREATED_AT_INVALID');
   if(typeof row.updatedAt!=='string'||!Number.isFinite(Date.parse(row.updatedAt)))fail('RBRIDGE_DURABLE_AUDIT_UPDATED_AT_INVALID');
   if(row.scopeSha256!==undefined&&(typeof row.scopeSha256!=='string'||!/^[0-9a-f]{64}$/.test(row.scopeSha256)))fail('RBRIDGE_DURABLE_AUDIT_SCOPE_INVALID');
   return {
@@ -230,7 +232,26 @@ export async function auditRemoteBridgeDurableState(options:{
         const row=record(await readJsonFile(path),'RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
         if(row.schema!=='COCWIN_REMOTE_BRIDGE_PROCESS_SESSION_V1'||row.sessionId!==entry.name
           ||typeof row.ownerDigest!=='string'||!SHA_RE.test(row.ownerDigest)
-          ||typeof row.state!=='string'||!SESSION_STATES.has(row.state))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+          ||typeof row.state!=='string'||!SESSION_STATES.has(row.state)
+          ||typeof row.profileId!=='string'||row.profileId.length===0
+          ||!timestamp(row.createdAt)||!timestamp(row.updatedAt)||!timestamp(row.expiresAt)
+          ||(row.pid!==null&&(!Number.isSafeInteger(row.pid)||Number(row.pid)<=1))
+          ||!Number.isSafeInteger(row.outputBytes)||Number(row.outputBytes)<0
+          ||typeof row.truncated!=='boolean'||typeof row.stdinAttached!=='boolean'
+          ||(row.exitCode!==null&&!Number.isSafeInteger(row.exitCode))
+          ||(row.signal!==null&&typeof row.signal!=='string')
+          ||(row.reason!==null&&typeof row.reason!=='string'))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        const receipts=record(row.receipts,'RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        for(const [actionId,state] of Object.entries(receipts)){
+          if(!SHA_RE.test(actionId)||typeof state!=='string'||!['CLAIMED','DONE','UNCERTAIN'].includes(state))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        }
+        if(row.identity!==null){
+          const identity=record(row.identity,'RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+          if(!Number.isSafeInteger(identity.pid)||Number(identity.pid)<=1||identity.pid!==row.pid
+            ||typeof identity.startTimeTicks!=='string'||!/^[0-9]+$/.test(identity.startTimeTicks)
+            ||typeof identity.exe!=='string'||!identity.exe.startsWith('/')
+            ||typeof identity.cmdlineSha256!=='string'||!SHA_RE.test(identity.cmdlineSha256))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        }
         sessionOwners.set(entry.name,row.ownerDigest);
         if(!TERMINAL_SESSION_STATES.has(row.state))activeSessionIds.push(entry.name);
       }catch(error){
@@ -250,7 +271,8 @@ export async function auditRemoteBridgeDurableState(options:{
     const row=record(await readJsonFile(join(claimsRoot,name)),'RBRIDGE_DURABLE_AUDIT_START_CLAIM_INVALID');
     if(row.schema!=='COCWIN_REMOTE_BRIDGE_PROCESS_START_CLAIM_V1'
       ||typeof row.ownerDigest!=='string'||!SHA_RE.test(row.ownerDigest)||name!==row.ownerDigest+'.json'
-      ||typeof row.sessionId!=='string'||!SESSION_ID_RE.test(row.sessionId))fail('RBRIDGE_DURABLE_AUDIT_START_CLAIM_INVALID');
+      ||typeof row.sessionId!=='string'||!SESSION_ID_RE.test(row.sessionId)
+      ||typeof row.profileId!=='string'||row.profileId.length===0||!timestamp(row.createdAt))fail('RBRIDGE_DURABLE_AUDIT_START_CLAIM_INVALID');
     if(!sessionOwners.has(row.sessionId))fail('RBRIDGE_DURABLE_AUDIT_SESSION_RECORD_MISSING');
     if(sessionOwners.get(row.sessionId)!==row.ownerDigest)fail('RBRIDGE_DURABLE_AUDIT_START_CLAIM_INVALID');
   }

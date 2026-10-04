@@ -140,4 +140,38 @@ describe('V1 durable-state cutover audit',()=>{
     }));
     await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_RECORD_MISSING/);
   });
+
+  it('rejects a durable record missing its required creation evidence',async()=>{
+    const dir=await root();await durable(dir,{requestId:'req-14',issueNumber:14,phase:'PUBLISHED'});
+    const path=join(dir,'req-14.json'),row=JSON.parse(await readFile(path,'utf8'));delete row.createdAt;
+    await writeFile(path,JSON.stringify(row));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/CREATED_AT_INVALID/);
+  });
+
+  it('rejects a terminal-state assertion with no process completion metadata',async()=>{
+    const dir=await root(),path=await session(dir,'SUCCEEDED');
+    await writeFile(join(path,'record.json'),JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_PROCESS_SESSION_V1',sessionId:SESSION_ID,ownerDigest:'c'.repeat(64),state:'SUCCEEDED'}));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_INVALID/);
+  });
+
+  it('rejects a START claim that has lost its required profile and creation evidence',async()=>{
+    const dir=await root();await session(dir,'FAILED');
+    const claims=join(dir,'sessions','start-claims');await mkdir(claims);
+    await writeFile(join(claims,'c'.repeat(64)+'.json'),JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_PROCESS_START_CLAIM_V1',ownerDigest:'c'.repeat(64),sessionId:SESSION_ID}));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/START_CLAIM_INVALID/);
+  });
+
+  it.each(['INVALID',['DONE']])('rejects a terminal PROCESS record with invalid receipt value %j',async value=>{
+    const dir=await root(),sessionDir=await session(dir,'FAILED'),path=join(sessionDir,'record.json');
+    const row=JSON.parse(await readFile(path,'utf8'));row.receipts={['d'.repeat(64)]:value};
+    await writeFile(path,JSON.stringify(row));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_INVALID/);
+  });
+
+  it('rejects process identity metadata that names no actual PID',async()=>{
+    const dir=await root(),sessionDir=await session(dir,'FAILED'),path=join(sessionDir,'record.json');
+    const row=JSON.parse(await readFile(path,'utf8'));row.identity={pid:null,startTimeTicks:'123',exe:'/usr/bin/node',cmdlineSha256:'d'.repeat(64)};
+    await writeFile(path,JSON.stringify(row));
+    await expect(auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({})})).rejects.toThrow(/SESSION_INVALID/);
+  });
 });
