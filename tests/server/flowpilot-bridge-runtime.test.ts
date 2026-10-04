@@ -158,7 +158,7 @@ it('policy-health ingress maps to cocwin fixed controller execution and specific
 });
 
 
-it('public-safe refresh and qualification ingress map to cocwin action evidence', async () => {
+it('public-safe cocwin empty-payload ingress actions map to action evidence', async () => {
   const cases = [
     {
       action: 'COCWIN_REFRESH_SNAPSHOT_V1' as const,
@@ -179,6 +179,16 @@ it('public-safe refresh and qualification ingress map to cocwin action evidence'
       timeoutSeconds: 600,
       schema: 'COCWIN_FLOWPILOT_CONTINUOUS_QUALIFICATION_EVIDENCE_V1',
       marker: 'COCWIN_CONTINUOUS_QUALIFICATION_BLOCKED',
+    },
+    {
+      action: 'COCWIN_DEVELOPMENT_SUPERVISOR_V1' as const,
+      operationId: 'op_run_0000000006_supervisor_a1',
+      runId: 'run_0000000006',
+      stepId: 'supervisor',
+      fencingToken: 11,
+      timeoutSeconds: 60,
+      schema: 'COCWIN_FLOWPILOT_DEVELOPMENT_SUPERVISOR_EVIDENCE_V1',
+      marker: 'COCWIN_SUPERVISOR_RESULT_INVALID',
     },
   ];
 
