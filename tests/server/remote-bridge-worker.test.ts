@@ -77,7 +77,7 @@ describe('remote bridge worker',()=>{
      const n=index+1,requestId=`bridge.fair.${n}`,jobId=`fair-${n}`;
      return {number:100+n,title:`[COCWIN BRIDGE REQUEST] ${requestId}`,authorLogin:TRANSPORT.authorLogin,url:`https://github.com/example/rbridge-control/issues/${100+n}`,body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1',requestId,createdAt:'2026-09-16T18:00:00.000Z',expiresAt:'2026-09-16T18:20:00.000Z',appId:'cocwin',jobId,operation:'RUN',payload:{tool:'probe',cwd:'/home/cocwin/backend',args:[],timeout_ms:30000,max_bytes:65536}})};
    });
-   const submit=vi.fn(async()=>({state:'QUEUED'})),status=vi.fn(async()=>({state:'RUNNING'}));
+   const submit=vi.fn(async(_app:string,_job:string,_payload:unknown)=>({state:'QUEUED'})),status=vi.fn(async(_app:string,_job:string)=>({state:'RUNNING'}));
    const worker=createRemoteBridgeWorker({...TRANSPORT,now,maxIssues:20,store,github:{listOpenRequests:async()=>issues,publishResult:vi.fn()},controller:{submit,status,result:vi.fn()}});
    expect(await worker.runOnce()).toMatchObject({seen:20,pending:20});
    expect(await store.get('bridge.fair.21')).toBeUndefined();
