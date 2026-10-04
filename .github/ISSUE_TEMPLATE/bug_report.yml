@@ -1,0 +1,60 @@
+name: Bug report
+description: Report reproducible RBridge behavior that does not match the documented contract.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. **Do not include tokens, credentials, private hostnames, or exploitable security details.** Use the security policy for vulnerabilities.
+  - type: input
+    id: sha
+    attributes:
+      label: RBridge commit/release
+      description: Exact Git SHA or release tag.
+      placeholder: f15f690b...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - GitHub transport
+        - Protocol / validation
+        - FILE
+        - PROCESS
+        - CHUNK
+        - HEALTH
+        - APP_RUN / controller
+        - FlowPilot
+        - systemd / deployment
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened? Remove secrets and private infrastructure details.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include sanitized request JSON and error codes when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification already tried
+      description: Tests, logs, health checks, or workarounds attempted.
