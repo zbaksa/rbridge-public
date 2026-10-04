@@ -26,7 +26,7 @@ function policyEnvelope(callbackUrl: string) { return {
 
 function cocwinEmptyEnvelope(
   callbackUrl: string,
-  action: 'COCWIN_REFRESH_SNAPSHOT_V1' | 'COCWIN_CONTINUOUS_QUALIFICATION_V1',
+  action: 'COCWIN_REFRESH_SNAPSHOT_V1' | 'COCWIN_CONTINUOUS_QUALIFICATION_V1' | 'COCWIN_DEVELOPMENT_SUPERVISOR_V1',
   operationId: string,
   runId: string,
   stepId: string,
