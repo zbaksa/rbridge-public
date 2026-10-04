@@ -1,13 +1,19 @@
 import {execFile} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {constants} from 'node:fs';
 import {promisify} from 'node:util';
-import {lstat,readdir,readFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {lstat,open,readdir,realpath} from 'node:fs/promises';
+import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 const execFileAsync=promisify(execFile);
 const REQUEST_PREFIX='[COCWIN BRIDGE REQUEST] ';
 const IN_FLIGHT_PHASES=new Set(['CLAIMED','SUBMITTED','TERMINAL']);
-const TERMINAL_SESSION_STATES=new Set(['SUCCEEDED','FAILED','TERMINATED','UNCERTAIN']);
+const TERMINAL_SESSION_STATES=new Set(['SUCCEEDED','FAILED','TERMINATED']);
+const SESSION_STATES=new Set(['STARTING','RUNNING','TERMINATING','SUCCEEDED','FAILED','TERMINATED','UNCERTAIN']);
+const SESSION_ID_RE=/^[0-9a-f]{32}$/;
+const SHA_RE=/^[0-9a-f]{64}$/;
+const MAX_RECORD_BYTES=2*1024*1024;
 
 type IssueState='open'|'closed';
 export interface DurableAuditIssue{
@@ -52,13 +58,16 @@ function record(value:unknown,code:string):Record<string,unknown>{
   if(!value||typeof value!=='object'||Array.isArray(value))fail(code);
   return value as Record<string,unknown>;
 }
+function timestamp(value:unknown):value is string{return typeof value==='string'&&Number.isFinite(Date.parse(value));}
 function parseDurableRecord(value:unknown):DurableRecord{
   const row=record(value,'RBRIDGE_DURABLE_AUDIT_RECORD_INVALID');
   if(row.schema!=='COCWIN_REMOTE_BRIDGE_STORE_V1')fail('RBRIDGE_DURABLE_AUDIT_RECORD_SCHEMA_INVALID');
   if(typeof row.requestId!=='string'||!/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(row.requestId))fail('RBRIDGE_DURABLE_AUDIT_REQUEST_ID_INVALID');
+  if(typeof row.requestSha256!=='string'||!SHA_RE.test(row.requestSha256))fail('RBRIDGE_DURABLE_AUDIT_DIGEST_INVALID');
   if(!Number.isSafeInteger(row.issueNumber)||Number(row.issueNumber)<1)fail('RBRIDGE_DURABLE_AUDIT_ISSUE_NUMBER_INVALID');
   if(typeof row.jobId!=='string'||!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(row.jobId))fail('RBRIDGE_DURABLE_AUDIT_JOB_ID_INVALID');
   if(typeof row.phase!=='string'||!['CLAIMED','SUBMITTED','TERMINAL','PUBLISHED'].includes(row.phase))fail('RBRIDGE_DURABLE_AUDIT_PHASE_INVALID');
+  if(!timestamp(row.createdAt))fail('RBRIDGE_DURABLE_AUDIT_CREATED_AT_INVALID');
   if(typeof row.updatedAt!=='string'||!Number.isFinite(Date.parse(row.updatedAt)))fail('RBRIDGE_DURABLE_AUDIT_UPDATED_AT_INVALID');
   if(row.scopeSha256!==undefined&&(typeof row.scopeSha256!=='string'||!/^[0-9a-f]{64}$/.test(row.scopeSha256)))fail('RBRIDGE_DURABLE_AUDIT_SCOPE_INVALID');
   return {
@@ -71,9 +80,54 @@ function parseDurableRecord(value:unknown):DurableRecord{
   };
 }
 async function readJsonFile(path:string):Promise<unknown>{
-  const info=await lstat(path);
-  if(!info.isFile()||info.isSymbolicLink())fail('RBRIDGE_DURABLE_AUDIT_FILE_INVALID');
-  return JSON.parse(await readFile(path,'utf8')) as unknown;
+  let handle;
+  try{handle=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);}
+  catch(error){if((error as NodeJS.ErrnoException)?.code==='ELOOP')fail('RBRIDGE_DURABLE_AUDIT_FILE_INVALID');throw error;}
+  try{
+    const info=await handle.stat();
+    if(!info.isFile()||info.nlink!==1||info.size>MAX_RECORD_BYTES)fail('RBRIDGE_DURABLE_AUDIT_FILE_INVALID');
+    const buffer=Buffer.alloc(Math.min(info.size+1,MAX_RECORD_BYTES+1));let offset=0;
+    while(offset<buffer.length){
+      const {bytesRead}=await handle.read(buffer,offset,buffer.length-offset,null);
+      if(bytesRead===0)break;offset+=bytesRead;
+    }
+    if(offset>info.size)fail('RBRIDGE_DURABLE_AUDIT_SNAPSHOT_CHANGED');
+    return JSON.parse(buffer.subarray(0,offset).toString('utf8')) as unknown;
+  }finally{await handle.close();}
+}
+
+// Detect changes during this observation. A deployment must still quiesce writers
+// and repeat the audit immediately before switching the production release.
+async function stateSnapshot(root:string):Promise<string>{
+  const evidence:string[][]=[];
+  async function capture(path:string,kind:'file'|'directory',code:string){
+    let info;
+    try{info=await lstat(path,{bigint:true});}
+    catch(error){if((error as NodeJS.ErrnoException)?.code==='ENOENT')fail(code);throw error;}
+    if(info.isSymbolicLink()||(kind==='file'?!info.isFile():!info.isDirectory()))fail(code);
+    evidence.push([path,String(info.dev),String(info.ino),String(info.size),String(info.mtimeNs),String(info.ctimeNs)]);
+  }
+  await capture(root,'directory','RBRIDGE_DURABLE_AUDIT_STATE_ROOT_INVALID');
+  for(const entry of (await readdir(root,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){
+    if(entry.name.endsWith('.json'))await capture(join(root,entry.name),'file','RBRIDGE_DURABLE_AUDIT_FILE_INVALID');
+  }
+  const sessions=join(root,'sessions');
+  try{await lstat(sessions);}
+  catch(error){if((error as NodeJS.ErrnoException)?.code==='ENOENT')return createHash('sha256').update(JSON.stringify(evidence)).digest('hex');throw error;}
+  await capture(sessions,'directory','RBRIDGE_DURABLE_AUDIT_SESSION_ROOT_INVALID');
+  for(const entry of (await readdir(sessions,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){
+    const dir=join(sessions,entry.name);
+    await capture(dir,'directory','RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+    if(entry.name==='start-claims'){
+      for(const claim of (await readdir(dir,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){
+        if(claim.name.endsWith('.json'))await capture(join(dir,claim.name),'file','RBRIDGE_DURABLE_AUDIT_FILE_INVALID');
+      }
+    }else{
+      if(!SESSION_ID_RE.test(entry.name))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+      await capture(join(dir,'record.json'),'file','RBRIDGE_DURABLE_AUDIT_SESSION_RECORD_MISSING');
+    }
+  }
+  return createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
 }
 async function mapLimit<T,R>(items:readonly T[],limit:number,fn:(item:T)=>Promise<R>):Promise<R[]>{
   const output=new Array<R>(items.length);
@@ -94,7 +148,7 @@ export async function createGitHubIssueLookup(options:{repository:string;ghPath?
   const ghPath=options.ghPath??'gh';
   return async(issueNumber:number)=>{
     const {stdout}=await execFileAsync(ghPath,['api',`repos/${options.repository}/issues/${issueNumber}`],{
-      encoding:'utf8',maxBuffer:2*1024*1024,env:process.env
+      encoding:'utf8',maxBuffer:2*1024*1024,timeout:15000,env:process.env
     });
     const row=record(JSON.parse(stdout) as unknown,'RBRIDGE_DURABLE_AUDIT_GITHUB_RESPONSE_INVALID');
     if(Number(row.number)!==issueNumber||!['open','closed'].includes(String(row.state)))fail('RBRIDGE_DURABLE_AUDIT_GITHUB_IDENTITY_INVALID');
@@ -117,17 +171,22 @@ export async function auditRemoteBridgeDurableState(options:{
   lookupConcurrency?:number;
 }):Promise<DurableStateAuditSummary>{
   if(typeof options.stateRoot!=='string'||!options.stateRoot.startsWith('/')||options.stateRoot.includes('\0'))fail('RBRIDGE_DURABLE_AUDIT_STATE_ROOT_INVALID');
+  if(resolve(options.stateRoot)!==options.stateRoot||await realpath(options.stateRoot)!==options.stateRoot)fail('RBRIDGE_DURABLE_AUDIT_STATE_ROOT_INVALID');
   if(!/^[A-Za-z0-9-]{1,39}$/.test(options.expectedAuthor))fail('RBRIDGE_DURABLE_AUDIT_AUTHOR_INVALID');
+  const concurrency=options.lookupConcurrency??8;
+  if(!Number.isSafeInteger(concurrency)||concurrency<1||concurrency>16)fail('RBRIDGE_DURABLE_AUDIT_CONCURRENCY_INVALID');
   const rootInfo=await lstat(options.stateRoot);
   if(!rootInfo.isDirectory()||rootInfo.isSymbolicLink())fail('RBRIDGE_DURABLE_AUDIT_STATE_ROOT_INVALID');
+  const snapshot=await stateSnapshot(options.stateRoot);
 
   const phases:Record<string,number>={};
   const records:DurableRecord[]=[];
   let unscopedRecords=0;
   const entries=await readdir(options.stateRoot,{withFileTypes:true});
   for(const entry of entries.sort((a,b)=>a.name.localeCompare(b.name))){
-    if(!entry.isFile()||!entry.name.endsWith('.json'))continue;
+    if(!entry.name.endsWith('.json'))continue;
     const parsed=parseDurableRecord(await readJsonFile(join(options.stateRoot,entry.name)));
+    if(entry.name!==parsed.requestId+'.json')fail('RBRIDGE_DURABLE_AUDIT_FILENAME_MISMATCH');
     records.push(parsed);
     phases[parsed.phase]=(phases[parsed.phase]??0)+1;
     if(!parsed.scopeSha256)unscopedRecords++;
@@ -137,7 +196,7 @@ export async function auditRemoteBridgeDurableState(options:{
   const issueNumbers=[...new Set(unresolved.map(row=>row.issueNumber))].sort((a,b)=>a-b);
   const issueMap=new Map<number,DurableAuditIssue>();
   const lookupErrorIssues:number[]=[];
-  await mapLimit(issueNumbers,options.lookupConcurrency??8,async issueNumber=>{
+  await mapLimit(issueNumbers,concurrency,async issueNumber=>{
     try{issueMap.set(issueNumber,await options.issueLookup(issueNumber));}
     catch{lookupErrorIssues.push(issueNumber);}
     return undefined;
@@ -162,23 +221,62 @@ export async function auditRemoteBridgeDurableState(options:{
   }
 
   const activeSessionIds:string[]=[];
+  const sessionOwners=new Map<string,string>();
   const sessionsRoot=join(options.stateRoot,'sessions');
   try{
     const sessionEntries=await readdir(sessionsRoot,{withFileTypes:true});
     for(const entry of sessionEntries.sort((a,b)=>a.name.localeCompare(b.name))){
-      if(!entry.isDirectory()||entry.isSymbolicLink())continue;
+      if(entry.name==='start-claims')continue;
       const path=join(sessionsRoot,entry.name,'record.json');
       try{
         const row=record(await readJsonFile(path),'RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
-        if(typeof row.state!=='string'||!TERMINAL_SESSION_STATES.has(row.state))activeSessionIds.push(entry.name);
+        if(row.schema!=='COCWIN_REMOTE_BRIDGE_PROCESS_SESSION_V1'||row.sessionId!==entry.name
+          ||typeof row.ownerDigest!=='string'||!SHA_RE.test(row.ownerDigest)
+          ||typeof row.state!=='string'||!SESSION_STATES.has(row.state)
+          ||typeof row.profileId!=='string'||row.profileId.length===0
+          ||!timestamp(row.createdAt)||!timestamp(row.updatedAt)||!timestamp(row.expiresAt)
+          ||(row.pid!==null&&(!Number.isSafeInteger(row.pid)||Number(row.pid)<=1))
+          ||!Number.isSafeInteger(row.outputBytes)||Number(row.outputBytes)<0
+          ||typeof row.truncated!=='boolean'||typeof row.stdinAttached!=='boolean'
+          ||(row.exitCode!==null&&!Number.isSafeInteger(row.exitCode))
+          ||(row.signal!==null&&typeof row.signal!=='string')
+          ||(row.reason!==null&&typeof row.reason!=='string'))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        const receipts=record(row.receipts,'RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        for(const [actionId,state] of Object.entries(receipts)){
+          if(!SHA_RE.test(actionId)||typeof state!=='string'||!['CLAIMED','DONE','UNCERTAIN'].includes(state))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        }
+        if(row.identity!==null){
+          const identity=record(row.identity,'RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+          if(!Number.isSafeInteger(identity.pid)||Number(identity.pid)<=1||identity.pid!==row.pid
+            ||typeof identity.startTimeTicks!=='string'||!/^[0-9]+$/.test(identity.startTimeTicks)
+            ||typeof identity.exe!=='string'||!identity.exe.startsWith('/')
+            ||typeof identity.cmdlineSha256!=='string'||!SHA_RE.test(identity.cmdlineSha256))fail('RBRIDGE_DURABLE_AUDIT_SESSION_INVALID');
+        }
+        sessionOwners.set(entry.name,row.ownerDigest);
+        if(!TERMINAL_SESSION_STATES.has(row.state))activeSessionIds.push(entry.name);
       }catch(error){
-        if((error as NodeJS.ErrnoException)?.code==='ENOENT')continue;
+        if((error as NodeJS.ErrnoException)?.code==='ENOENT')fail('RBRIDGE_DURABLE_AUDIT_SESSION_RECORD_MISSING');
         throw error;
       }
     }
   }catch(error){
     if((error as NodeJS.ErrnoException)?.code!=='ENOENT')throw error;
   }
+  const claimsRoot=join(sessionsRoot,'start-claims');
+  let claims:string[]=[];
+  try{claims=await readdir(claimsRoot);}
+  catch(error){if((error as NodeJS.ErrnoException)?.code!=='ENOENT')throw error;}
+  for(const name of claims){
+    if(!name.endsWith('.json'))continue;
+    const row=record(await readJsonFile(join(claimsRoot,name)),'RBRIDGE_DURABLE_AUDIT_START_CLAIM_INVALID');
+    if(row.schema!=='COCWIN_REMOTE_BRIDGE_PROCESS_START_CLAIM_V1'
+      ||typeof row.ownerDigest!=='string'||!SHA_RE.test(row.ownerDigest)||name!==row.ownerDigest+'.json'
+      ||typeof row.sessionId!=='string'||!SESSION_ID_RE.test(row.sessionId)
+      ||typeof row.profileId!=='string'||row.profileId.length===0||!timestamp(row.createdAt))fail('RBRIDGE_DURABLE_AUDIT_START_CLAIM_INVALID');
+    if(!sessionOwners.has(row.sessionId))fail('RBRIDGE_DURABLE_AUDIT_SESSION_RECORD_MISSING');
+    if(sessionOwners.get(row.sessionId)!==row.ownerDigest)fail('RBRIDGE_DURABLE_AUDIT_START_CLAIM_INVALID');
+  }
+  if(await stateSnapshot(options.stateRoot)!==snapshot)fail('RBRIDGE_DURABLE_AUDIT_SNAPSHOT_CHANGED');
 
   const lookupErrors=lookupErrorIssues.length;
   const auditStatus=lookupErrors===0?'PASS':'UNKNOWN';
@@ -209,7 +307,8 @@ function parseArgs(argv:string[]){
   const out:Record<string,string>={};
   for(let i=0;i<argv.length;i+=2){
     const key=argv[i],value=argv[i+1];
-    if(!key?.startsWith('--')||value===undefined)fail('RBRIDGE_DURABLE_AUDIT_ARGS_INVALID');
+    if(!key||!['--state-root','--repository','--author','--gh-path'].includes(key)||value===undefined
+      ||Object.hasOwn(out,key.slice(2)))fail('RBRIDGE_DURABLE_AUDIT_ARGS_INVALID');
     out[key.slice(2)]=value;
   }
   if(!out['state-root']||!out.repository||!out.author)fail('RBRIDGE_DURABLE_AUDIT_ARGS_INVALID');
@@ -222,11 +321,12 @@ async function main(){
   const summary=await auditRemoteBridgeDurableState({stateRoot:args.stateRoot,expectedAuthor:args.author,issueLookup:lookup});
   console.log(JSON.stringify(summary,null,2));
   if(summary.auditStatus==='UNKNOWN')process.exitCode=3;
+  else if(summary.cutoverGate==='BLOCKED')process.exitCode=4;
 }
 
 const invoked=process.argv[1]&&pathToFileURL(process.argv[1]).href===import.meta.url;
 if(invoked)main().catch(error=>{
-  const reason=error instanceof Error&&error.message?error.message:'RBRIDGE_DURABLE_AUDIT_UNKNOWN_ERROR';
-  console.error(JSON.stringify({schema:'RBRIDGE_DURABLE_STATE_AUDIT_V1',auditStatus:'UNKNOWN',cutoverGate:'UNKNOWN',reason}));
+  const reason=error instanceof Error&&/^RBRIDGE_DURABLE_AUDIT_[A-Z_]+$/.test(error.message)?error.message:'RBRIDGE_DURABLE_AUDIT_EVIDENCE_UNREADABLE';
+  console.log(JSON.stringify({schema:'RBRIDGE_DURABLE_STATE_AUDIT_V1',auditStatus:'UNKNOWN',cutoverGate:'UNKNOWN',reason}));
   process.exitCode=2;
 });
