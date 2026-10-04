@@ -125,6 +125,7 @@ const COCWIN_DEVELOPMENT_SUPERVISOR_PROGRAM = [
   "if(!response.ok)throw new Error('COCWIN_SUPERVISOR_HTTP_'+response.status);",
   "let body;try{body=JSON.parse(text);}catch{throw new Error('COCWIN_SUPERVISOR_RESPONSE_INVALID');}",
   "if(body?.schema!=='COCWIN_AUTOMATION_SUPERVISOR_V1')throw new Error('COCWIN_SUPERVISOR_RESULT_INVALID');",
+  "if(body?.status!=='PASS')throw new Error('COCWIN_SUPERVISOR_STATUS_'+String(body?.status??'INVALID'));",
   "process.stdout.write(JSON.stringify(body)+'\\n');",
   "})().catch((error)=>{console.error(error instanceof Error?error.message:String(error));process.exitCode=1;});",
 ].join('');

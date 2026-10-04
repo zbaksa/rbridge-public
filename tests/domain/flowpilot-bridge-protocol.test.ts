@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
 import {it} from 'vitest';
 import {
   flowPilotOperationDigest,
@@ -275,4 +276,59 @@ it('callback authority and target are fixed by configuration', () => {
 it('unknown envelope fields and oversize timeout are rejected', () => {
   assert.throws(() => parseFlowPilotBridgeEnvelope(envelope({ surprise: true }), authority), /FLOWPILOT_ENVELOPE_FIELDS_INVALID/);
   assert.throws(() => parseFlowPilotBridgeEnvelope(envelope({ timeoutSeconds: 1801 }), authority), /FLOWPILOT_TIMEOUT_INVALID/);
+});
+
+it('COCWIN supervisor execution succeeds only for an explicit PASS result', async () => {
+  const operation = parseFlowPilotBridgeEnvelope(supervisorEnvelope(), authority);
+  const program = toFlowPilotAppExecution(operation, policyUrl).payload.args[1];
+  assert.ok(program);
+
+  async function execute(body: Record<string, unknown>) {
+    let stdout = '';
+    let stderr = '';
+    let fetchCalls = 0;
+    const process = {
+      argv: ['node', 'http://127.0.0.1:18088'],
+      stdout: { write(text: string) { stdout += text; } },
+      exitCode: 0,
+    };
+    await runInNewContext(program as string, {
+      URL, Buffer, AbortSignal, process,
+      console: { error(message: unknown) { stderr += String(message); } },
+      require(name: string) {
+        assert.equal(name, 'node:fs');
+        return {
+          readFileSync(path: string, encoding: string) {
+            assert.equal(path, '/etc/cocwin/refresh.secret');
+            assert.equal(encoding, 'utf8');
+            return 'synthetic-fixture-secret-0123456789';
+          },
+        };
+      },
+      async fetch(url: string, options: { method: string }) {
+        assert.equal(url, 'http://127.0.0.1:18088/internal/automation-supervisor/tick');
+        assert.equal(options.method, 'POST');
+        fetchCalls += 1;
+        return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+      },
+    }, { timeout: 1000 });
+    assert.equal(fetchCalls, 1);
+    return { exitCode: process.exitCode, stdout, stderr };
+  }
+
+  for (const status of ['PASS', 'FAIL', 'BLOCKED', 'UNKNOWN', 'READY_FOR_AI', undefined, null, 0]) {
+    const result = await execute({ schema: 'COCWIN_AUTOMATION_SUPERVISOR_V1', status });
+    const succeeds = status === 'PASS';
+    assert.equal(result.exitCode, succeeds ? 0 : 1, `supervisor status ${String(status)}`);
+    if (succeeds) {
+      assert.equal(JSON.parse(result.stdout).status, 'PASS');
+      assert.equal(result.stderr, '');
+    } else {
+      assert.equal(result.stdout, '');
+      assert.notEqual(result.stderr, '');
+    }
+  }
+  const invalidSchema = await execute({ schema: 'OTHER', status: 'PASS' });
+  assert.equal(invalidSchema.exitCode, 1);
+  assert.equal(invalidSchema.stdout, '');
 });
