@@ -46,8 +46,6 @@ RBRIDGE_GITHUB_AUTHOR=automation-owner
 
 40-character lowercase/hex Git commit identifying the deployed source release.
 
-A legacy fallback variable, `COCWIN_REMOTE_BRIDGE_RELEASE_SHA`, is still read by the source for compatibility, but new deployments should use `RBRIDGE_RELEASE_SHA`.
-
 ## Durable state
 
 State root is derived as:
@@ -61,7 +59,6 @@ The public main process uses subtrees for:
 - request store;
 - process sessions;
 - chunk transfers;
-- optional FlowPilot bridge state.
 
 The current main entry point does not expose a request-controlled state-root override.
 
@@ -125,7 +122,7 @@ Do not assume a looser client-side value will be accepted.
 
 ## Controller broker
 
-`APP_RUN` and FlowPilot execution use the controller client.
+`APP_RUN` execution uses the controller client.
 
 The public adapter's default Unix socket is:
 
@@ -133,89 +130,17 @@ The public adapter's default Unix socket is:
 /run/ai-tool-fabric/controller-broker.sock
 ```
 
-A deployment that does not provide a compatible broker can still use base capabilities that do not require controller execution (for example HEALTH and bounded host FILE/PROCESS/CHUNK operations), but `APP_RUN` and FlowPilot controller actions will not work.
+A deployment that does not provide a compatible broker can still use base capabilities that do not require controller execution (for example HEALTH and bounded host FILE/PROCESS/CHUNK operations), but `APP_RUN` will not work.
 
 This broker path is currently source-defined, not environment-configurable in the public main entry point.
 
-## Optional FlowPilot configuration
+## Windmill orchestration
 
-FlowPilot ingress is opt-in.
+Windmill does not require a Windmill-specific RBridge environment variable. The recommended public integration uses the same GitHub Issue transport as any other RBridge client.
 
-### `COCWIN_FLOWPILOT_INGRESS_ENABLED`
+Configure RBridge normally with its trusted GitHub repository and author. In Windmill, keep the GitHub token in a Windmill secret/resource and use it to create/poll request Issues.
 
-Set exactly:
-
-```text
-true
-```
-
-to enable the ingress.
-
-If absent or any other value, the runtime does not start FlowPilot ingress.
-
-### `FLOWPILOT_REMOTE_BRIDGE_TOKEN`
-
-Required when ingress is enabled.
-
-Constraints:
-
-- string;
-- at least 32 characters;
-- no whitespace.
-
-### `FLOWPILOT_CALLBACK_TOKEN`
-
-Required when ingress is enabled.
-
-Same minimum constraints as above, and it **must differ** from `FLOWPILOT_REMOTE_BRIDGE_TOKEN`.
-
-### `COCWIN_FLOWPILOT_CALLBACK_URL`
-
-Default:
-
-```text
-http://127.0.0.1:8097/api/v1/executor/callback
-```
-
-Validated by the callback client.
-
-### `COCWIN_FLOWPILOT_INGRESS_HOST`
-
-Default:
-
-```text
-127.0.0.1
-```
-
-Only literal loopback values are accepted:
-
-- `127.0.0.1`
-- `::1`
-
-### `COCWIN_FLOWPILOT_INGRESS_PORT`
-
-Default:
-
-```text
-8098
-```
-
-Production configuration requires a valid TCP port 1-65535.
-
-### `RBRIDGE_COCWIN_POLICY_URL`
-
-Used by the current COCWIN-specific FlowPilot policy/refresh/qualification execution profiles.
-
-The URL validator requires:
-
-- `http:` scheme;
-- no username/password;
-- valid hostname;
-- exact path `/api/v1/automation-engine/policy`;
-- no query string;
-- no fragment.
-
-Public RBridge does not hard-code a private deployment IP into the compiled source; deployment provides this URL.
+See [Windmill integration](WINDMILL.md).
 
 ## Example environment file
 
@@ -226,23 +151,6 @@ RBRIDGE_RUNTIME_USER=rbridge
 RBRIDGE_RELEASE_SHA=<40-hex-sha>
 RBRIDGE_GITHUB_REPOSITORY=owner/control-repo
 RBRIDGE_GITHUB_AUTHOR=trusted-login
-```
-
-With FlowPilot:
-
-```text
-RBRIDGE_RUNTIME_USER=rbridge
-RBRIDGE_RELEASE_SHA=<40-hex-sha>
-RBRIDGE_GITHUB_REPOSITORY=owner/control-repo
-RBRIDGE_GITHUB_AUTHOR=trusted-login
-
-COCWIN_FLOWPILOT_INGRESS_ENABLED=true
-COCWIN_FLOWPILOT_INGRESS_HOST=127.0.0.1
-COCWIN_FLOWPILOT_INGRESS_PORT=8098
-COCWIN_FLOWPILOT_CALLBACK_URL=http://127.0.0.1:8097/api/v1/executor/callback
-FLOWPILOT_REMOTE_BRIDGE_TOKEN=<secret-at-least-32-chars>
-FLOWPILOT_CALLBACK_TOKEN=<different-secret-at-least-32-chars>
-RBRIDGE_COCWIN_POLICY_URL=http://example.internal:8088/api/v1/automation-engine/policy
 ```
 
 Never commit the secret-bearing environment file.

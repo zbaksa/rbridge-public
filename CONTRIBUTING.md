@@ -67,7 +67,7 @@ Changes to any of these areas need extra scrutiny:
 - replay/collision handling;
 - uncertainty semantics;
 - controller broker;
-- FlowPilot authentication/callback validation;
+- workflow orchestration and GitHub transport integration;
 - systemd hardening.
 
 Include negative tests proving denied inputs remain denied.

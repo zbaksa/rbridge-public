@@ -6,7 +6,7 @@ RBridge is intentionally split into **transport**, **validation**, **durable sta
 
 ```mermaid
 flowchart LR
-    A[Authorized automation / AI] -->|GitHub Issue V2| G[GitHub transport]
+    A[Authorized automation / AI / Windmill] -->|GitHub Issue V2| G[GitHub transport]
     G --> P[Strict request parser]
     P --> S[Durable request store]
     S --> R{Operation router}
@@ -24,11 +24,6 @@ flowchart LR
     S --> G
     G -->|Comment + close| A
 
-    FP[Optional FlowPilot] -->|loopback authenticated ingress| FG[FlowPilot gateway]
-    FG --> FS[FlowPilot durable store]
-    FS --> B
-    B --> FG
-    FG -->|authenticated callback| FP
 ```
 
 ## Components
@@ -154,15 +149,17 @@ HEALTH exposes a deliberately small operational snapshot rather than internal st
 
 ### 10. Optional controller broker
 
-`APP_RUN` and FlowPilot operations use the controller adapter.
+`APP_RUN` uses the controller adapter.
 
 The public adapter expects a compatible broker at the configured/source controller socket. This separates RBridge's host-facing authorization/durability role from application-specific execution.
 
-### 11. Optional FlowPilot bridge
+### 11. Windmill orchestration
 
-When explicitly enabled, RBridge starts a loopback-only ingress. It has its own bearer token, callback token, callback URL validation and durable FlowPilot store.
+Windmill is the recommended public workflow/orchestration layer for RBridge. It does not require a special inbound RBridge listener: a Windmill flow can create a normal RBridge request Issue, wait/poll for the structured result, and continue the workflow from that result.
 
-See [FlowPilot integration](FLOWPILOT.md).
+This keeps the same public authorization, TTL, durable request identity, replay/collision and result semantics regardless of whether the caller is a human, a script, or Windmill.
+
+See [Windmill integration](WINDMILL.md).
 
 ## Trust boundaries
 
@@ -172,7 +169,7 @@ RBridge assumes different trust levels:
 2. **Configured remote identity** — GitHub repository and author are explicit deployment trust roots.
 3. **Source-controlled policy** — allowed roots/process profiles are code/release properties, not request properties.
 4. **Runtime OS identity** — dedicated non-root user with deployment file permissions.
-5. **Optional controller broker** — separately trusted execution authority for APP_RUN/FlowPilot.
+5. **Optional controller broker** — separately trusted execution authority for APP_RUN.
 6. **Durable state** — treated as security-sensitive; corruption causes fail-closed behavior.
 
 ## Why GitHub Issues?
@@ -192,7 +189,7 @@ Trade-offs:
 - GitHub account/repository security becomes part of the trust model;
 - not ideal for high-frequency low-latency tasks.
 
-The optional loopback FlowPilot ingress exists for a different operating mode.
+Windmill can orchestrate this GitHub transport without exposing an inbound RBridge control port.
 
 ## Deployment lifecycle
 

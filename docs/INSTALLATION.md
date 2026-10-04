@@ -18,7 +18,7 @@ Required for the base GitHub transport:
 Optional/additional dependencies:
 
 - `APP_RUN`: compatible controller broker
-- FlowPilot ingress: controller broker plus FlowPilot callback/tokens
+- Windmill (optional): no RBridge-side Windmill daemon is required; use Windmill to create and monitor normal GitHub request Issues
 - built-in `node-safe` and `stdin-echo` process profiles currently expect the runtime Node binary path encoded in the source profile; inspect `src/domain/remoteBridgeHostProfiles.ts` on your release before enabling PROCESS.
 
 ## 2. Build an exact source revision
@@ -90,7 +90,7 @@ sudo install -d -o rbridge -g rbridge -m 0700 \
   /home/rbridge/.local/state/rbridge
 ```
 
-Subdirectories are created for request state, process sessions, transfers and optional FlowPilot bridge state.
+Subdirectories are created for request state, process sessions and transfers.
 
 ## 6. Authenticate GitHub as the runtime user
 
@@ -125,7 +125,7 @@ sudo chown root:root /etc/rbridge/runtime.env
 sudo chmod 0600 /etc/rbridge/runtime.env
 ```
 
-See [Configuration](CONFIGURATION.md) for optional FlowPilot values.
+See [Configuration](CONFIGURATION.md) for the complete deployment reference.
 
 ## 8. systemd
 
@@ -168,7 +168,7 @@ Use a HEALTH request from [Quick Start](QUICKSTART.md).
 Verify:
 
 - the service is active/running;
-- result schema is `COCWIN_REMOTE_BRIDGE_RESULT_V2`;
+- the returned result matches the V2 result contract documented for the deployed release;
 - HEALTH status is PASS;
 - the release SHA equals the deployed revision;
 - the request Issue is closed only after result publication.

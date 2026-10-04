@@ -2,7 +2,7 @@
 
 This document describes the public GitHub Issue **V2** request contract implemented by `src/domain/remoteBridgeStage2Protocol.ts`.
 
-The wire names retain `COCWIN_...` prefixes for backward compatibility with the project's original deployment lineage.
+Some exact wire literals below retain a legacy compatibility namespace. Treat those literals as opaque protocol constants for the current revision, not as names of public dependencies.
 
 ## Request transport
 

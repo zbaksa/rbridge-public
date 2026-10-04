@@ -8,7 +8,7 @@ RBridge is a fail-closed remote execution gateway that lets authorized automatio
 
 Not today.
 
-RBridge has its own GitHub Issue V2 transport and an optional FlowPilot loopback ingress. A future MCP adapter is on the roadmap, but the current public product should not be configured as though it already speaks MCP.
+RBridge has its own GitHub Issue V2 transport. Windmill can orchestrate that transport, and a future MCP adapter is on the roadmap, but the current public product should not be configured as though it already speaks MCP.
 
 ## Why not just use Desktop Commander?
 
@@ -34,26 +34,15 @@ RBridge adds an application-level contract on top of the host:
 
 Use SSH for operators and RBridge for bounded automation if that division fits your system.
 
-## Does RBridge require COCWIN?
-
-The base GitHub V2 transport does **not** require COCWIN.
-
-Some wire/schema names retain `COCWIN_...` prefixes for compatibility with the project's original lineage.
-
-The optional FlowPilot integration currently contains COCWIN-specific actions that require deployment configuration if you choose to use them.
-
-## Does RBridge require FlowPilot?
+## Does RBridge require Windmill?
 
 No.
 
-FlowPilot ingress is disabled unless explicitly enabled.
+Windmill is the recommended public workflow/orchestration option because it is self-hostable and can drive RBridge through the existing GitHub request/result transport. RBridge also works with other callers that can create valid request Issues.
 
 ## Does RBridge require the controller broker?
 
-Only capabilities routed through controller execution require it:
-
-- `APP_RUN`;
-- current FlowPilot action execution.
+Only capabilities routed through controller execution require it, notably `APP_RUN`.
 
 Base HEALTH/FILE/PROCESS/CHUNK host capabilities are implemented separately.
 

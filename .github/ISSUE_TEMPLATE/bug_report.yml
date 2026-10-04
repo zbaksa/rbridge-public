@@ -27,7 +27,7 @@ body:
         - CHUNK
         - HEALTH
         - APP_RUN / controller
-        - FlowPilot
+        - Windmill / orchestration
         - systemd / deployment
         - Documentation
         - Other

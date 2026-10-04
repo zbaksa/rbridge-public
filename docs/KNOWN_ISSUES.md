@@ -28,15 +28,15 @@ RBridge is not currently an MCP server. MCP integration is roadmap work.
 
 ### Deployment-specific runtime paths remain in some profiles
 
-The shipped process/controller integration retains runtime paths from the current Linux execution environment. New deployments must review them before enabling APP_RUN/PROCESS/FlowPilot capabilities.
+The shipped process/controller integration retains runtime paths from the current Linux execution environment. New deployments must review them before enabling APP_RUN/PROCESS capabilities.
 
 ### FILE root is source-controlled
 
 The default FILE root is `/mnt/data`; it is not a request-controlled or simple environment-configurable root.
 
-### Controller broker required for APP_RUN/FlowPilot execution
+### Controller broker required for APP_RUN execution
 
-The controller adapter expects a compatible local broker. Deployments without it should not advertise those capabilities.
+The controller adapter expects a compatible local broker. Deployments without it should not advertise APP_RUN.
 
 ### GitHub transport is polling-based
 
