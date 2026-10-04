@@ -32,6 +32,8 @@ RBridge is public under the MIT license. The current codebase is **pre-1.0**: th
 
 A source checkout never grants machine access by itself. Every deployment must configure its own runtime identity, trusted GitHub repository/author, credentials, filesystem permissions, and optional execution broker.
 
+The [P1 MCP SAFE foundation](docs/MCP.md) adds local stdio discovery and a strict normalized adapter. Its shipped entrypoint returns BLOCKED until the shared durable execution core is connected in P2; it is not an executable V2 release.
+
 ## What it can do
 
 | Capability | Current behavior |
