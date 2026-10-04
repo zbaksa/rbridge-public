@@ -61,6 +61,22 @@ Prove mode boundaries, negative security cases, replay/uncertainty behavior, maj
 
 Core functionality remains free/open-source and donations do not unlock hidden capabilities.
 
+### P7 — launch & adoption
+
+Large-scale promotion starts only after 2.0.0 passes source, security, installation and live-acceptance gates.
+
+Launch package:
+
+- GitHub Release/tag + checksums/release notes;
+- short product demo;
+- durability/recovery demo;
+- Desktop Commander migration guide;
+- tested AI/MCP/free/local compatibility matrix;
+- GitHub-first launch, then developer communities, self-hosted/automation communities, migration-focused outreach, and finally broader Product Hunt/social launch;
+- post-launch fixes and compatibility results published as ongoing proof.
+
+V1 remains available for early adopters, but the coordinated public launch is reserved for V2.0.0.
+
 ## Additional product usability
 
 ### Deployment-neutral runtime paths
