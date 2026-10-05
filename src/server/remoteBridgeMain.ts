@@ -1,6 +1,12 @@
+import {startRBridgeOwnerRuntime,type RBridgeOwnerRuntime} from './rbridgeOwnerRuntime.js';
+import {assertRBridgeOwnerLockHeld} from './rbridgeOwnerLock.js';
+import {createRBridgeStateFiles} from './rbridgeStateFiles.js';
+import {createRBridgeLegacyReservations} from './rbridgeLegacyReservations.js';
+import {resolveRBridgeMcpStdioBinding} from './rbridgeMcpSafe.js';
+import {resolveRBridgeMcpStateRoot} from './rbridgeMcpMain.js';
 import {readFileSync} from 'node:fs';
 import {userInfo} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createControllerExecRemoteBridge} from '../adapters/controllerExecRemoteBridge.js';
 import {createGitHubIssueRemoteBridge} from '../adapters/githubIssueRemoteBridge.js';
@@ -15,7 +21,15 @@ import {createRemoteBridgeWorker,type RemoteBridgeRunSummary} from './remoteBrid
 import {resolveHostProfile} from '../domain/remoteBridgeHostProfiles.js';
 
 interface LoopLock {release():Promise<void>;}
-export function createRemoteBridgeLifecycleLock(_options:{relay:LoopLock;owner:{close(beforeOwnerRelease?:()=>Promise<void>):Promise<void>};stopIngress:()=>Promise<void>}):LoopLock{void _options;return {async release(){throw new Error('RBRIDGE_RELAY_LIFECYCLE_NOT_IMPLEMENTED');}};}
+export function createRemoteBridgeLifecycleLock(options:{relay:LoopLock;owner:{close(beforeOwnerRelease?:()=>Promise<void>):Promise<void>};stopIngress:()=>Promise<void>}):LoopLock{
+  let closing:Promise<void>|undefined;
+  return {release(){return closing??=(async()=>{
+    let stopped:Promise<void>;try{stopped=options.stopIngress();}catch(error){stopped=Promise.reject(error);}
+    void stopped.catch(()=>undefined);
+    await options.owner.close(async()=>{await stopped;});
+    await options.relay.release();
+  })();}};
+}
 export interface RemoteBridgeLoopOptions {acquireLock:()=>Promise<LoopLock>;onLocked?:()=>Promise<void>;runOnce:()=>Promise<RemoteBridgeRunSummary>;shouldContinue:()=>boolean;sleep:(ms:number)=>Promise<void>;log:(value:Record<string,unknown>)=>void;pollMs:number;maxBackoffMs?:number;now?:()=>Date;}
 function reason(error:unknown){return error instanceof Error&&error.message?error.message.split('\n')[0]!.slice(0,512):'REMOTE_BRIDGE_UNKNOWN_ERROR';}
 function rateLimited(value:string){return /(?:\\b429\\b|rate[- ]?limit|secondary rate limit)/i.test(value);}
@@ -55,65 +69,63 @@ export async function runRemoteBridgeLoop(options:RemoteBridgeLoopOptions):Promi
 }
 
 export async function runRemoteBridgeMain():Promise<void>{
-  const user=userInfo(),uid=typeof process.getuid==='function'?process.getuid():user.uid;
-  const {stateRoot:root}=resolveRemoteBridgeRuntimeConfig(process.env,{username:user.username,homedir:user.homedir,uid});
-  const instanceId=resolveRemoteBridgeInstanceId(process.env);
-  const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env);
-  const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
-  const flowPilot=createFlowPilotBridgeRuntime({root,controller,env:process.env});
-  let queueCount=0,sessionCount=(await processSessions.stats()).activeSessions,transferCount=(await chunkStore.stats()).activeTransfers;
+  const user=userInfo(),uid=typeof process.getuid==='function'?process.getuid():user.uid,euid=typeof process.geteuid==='function'?process.geteuid():user.uid;
+  if(user.uid!==uid||user.uid!==euid)throw new Error('RBRIDGE_MCP_RUNTIME_IDENTITY_INVALID');
+  const identity={username:user.username,homedir:user.homedir,uid,euid};
+  resolveRemoteBridgeRuntimeConfig(process.env,identity);
+  const binding=resolveRBridgeMcpStdioBinding(process.env,identity),coreRoot=resolveRBridgeMcpStateRoot(user.homedir),root=dirname(coreRoot),instanceId=binding.targetInstanceId;
+  const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env),github=createGitHubIssueRemoteBridge({repository,authorLogin});
+  let queueCount=0,sessionCount=0,transferCount=0;
   const releaseSha=process.env.RBRIDGE_RELEASE_SHA??process.env.COCWIN_REMOTE_BRIDGE_RELEASE_SHA??'',health=createRemoteBridgeHealth({releaseSha,startedAt:new Date(),counts:()=>({queueCount,sessionCount,transferCount})});
-  // Construct FILE ops from source-controlled host profile
-  const fileProfile=resolveHostProfile({kind:'FILE',action:'LIST',target:'/mnt/data',args:{}});
-  if(fileProfile.kind!=='FILE')throw new Error('REMOTE_BRIDGE_FILE_PROFILE_INVALID');
-  const fileOps=createRemoteBridgeFileOps({
-    allowedRoots:fileProfile.allowedRoots,
-    maxReadBytes:fileProfile.maxReadBytes,
-    maxSearchResults:fileProfile.maxSearchResults
-  });
-  const worker=createRemoteBridgeWorker({store,github,controller,chunkStore,health,processSessions,fileOps,repository,authorLogin,instanceId});let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
+  let worker:ReturnType<typeof createRemoteBridgeWorker>|undefined,flowPilot:ReturnType<typeof createFlowPilotBridgeRuntime>,chunkStore:ReturnType<typeof createRemoteBridgeChunkStore>|undefined,processSessions:ReturnType<typeof createRemoteBridgeProcessSessions>|undefined;
+  let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
   try{
     await runRemoteBridgeLoop({
-      acquireLock:async()=>await acquireRemoteBridgeProcessLock(root),
-      onLocked:async()=>{
-        const address=await flowPilot?.start();
-        if(address){
-          console.log(JSON.stringify({
-            schema:'COCWIN_FLOWPILOT_BRIDGE_INGRESS_V1',
-            status:'LISTENING',
-            host:address.host,
-            port:address.port
-          }));
+      acquireLock:async()=>{
+        // Only bootstrap missing directories; existing unsafe permissions remain evidence.
+        const files=createRBridgeStateFiles();
+        for(const path of [join(user.homedir,'.local'),join(user.homedir,'.local','state')]){
+          try{const checked=await files.directory(path,uid);await checked.close();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;await files.ensureDirectory(path,uid);}
+        }
+        await files.ensureDirectory(root,uid);await files.validateTree(root,uid);
+        const relay=await acquireRemoteBridgeProcessLock(root);let owner:RBridgeOwnerRuntime|undefined;
+        try{
+          owner=await startRBridgeOwnerRuntime({runtimeIdentity:identity,env:process.env,github,health});
+          const store=createRemoteBridgeStore(root,undefined,{claimGuard:owner.claimGuard}),controller=createControllerExecRemoteBridge();
+          // Validate legacy roots before legacy factories can create or chmod them.
+          for(const path of [join(root,'flowpilot'),join(root,'sessions'),join(root,'transfers')]){
+            try{const checked=await files.directory(path,uid,true);await checked.close();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+          }
+          chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')});processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
+          flowPilot=createFlowPilotBridgeRuntime({root,controller,env:process.env,claimGuard:owner.claimGuard});
+          sessionCount=(await processSessions.stats()).activeSessions;transferCount=(await chunkStore.stats()).activeTransfers;
+          const fileProfile=resolveHostProfile({kind:'FILE',action:'LIST',target:'/mnt/data',args:{}});
+          if(fileProfile.kind!=='FILE')throw new Error('REMOTE_BRIDGE_FILE_PROFILE_INVALID');
+          const fileOps=createRemoteBridgeFileOps({allowedRoots:fileProfile.allowedRoots,maxReadBytes:fileProfile.maxReadBytes,maxSearchResults:fileProfile.maxSearchResults});
+          const reservations=createRBridgeLegacyReservations({requestRoot:root,flowPilotRoot:join(root,'flowpilot'),uid});
+          worker=createRemoteBridgeWorker({store,github,githubCore:owner.githubCore,reservations,controller,chunkStore,health,processSessions,fileOps,repository,authorLogin,instanceId});
+          return createRemoteBridgeLifecycleLock({relay,owner,stopIngress:async()=>{await flowPilot?.stop();}});
+        }catch(error){
+          if(owner)await createRemoteBridgeLifecycleLock({relay,owner,stopIngress:async()=>{await flowPilot?.stop();}}).release();
+          else{
+            let retained=false;try{assertRBridgeOwnerLockHeld(coreRoot);retained=true;}catch{/* Failed startup closed its owner FD. */}
+            if(!retained)await relay.release();
+          }
+          throw error;
         }
       },
-      runOnce:async()=>{
-        const summary=await runFlowPilotBridgeTick({
-          runPrimary:async()=>await worker.runOnce(),
-          ...(flowPilot
-            ? {reconcile:async()=>await flowPilot.reconcile()}
-            : {}),
-          log:value=>console.log(JSON.stringify(value))
-        });
-        queueCount=summary.pending;
-        sessionCount=(await processSessions.stats()).activeSessions;
-        transferCount=(await chunkStore.stats()).activeTransfers;
-        health.recordGitHubPoll();
-        return summary;
+      onLocked:async()=>{
+        const address=await flowPilot?.start();
+        if(address)console.log(JSON.stringify({schema:'COCWIN_FLOWPILOT_BRIDGE_INGRESS_V1',status:'LISTENING',host:address.host,port:address.port}));
       },
-      shouldContinue:()=>running,
-      sleep:async ms=>{await delay(ms);},
-      log:value=>console.log(JSON.stringify(value)),
-      pollMs:2000,
-      maxBackoffMs:60_000
+      runOnce:async()=>{
+        if(!worker||!processSessions||!chunkStore)throw new Error('RBRIDGE_OWNER_NOT_READY');
+        const summary=await runFlowPilotBridgeTick({runPrimary:async()=>await worker!.runOnce(),...(flowPilot?{reconcile:async()=>await flowPilot!.reconcile()}:{}),log:value=>console.log(JSON.stringify(value))});
+        queueCount=summary.pending;sessionCount=(await processSessions.stats()).activeSessions;transferCount=(await chunkStore.stats()).activeTransfers;health.recordGitHubPoll();return summary;
+      },
+      shouldContinue:()=>running,sleep:async ms=>{await delay(ms);},log:value=>console.log(JSON.stringify(value)),pollMs:2000,maxBackoffMs:60_000
     });
-  }finally{
-    try{
-      await flowPilot?.stop();
-    }finally{
-      process.removeListener('SIGTERM',stop);
-      process.removeListener('SIGINT',stop);
-    }
-  }
+  }finally{process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
 }
 
 if(process.argv[1]?.endsWith('/remoteBridgeMain.js')){runRemoteBridgeMain().catch(error=>{console.error(JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_FATAL_V1',status:'FAIL',reason:reason(error)}));process.exitCode=1;});}

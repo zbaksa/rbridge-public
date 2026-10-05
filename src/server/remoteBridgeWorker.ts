@@ -1,3 +1,5 @@
+import {assertRBridgeGitHubIssue} from '../adapters/rbridgeGitHubDelivery.js';
+import {assertBoundedRBridgeJson} from '../domain/rbridgeCoreValidation.js';
 import type {createRBridgeGitHubCore} from '../adapters/rbridgeGitHubCore.js';
 import {createHash} from 'node:crypto';
 import {parseRemoteBridgeRequest,remoteBridgeRequestDigest,type RemoteBridgeRequest} from '../domain/remoteBridgeProtocol.js';
@@ -46,6 +48,7 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
   const now=options.now??(()=>new Date()),max=options.maxIssues??20,repository=options.repository,authorLogin=options.authorLogin,instanceId=options.instanceId;
   if(!Number.isInteger(max)||max<1||max>1000)throw new Error('REMOTE_BRIDGE_MAX_ISSUES_INVALID');
   if(typeof instanceId!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(instanceId))throw new Error('REMOTE_BRIDGE_INSTANCE_ID_INVALID');
+  if(Boolean(options.githubCore)!==Boolean(options.reservations))throw new Error('RBRIDGE_OWNER_ROUTING_CONFIG_INVALID');
   const scopeSha256=sha(JSON.stringify({repository,authorLogin,instanceId}));let issueCursor=0;
   async function publishStored(requestIdValue:string,digest:string,issue:GitHubBridgeIssue,result:BridgeResultV1|BridgeResultV2,summary:RemoteBridgeRunSummary){await options.store.markTerminal(requestIdValue,digest,result);try{await options.github.publishResult(issue.number,result);await options.store.markPublished(requestIdValue,digest);summary.published++;if(result.status==='BLOCKED')summary.blocked++;}catch{summary.errors++;}}
   async function publishReplay(recordResult:unknown,issue:GitHubBridgeIssue,requestIdValue:string,digest:string,phase:string,summary:RemoteBridgeRunSummary){if(!recordResult||typeof recordResult!=='object'||Array.isArray(recordResult)){summary.errors++;return;}const result:Record<string,unknown>={...(recordResult as Record<string,unknown>),issueNumber:issue.number,reason:'REPLAY'};try{await options.github.publishResult(issue.number,result);if(phase==='TERMINAL')await options.store.markPublished(requestIdValue,digest);summary.published++;if(result.status==='BLOCKED')summary.blocked++;}catch{summary.errors++;}}
@@ -172,6 +175,8 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
 
   return {async runOnce():Promise<RemoteBridgeRunSummary>{
     const summary:RemoteBridgeRunSummary={seen:0,pending:0,published:0,blocked:0,errors:0};
+    // Closed carriers remain delivery work even if polling open issues fails.
+    await options.githubCore?.reconcileDeliveries(20);
     const issues=await options.github.listOpenRequests();
     const selected:GitHubBridgeIssue[]=[];
     if(issues.length<=max){selected.push(...issues);issueCursor=0;}
@@ -179,7 +184,33 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
       for(let offset=0;offset<max;offset++)selected.push(issues[(issueCursor+offset)%issues.length]!);
       issueCursor=(issueCursor+max)%issues.length;
     }
-    for(const issue of selected){summary.seen++;if(bodySchema(issue.body)==='COCWIN_REMOTE_BRIDGE_REQUEST_V2')await handleV2(issue,summary);else await handleV1(issue,summary);}
+    for(const issue of selected){
+      summary.seen++;
+      let v2=false;
+      if(options.githubCore){
+        try{
+          assertRBridgeGitHubIssue(issue,repository,authorLogin);
+          const raw:unknown=JSON.parse(issue.body);assertBoundedRBridgeJson(raw);v2=raw!==null&&typeof raw==='object'&&!Array.isArray(raw)&&(raw as Record<string,unknown>).schema==='COCWIN_REMOTE_BRIDGE_REQUEST_V2';
+          if(v2){
+            const request=parseRemoteBridgeRequestV2({title:issue.title,body:issue.body,author:issue.authorLogin,repository,expectedAuthor:authorLogin,expectedRepository:repository,now:now(),allowExpired:true});
+            if(request.operation.kind!=='APP_RUN'){
+              // A FlowPilot-only reservation cannot become a new legacy relay claim.
+              const reserved=await options.reservations!.isReserved(request.requestId);
+              const existing=reserved?await options.store.get(request.requestId):undefined;
+              if(!existing){const state=await options.githubCore.admit(issue);summary.pending++;if(state==='PUBLICATION_UNAVAILABLE')summary.errors++;continue;}
+            }
+          }
+        }catch{summary.errors++;continue;}
+      }else v2=bodySchema(issue.body)==='COCWIN_REMOTE_BRIDGE_REQUEST_V2';
+      try{if(v2)await handleV2(issue,summary);else await handleV1(issue,summary);}
+      catch(error){
+        if(options.githubCore&&errorCode(error)==='RBRIDGE_CORE_LEGACY_ID_RESERVED'){
+          const digest=v2?remoteBridgeRequestV2Digest(parseRemoteBridgeRequestV2({title:issue.title,body:issue.body,author:issue.authorLogin,repository,expectedAuthor:authorLogin,expectedRepository:repository,now:now(),allowExpired:true})):remoteBridgeRequestDigest(parseRemoteBridgeRequest({title:issue.title,body:issue.body,authorLogin:issue.authorLogin,expectedAuthorLogin:authorLogin,now:now(),allowExpired:true}));
+          const result=v2?blockedV2(issue,requestId(issue),digest,'RBRIDGE_CORE_LEGACY_ID_RESERVED',now()):blockedV1(issue,digest,'RBRIDGE_CORE_LEGACY_ID_RESERVED',now());
+          try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}
+        }else throw error;
+      }
+    }
     return summary;
   }};
 }

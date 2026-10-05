@@ -1,3 +1,4 @@
+import type {Stats} from 'node:fs';
 import {chmod,link,lstat,mkdir,open,readFile,rename,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {RBridgeLegacyClaimGuard} from './rbridgeOperationSerializer.js';
@@ -29,6 +30,12 @@ export function createRemoteBridgeStore(root:string,now:()=>Date=()=>new Date(),
 async function pidAlive(pid:number){if(!Number.isSafeInteger(pid)||pid<1)return false;try{process.kill(pid,0);return true;}catch(error){return (error as NodeJS.ErrnoException)?.code==='EPERM';}}
 function sameFile(a:{dev:number|bigint;ino:number|bigint},b:{dev:number|bigint;ino:number|bigint}){return a.dev===b.dev&&a.ino===b.ino;}
 async function inspectLock(path:string){let h;try{h=await open(path,'r');const info=await h.stat();const raw=(await h.readFile('utf8')).trim();if(!/^[1-9][0-9]*$/.test(raw))return {state:'LOCKED' as const};const pid=Number(raw);if(!Number.isSafeInteger(pid))return {state:'LOCKED' as const};return await pidAlive(pid)?{state:'LOCKED' as const}:{state:'STALE' as const,info};}catch(error){if((error as NodeJS.ErrnoException)?.code==='ENOENT')return {state:'MISSING' as const};throw error;}finally{await h?.close().catch(()=>undefined);}}
+const heldRelayLocks=new Map<string,Stats>();
+export async function assertRemoteBridgeProcessLockHeld(root:string,uid:number):Promise<void>{
+  const held=heldRelayLocks.get(root);if(!held)fail('RBRIDGE_OWNER_RELAY_LOCK_REQUIRED');
+  const visible=await lstat(join(root,'relay.lock'));
+  if(!sameFile(visible,held)||!visible.isFile()||visible.uid!==uid||visible.nlink!==1||(visible.mode&0o7777)!==0o600)fail('RBRIDGE_OWNER_RELAY_LOCK_REQUIRED');
+}
 export async function acquireRemoteBridgeProcessLock(root:string){
   await ensureRoot(root);const path=join(root,'relay.lock');
   for(let attempt=0;attempt<3;attempt++){
@@ -37,8 +44,8 @@ export async function acquireRemoteBridgeProcessLock(root:string){
     try{await h.writeFile(`${process.pid}\n`,'utf8');await h.sync();}finally{await h.close();}
     try{
       await link(temp,path);await unlink(temp).catch(()=>undefined);
-      const owned=await lstat(path);let released=false;
-      return {async release(){if(released)return;released=true;try{const current=await lstat(path);if(sameFile(current,owned))await unlink(path);}catch(error){if((error as NodeJS.ErrnoException)?.code!=='ENOENT')throw error;}}};
+      const owned=await lstat(path);heldRelayLocks.set(root,owned);let released=false;
+      return {async release(){if(released)return;try{const current=await lstat(path);if(sameFile(current,owned))await unlink(path);}catch(error){if((error as NodeJS.ErrnoException)?.code!=='ENOENT')throw error;}released=true;if(heldRelayLocks.get(root)===owned)heldRelayLocks.delete(root);}};
     }catch(error){
       await unlink(temp).catch(()=>undefined);
       if((error as NodeJS.ErrnoException)?.code!=='EEXIST')throw error;
