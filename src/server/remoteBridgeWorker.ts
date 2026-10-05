@@ -1,3 +1,4 @@
+import type {createRBridgeGitHubCore} from '../adapters/rbridgeGitHubCore.js';
 import {createHash} from 'node:crypto';
 import {parseRemoteBridgeRequest,remoteBridgeRequestDigest,type RemoteBridgeRequest} from '../domain/remoteBridgeProtocol.js';
 import {parseRemoteBridgeRequestV2,remoteBridgeRequestV2Digest,type RemoteBridgeRequestV2} from '../domain/remoteBridgeStage2Protocol.js';
@@ -11,7 +12,7 @@ interface FilePort {execute(operation:Extract<RemoteBridgeRequestV2['operation']
 interface ChunkPort {putChunk(input:{transferId:string;index:number;count:number;dataBase64:string;chunkSha256:string;objectSha256:string;expiresAt:string}):Promise<unknown>;getChunk(transferId:string,index:number):Promise<unknown>;finalizeTransfer(transferId:string):Promise<unknown>;}
 interface HealthPort {snapshot():unknown|Promise<unknown>;}
 interface ProcessPort {execute(operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'PROCESS'}>,requestDigest:string):Promise<unknown>;}
-export interface RemoteBridgeWorkerOptions {store:Store;github:GitHubPort;controller:ControllerPort;fileOps?:FilePort;chunkStore?:ChunkPort;health?:HealthPort;processSessions?:ProcessPort;now?:()=>Date;maxIssues?:number;repository:string;authorLogin:string;instanceId:string;}
+export interface RemoteBridgeWorkerOptions {store:Store;github:GitHubPort;githubCore?:ReturnType<typeof createRBridgeGitHubCore>;reservations?:{isReserved(id:string):Promise<boolean>};controller:ControllerPort;fileOps?:FilePort;chunkStore?:ChunkPort;health?:HealthPort;processSessions?:ProcessPort;now?:()=>Date;maxIssues?:number;repository:string;authorLogin:string;instanceId:string;}
 export interface RemoteBridgeRunSummary {seen:number;pending:number;published:number;blocked:number;errors:number;}
 interface BridgeResultV1 {schema:'COCWIN_REMOTE_BRIDGE_RESULT_V1';requestId:string;issueNumber:number;status:'PASS'|'FAIL'|'BLOCKED'|'UNCERTAIN';requestSha256:string;resultSha256?:string;controllerResult?:Record<string,unknown>;reason?:string;completedAt:string;}
 interface BridgeResultV2 {schema:'COCWIN_REMOTE_BRIDGE_RESULT_V2';requestId:string;issueNumber:number;status:'PASS'|'FAIL'|'BLOCKED'|'UNCERTAIN';requestSha256:string;resultSha256?:string;operationResult?:unknown;reason?:string;completedAt:string;}

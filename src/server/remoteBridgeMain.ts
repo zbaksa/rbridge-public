@@ -15,6 +15,7 @@ import {createRemoteBridgeWorker,type RemoteBridgeRunSummary} from './remoteBrid
 import {resolveHostProfile} from '../domain/remoteBridgeHostProfiles.js';
 
 interface LoopLock {release():Promise<void>;}
+export function createRemoteBridgeLifecycleLock(_options:{relay:LoopLock;owner:{close(beforeOwnerRelease?:()=>Promise<void>):Promise<void>};stopIngress:()=>Promise<void>}):LoopLock{void _options;return {async release(){throw new Error('RBRIDGE_RELAY_LIFECYCLE_NOT_IMPLEMENTED');}};}
 export interface RemoteBridgeLoopOptions {acquireLock:()=>Promise<LoopLock>;onLocked?:()=>Promise<void>;runOnce:()=>Promise<RemoteBridgeRunSummary>;shouldContinue:()=>boolean;sleep:(ms:number)=>Promise<void>;log:(value:Record<string,unknown>)=>void;pollMs:number;maxBackoffMs?:number;now?:()=>Date;}
 function reason(error:unknown){return error instanceof Error&&error.message?error.message.split('\n')[0]!.slice(0,512):'REMOTE_BRIDGE_UNKNOWN_ERROR';}
 function rateLimited(value:string){return /(?:\\b429\\b|rate[- ]?limit|secondary rate limit)/i.test(value);}
