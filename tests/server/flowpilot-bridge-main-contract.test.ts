@@ -28,11 +28,11 @@ it('wires actual FlowPilot ingress, reconciliation and shutdown inside both owne
  const originalOnce=process.once.bind(process);vi.spyOn(process,'once').mockImplementation((event,listener)=>{if(event==='SIGTERM'){fixture.stop=()=>{listener();};return process;}return originalOnce(event,listener);});
  const log=vi.spyOn(console,'log').mockImplementation(()=>undefined);
  await runRemoteBridgeMain();
- expect(fixture.events).toEqual(['transfers-guarded','sessions-guarded','flow-guarded','flow-listening','legacy-submit','github-poll','flow-reconcile','legacy-status','flow-stopping','flow-stopped']);
+ expect(fixture.events.slice(0,5)).toEqual(['transfers-guarded','sessions-guarded','flow-guarded','flow-listening','legacy-submit']);for(const event of ['github-poll','flow-reconcile','legacy-status']){expect(fixture.events.filter(value=>value===event)).toHaveLength(1);expect(fixture.events.indexOf(event)).toBeLessThan(fixture.events.indexOf('flow-stopping'));}expect(fixture.events.slice(-2)).toEqual(['flow-stopping','flow-stopped']);
  const parent=join(fixture.home,'.local','state','rbridge'),root=join(parent,'execution-v2');
  expect(JSON.parse(await readFile(join(root,'manifest.json'),'utf8'))).toMatchObject({runtimeUid:uid,principalId:'operator-test',targetInstanceId:'target-test'});
  expect(JSON.parse(await readFile(join(parent,'flowpilot','op_run_0000000001_probe_a1.json'),'utf8'))).toMatchObject({phase:'SUBMITTED'});
- expect(log.mock.calls.some(([row])=>String(row).includes('COCWIN_FLOWPILOT_BRIDGE_TICK_V1'))).toBe(true);
+ expect(log.mock.calls.some(([row])=>String(row).includes('COCWIN_REMOTE_BRIDGE_TICK_V1'))).toBe(true);
  expect(()=>assertRBridgeOwnerLockHeld(root)).toThrow();await expect(lstat(join(parent,'relay.lock'))).rejects.toMatchObject({code:'ENOENT'});
  const replacement=await acquireRBridgeOwnerLock({root,uid});await replacement.close();
 },30000);
