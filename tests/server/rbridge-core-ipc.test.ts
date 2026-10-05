@@ -1,3 +1,7 @@
+import {createRBridgeTestState,cleanupRBridgeTestStates} from '../fixtures/rbridge-core-state.js';
+import {createRBridgeExecutionCore} from '../../src/server/rbridgeExecutionCore.js';
+import {createRBridgeExecutionJournal} from '../../src/server/rbridgeExecutionJournal.js';
+import {createRBridgeExecutionResults} from '../../src/server/rbridgeExecutionResults.js';
 import {chmod,lstat,rm,symlink,writeFile} from 'node:fs/promises';
 import {Socket} from 'node:net';
 import {join} from 'node:path';
@@ -6,7 +10,7 @@ import {rbridgeOperationIntentDigest} from '../../src/domain/rbridgeExecutionCon
 import {connectRBridgeCoreIpcClient,decodeRBridgeRpcFrame,startRBridgeCoreIpcServer} from '../../src/server/rbridgeCoreIpc.js';
 import {cleanupRBridgeIpcFixtures,createRBridgeIpcFixture,rawRBridgeRpc} from '../fixtures/rbridge-ipc-owner.js';
 const clients:Array<{close():Promise<void>}>=[];
-afterEach(async()=>{await Promise.all(clients.splice(0).map(client=>client.close()));await cleanupRBridgeIpcFixtures();});
+afterEach(async()=>{await Promise.all(clients.splice(0).map(client=>client.close()));await cleanupRBridgeIpcFixtures();await cleanupRBridgeTestStates();});
 const frame=(value:unknown)=>Buffer.from(JSON.stringify(value)+'\n');
 const result=(action:string,value:unknown)=>({schema:'RBRIDGE_CORE_RPC_RESULT_V1',action,value});
 
@@ -81,4 +85,25 @@ describe('private one-RPC core IPC',()=>{
   it('fresh binding reports owner loss and closed clients cannot delegate',async()=>{
     const f=await createRBridgeIpcFixture(),server=await f.start(),client=await connectRBridgeCoreIpcClient({root:f.root,expectedBinding:f.deployment,files:f.files});clients.push(client);await server.close();await expect(client.binding()).rejects.toThrow();await client.close();await expect(client.status('health-1',f.context)).rejects.toThrow();expect(f.calls).toHaveLength(0);
   });
+});
+
+describe('IPC resources after disconnect with actual journal IO',()=>{
+ it.each(['capacity','shutdown'] as const)('retains the slot and real IO settlement after disconnected RPCs (%s)',async check=>{
+  const state=await createRBridgeTestState(),f=await createRBridgeIpcFixture();await state.claim('held-status');
+  let release!:()=>void,delegated=0,descriptors=0,hold=false;const gate=new Promise<void>(done=>release=done);
+  const files={...state.files,async read(path:string,uid:number,max:number){if(!hold||path!==join(state.root,'operations','held-status.json'))return state.files.read(path,uid,max);const handle=await state.files.file(path,uid,max);descriptors++;try{const buffer=Buffer.alloc(max+1),row=await handle.read(buffer,0,buffer.length,0);await gate;return buffer.subarray(0,row.bytesRead);}finally{await handle.close();descriptors--;}}};
+  const journal=await createRBridgeExecutionJournal({...state,files}),results=await createRBridgeExecutionResults({...state,journal,files}),core=createRBridgeExecutionCore({...state,journal,results,subjects:{MCP:`uid:${state.uid}`,GITHUB:'example/control:owner'},legacyReservations:{async isReserved(){return false;}},handler:{async execute(){throw new Error('QUERY_MUST_NOT_EXECUTE');}}});
+  const pending:Promise<unknown>[]=[],sockets:Socket[]=[];const port={...core,async status(...args:Parameters<typeof core.status>){delegated++;return core.status(...args);}};
+  const server=await startRBridgeCoreIpcServer({root:f.root,binding:{...f.binding,policySha256:state.policy.evaluate(state.submission()).snapshot.policySha256},core:port,files:f.files});
+  let closing:Promise<void>|undefined,closed=false;
+  try{
+   hold=true;
+   for(let n=0;n<64;n++){const socket=new Socket({allowHalfOpen:true});socket.on('error',()=>undefined);sockets.push(socket);await new Promise<void>(done=>socket.connect(join(f.root,'core.sock'),()=>{socket.end(frame({schema:'RBRIDGE_CORE_RPC_V1',action:'STATUS',operationId:'held-status'}));done();}));}
+   for(let n=0;n<100&&delegated<64;n++)await new Promise<void>(done=>setTimeout(done,5));expect(delegated).toBe(64);expect(descriptors).toBe(1);
+   for(const socket of sockets)socket.destroy();await new Promise<void>(done=>setTimeout(done,30));
+   if(check==='capacity'){pending.push(rawRBridgeRpc(f.root,[frame({schema:'RBRIDGE_CORE_RPC_V1',action:'STATUS',operationId:'held-status'})]).catch(()=>undefined));await new Promise<void>(done=>setTimeout(done,30));expect(delegated).toBe(64);}
+   else{closing=server.close().then(()=>{closed=true;});await new Promise<void>(done=>setTimeout(done,30));expect(closed).toBe(false);}
+  }finally{release();for(const socket of sockets)socket.destroy();await Promise.allSettled(pending);await (closing??server.close());await core.close();}
+  expect(descriptors).toBe(0);
+ },30000);
 });
