@@ -24,7 +24,16 @@ export async function createRBridgeExecutionResults(options:{root:string;journal
       assertBoundedRBridgeJson(value,{bytes:limits.outputBytes,depth:limits.depth,nodes:limits.nodes});const data=Buffer.from(canonical(value)),sha256=createHash('sha256').update(data).digest('hex');
       journal.assertResultStageFits(operationId,data.length);let createOnly=true;
       try{const h=await files.file(pathFor(operationId),uid!,limits.outputBytes);await h.close();createOnly=false;}catch(error){if((error as NodeJS.ErrnoException)?.code!=='ENOENT')throw error;}
-      try{await files.commit(pathFor(operationId),data,uid!,createOnly);await journal.accountResultCommit(operationId,data.length);}
+      try{
+        await files.commit(pathFor(operationId),data,uid!,createOnly);await journal.accountResultCommit(operationId,data.length);
+        const stored=await files.file(pathFor(operationId),uid!,limits.outputBytes);
+        try{
+          const hash=createHash('sha256'),buffer=Buffer.alloc(65536);let total=0;
+          for(;;){const {bytesRead}=await stored.read(buffer,0,buffer.length,null);if(!bytesRead)break;total+=bytesRead;if(total>data.length)fail('RBRIDGE_CORE_RESULT_DIGEST_MISMATCH');hash.update(buffer.subarray(0,bytesRead));}
+          const info=await stored.stat();validateRBridgeStateHandle(info,uid!,limits.outputBytes);
+          if(total!==data.length||info.size!==total||hash.digest('hex')!==sha256)fail('RBRIDGE_CORE_RESULT_DIGEST_MISMATCH');
+        }finally{await stored.close();}
+      }
       catch(error){await journal.rescanAccounting().catch(()=>undefined);throw error;}
       return {sha256,bytes:data.length};
     },
