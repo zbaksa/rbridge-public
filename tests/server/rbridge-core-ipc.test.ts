@@ -101,7 +101,7 @@ describe('IPC resources after disconnect with actual journal IO',()=>{
    for(let n=0;n<64;n++){const socket=new Socket({allowHalfOpen:true});socket.on('error',()=>undefined);sockets.push(socket);await new Promise<void>(done=>socket.connect(join(f.root,'core.sock'),()=>{socket.end(frame({schema:'RBRIDGE_CORE_RPC_V1',action:'STATUS',operationId:'held-status'}));done();}));}
    for(let n=0;n<100&&delegated<64;n++)await new Promise<void>(done=>setTimeout(done,5));expect(delegated).toBe(64);expect(descriptors).toBe(1);
    for(const socket of sockets)socket.destroy();await new Promise<void>(done=>setTimeout(done,30));
-   if(check==='capacity'){pending.push(rawRBridgeRpc(f.root,[frame({schema:'RBRIDGE_CORE_RPC_V1',action:'STATUS',operationId:'held-status'})]).catch(()=>undefined));await new Promise<void>(done=>setTimeout(done,30));expect(delegated).toBe(64);}
+   if(check==='capacity'){const until=Date.now()+12000;while(server.connectionCount()>0&&Date.now()<until)await new Promise<void>(done=>setTimeout(done,5));expect(server.connectionCount()).toBe(0);expect(descriptors).toBe(1);pending.push(rawRBridgeRpc(f.root,[frame({schema:'RBRIDGE_CORE_RPC_V1',action:'STATUS',operationId:'held-status'})]).catch(()=>undefined));await new Promise<void>(done=>setTimeout(done,30));expect(delegated).toBe(64);}
    else{closing=server.close().then(()=>{closed=true;});await new Promise<void>(done=>setTimeout(done,30));expect(closed).toBe(false);}
   }finally{release();for(const socket of sockets)socket.destroy();await Promise.allSettled(pending);await (closing??server.close());await core.close();}
   expect(descriptors).toBe(0);
