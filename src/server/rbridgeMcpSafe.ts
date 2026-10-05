@@ -1,13 +1,12 @@
 import {McpServer,type CallToolResult} from '@modelcontextprotocol/server';
 import {z} from 'zod/v4';
+import type {RBridgeCoreBinding,RBridgeCorePort} from '../domain/rbridgeCoreProtocol.js';
 import {assertBoundedRBridgeJson,parseRBridgeExecutionReceipt} from '../domain/rbridgeCoreValidation.js';
-import {parseRBridgeOperationSubmissionV1,RBRIDGE_SAFE_CAPABILITY_KINDS,rbridgeOperationIntentDigest,type RBridgeExecutionReceiptV1,type RBridgeOperationSubmissionV1,type RBridgeTransportContextV1} from '../domain/rbridgeExecutionContract.js';
+import {parseRBridgeOperationSubmissionV1,RBRIDGE_SAFE_CAPABILITY_KINDS,rbridgeOperationIntentDigest,type RBridgeOperationSubmissionV1,type RBridgeTransportContextV1} from '../domain/rbridgeExecutionContract.js';
 
 export interface RBridgeMcpBinding{readonly authenticatedSubject:string;readonly principalId:string;readonly targetInstanceId:string;}
-export interface RBridgeMcpCore{
-  submit(submission:RBridgeOperationSubmissionV1,context:RBridgeTransportContextV1,signal:AbortSignal):Promise<RBridgeExecutionReceiptV1>;
-}
-export interface RBridgeMcpSafeOptions{binding:RBridgeMcpBinding;core?:RBridgeMcpCore;}
+export type RBridgeMcpCore=RBridgeCorePort;
+export interface RBridgeMcpSafeOptions{binding:RBridgeMcpBinding;core?:RBridgeMcpCore;bindingProvider?:()=>Promise<RBridgeCoreBinding>;}
 const ID_RE=/^[a-z0-9][a-z0-9._:-]{0,127}$/;
 // Validate raw argument keys before Zod's record parser strips __proto__.
 // Silently changing the intent before hashing/delegation would hide a bad input.

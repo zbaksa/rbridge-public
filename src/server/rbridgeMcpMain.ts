@@ -3,7 +3,7 @@ import {userInfo} from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {createRBridgeMcpSafeServer,resolveRBridgeMcpStdioBinding} from './rbridgeMcpSafe.js';
 
-export function runRBridgeMcpMain():StdioServerHandle{
+export async function runRBridgeMcpMain():Promise<StdioServerHandle>{
   const user=userInfo(),uid=typeof process.getuid==='function'?process.getuid():user.uid;
   const euid=typeof process.geteuid==='function'?process.geteuid():user.uid;
   if(euid!==user.uid)throw new Error('RBRIDGE_MCP_RUNTIME_IDENTITY_INVALID');
@@ -16,6 +16,5 @@ export function runRBridgeMcpMain():StdioServerHandle{
   });
 }
 if(process.argv[1]&&pathToFileURL(process.argv[1]).href===import.meta.url){
-  try{runRBridgeMcpMain();}
-  catch(error){const reason=error instanceof Error&&/^RBRIDGE_MCP_[A-Z_]+$/.test(error.message)?error.message:'RBRIDGE_MCP_STARTUP_FAILED';console.error(JSON.stringify({schema:'RBRIDGE_MCP_DIAGNOSTIC_V1',status:'FAIL',reason}));process.exitCode=1;}
+  void runRBridgeMcpMain().catch(error=>{const reason=error instanceof Error&&/^RBRIDGE_MCP_[A-Z_]+$/.test(error.message)?error.message:'RBRIDGE_MCP_STARTUP_FAILED';console.error(JSON.stringify({schema:'RBRIDGE_MCP_DIAGNOSTIC_V1',status:'FAIL',reason}));process.exitCode=1;});
 }
