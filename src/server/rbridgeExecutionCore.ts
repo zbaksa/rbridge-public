@@ -23,8 +23,13 @@ export function createRBridgeExecutionCore(options:RBridgeExecutionCoreOptions):
   const {journal,serializer,results,handler}=options,now=options.now??(()=>new Date());
   const queue=new Set<string>(),active=new Map<string,{controller:AbortController;promise:Promise<void>}>();
   const controls=new Map<string,Promise<void>>();
+  const ingress=new Set<Promise<unknown>>();
   let closing=false,durabilityUnknown=false,wake:NodeJS.Immediate|undefined,closingPromise:Promise<void>|undefined,recoveryPromise:Promise<void>|undefined;
   function available(){if(closing)fail('RBRIDGE_CORE_CLOSED');if(durabilityUnknown)fail('RBRIDGE_CORE_DURABILITY_UNKNOWN');if(recoveryPromise)fail('RBRIDGE_CORE_RECOVERING');}
+  function tracked<T>(invoke:()=>Promise<T>):Promise<T>{
+    try{available();}catch(error){return Promise.reject(error);}
+    const task=invoke();ingress.add(task);return task.finally(()=>{ingress.delete(task);});
+  }
   function authorized(value:RBridgeTransportContextV1){
     const context=parseRBridgeTransportContext(value);
     if(context.principalId!==binding.principalId||subjects[context.transport]===undefined||subjects[context.transport]!==context.authenticatedSubject)fail('RBRIDGE_CORE_SCOPE_INVALID');
@@ -100,7 +105,7 @@ export function createRBridgeExecutionCore(options:RBridgeExecutionCoreOptions):
       await transition(record,'TERMINAL',{outcome:'PASS',resultSha256:committed.sha256,postconditions:[{name:'read-within-policy',status:'PASS',evidenceSha256:record.receipt.policy.policySha256},{name:'result-digest',status:'PASS',evidenceSha256:committed.sha256}],sideEffects:{state:'NONE_PROVEN'}});
     });
   }
-  return {
+  const port:RBridgeExecutionCore={
     async submit(value,contextValue,signal){
       available();assertBoundedRBridgeJson(value);const submission=freezeRBridgeValue(parseRBridgeOperationSubmissionV1(value));let context:RBridgeTransportContextV1;
       try{context=authorized(contextValue);if(submission.principalId!==binding.principalId||submission.targetInstanceId!==binding.targetInstanceId)fail('RBRIDGE_CORE_SCOPE_INVALID');}catch{return rejection(submission,'RBRIDGE_CORE_SCOPE_INVALID');}
@@ -139,7 +144,22 @@ export function createRBridgeExecutionCore(options:RBridgeExecutionCoreOptions):
       })().catch(error=>{durabilityUnknown=true;throw error;}).finally(()=>{recoveryPromise=undefined;pumpSoon();});return recoveryPromise;
     },
     close(){
-      if(!closingPromise){closing=true;closingPromise=(async()=>{if(recoveryPromise)await recoveryPromise;while(active.size||queue.size||controls.size||wake){if(durabilityUnknown){if(wake){clearImmediate(wake);wake=undefined;}queue.clear();}else pump();if(active.size||controls.size)await Promise.all([...active.values()].map(task=>task.promise).concat([...controls.values()]));else if(wake)await new Promise<void>(done=>setImmediate(done));}if(durabilityUnknown)fail('RBRIDGE_CORE_DURABILITY_UNKNOWN');})();}return closingPromise;
+      if(!closingPromise){
+        closing=true;
+        closingPromise=(async()=>{
+          if(recoveryPromise)await recoveryPromise;
+          while(ingress.size||active.size||queue.size||controls.size||wake){
+            if(durabilityUnknown){if(wake){clearImmediate(wake);wake=undefined;}queue.clear();}else pump();
+            if(ingress.size||active.size||controls.size)await Promise.allSettled([...ingress,...[...active.values()].map(task=>task.promise),...controls.values()]);
+            else if(wake)await new Promise<void>(done=>setImmediate(done));
+          }
+          if(durabilityUnknown)fail('RBRIDGE_CORE_DURABILITY_UNKNOWN');
+        })();
+      }
+      return closingPromise;
     },
+  };
+  return {
+    submit:(...args)=>tracked(()=>port.submit(...args)),status:(...args)=>tracked(()=>port.status(...args)),result:(...args)=>tracked(()=>port.result(...args)),requestCancel:(...args)=>tracked(()=>port.requestCancel(...args)),recover:port.recover,close:port.close,
   };
 }
