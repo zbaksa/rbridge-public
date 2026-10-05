@@ -40,6 +40,8 @@ Directories are private 0700 and state files 0600, owned by the runtime UID; anc
 
 Startup validates configuration, acquires legacy exclusion and then owner flock before journal/recovery/IPC and guarded legacy initialization. The fixed `/usr/bin/flock -n 9` helper receives only the explicitly shared lock descriptor; the owner retains it after the helper exits. Supported handler/supervisor children do not inherit it. Partial startup retains failed bytes and closes only safely settled resources.
 
+An existing relay lock is inspected through a nonblocking, no-follow descriptor before reading at most 32 bytes of PID text. Unsafe type, UID, mode, hard links or oversized metadata refuse startup and remain evidence; a complete, private stale PID retains the existing inode-checked reclamation behavior.
+
 Shutdown stops ingress and IPC, waits for real core work and FlowPilot stop, then closes the owner descriptor and releases the legacy relay lock. A deadline, disconnected client or abort signal does not prove an outstanding IO operation settled. Exclusion remains while actual work is pending.
 
 ## MCP tools and response semantics
@@ -104,6 +106,8 @@ Every poll drains up to20 pending deliveries independently of the open-issue lis
 | Frame / RPC / read-handler deadlines |5s /10s /10s, with real settlement still required |
 
 Known status/result/replay remain available when new-claim reservation capacity is exhausted. Durability corruption still fails closed. These bounds do not promise host isolation from another process with the same UID or an administrator.
+
+IPC closes a completed or rejected transport after flushing its response, with a 5s maximum flush wait. Peer EOF is not required to reclaim an idle connection; a delegated request still retains its slot until actual work settles. Pending GitHub delivery batches rotate by issue number with an owner-local cursor, so permanently unavailable carriers cannot monopolize repeated passes. Restart resets that cursor; frozen delivery identities and publication evidence are unchanged.
 
 ## Verification and installation boundary
 

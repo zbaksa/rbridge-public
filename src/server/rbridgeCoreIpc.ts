@@ -31,13 +31,13 @@ export async function startRBridgeCoreIpcServer(options:RBridgeCoreIpcServerOpti
     if(!ready||slots.size>=limits.connections){socket.destroy();return;}
     sockets.add(socket);slots.add(socket);let delegationActive=false;
     const releaseSlot=()=>{if(!sockets.has(socket)&&!delegationActive)slots.delete(socket);};
-    const buffer=Buffer.alloc(limits.requestBytes),controller=new AbortController();let total=0,finished=false,rpcTimer:ReturnType<typeof setTimeout>|undefined;
+    const buffer=Buffer.alloc(limits.requestBytes),controller=new AbortController();let total=0,finished=false,rpcTimer:ReturnType<typeof setTimeout>|undefined,flushTimer:ReturnType<typeof setTimeout>|undefined;
     const frameTimer=setTimeout(()=>finish({schema:'RBRIDGE_CORE_RPC_ERROR_V1',reason:'RBRIDGE_CORE_RPC_LIMIT'},true),limits.frameMs);
     function finish(response:RBridgeCoreRpcResponse,abort=false){
       if(finished)return;finished=true;clearTimeout(frameTimer);clearTimeout(rpcTimer);if(abort)controller.abort();
-      try{socket.end(encoded(response,limits.responseBytes));}catch{socket.destroy();}
+      try{flushTimer=setTimeout(()=>socket.destroy(),limits.frameMs);socket.end(encoded(response,limits.responseBytes),()=>socket.destroy());}catch{socket.destroy();}
     }
-    socket.once('close',()=>{sockets.delete(socket);clearTimeout(frameTimer);clearTimeout(rpcTimer);if(!finished){finished=true;controller.abort();}releaseSlot();});
+    socket.once('close',()=>{sockets.delete(socket);clearTimeout(frameTimer);clearTimeout(rpcTimer);clearTimeout(flushTimer);if(!finished){finished=true;controller.abort();}releaseSlot();});
     socket.on('data',(data:Buffer)=>{if(finished)return;if(total+data.length>limits.requestBytes){finish({schema:'RBRIDGE_CORE_RPC_ERROR_V1',reason:'RBRIDGE_CORE_RPC_LIMIT'},true);return;}data.copy(buffer,total);total+=data.length;});
     socket.once('end',()=>{delegationActive=true;const work=(async()=>{
       if(finished||!ready)return;clearTimeout(frameTimer);let request:RBridgeCoreRpcRequest;

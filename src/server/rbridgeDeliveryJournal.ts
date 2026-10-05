@@ -30,14 +30,21 @@ export async function createRBridgeDeliveryJournal(options:{root:string;journal:
   async function get(issueNumber:number):Promise<RBridgeGitHubDeliveryRecordV1|undefined>{
     try{const bytes=await files.read(path(issueNumber),uid!,limits.recordBytes),parsed=record(JSON.parse(bytes.toString('utf8')),issueNumber);if(bytes.toString('utf8')!==canonical(parsed))fail();return parsed;}catch(error){if((error as NodeJS.ErrnoException)?.code==='ENOENT')return undefined;throw error;}
   }
-  async function scan(limit:number):Promise<readonly RBridgeGitHubDeliveryRecordV1[]>{
+  let pendingCursor=0;
+  async function scan(limit:number,cursor=0):Promise<readonly RBridgeGitHubDeliveryRecordV1[]>{
     const handle=await files.directory(dir,uid!,true),pending:RBridgeGitHubDeliveryRecordV1[]=[];let entries=0;
+    const order=(a:number,b:number)=>Number(a<=cursor)-Number(b<=cursor)||a-b;
     try{
       const directory=await opendir(rbridgeStateFdPath(handle));
       for await(const entry of directory){
         if(++entries>limits.stateEntryLimit)fail('RBRIDGE_CORE_CAPACITY_REACHED');
         if(!/^[1-9][0-9]*\.json$/.test(entry.name)){const h=await files.file(join(dir,entry.name),uid!,limits.journalBytes);await h.close();continue;}
-        const current=await get(Number(entry.name.slice(0,-5)));if(!current)fail();if(current.state==='PENDING'&&pending.length<limit)pending.push(current);
+        const current=await get(Number(entry.name.slice(0,-5)));if(!current)fail();
+        if(current.state==='PENDING'&&limit){
+          const index=pending.findIndex(saved=>order(current.identity.issueNumber,saved.identity.issueNumber)<0);
+          if(index<0){if(pending.length<limit)pending.push(current);}
+          else{pending.splice(index,0,current);if(pending.length>limit)pending.pop();}
+        }
       }
       return pending;
     }finally{await handle.close();}
@@ -72,6 +79,9 @@ export async function createRBridgeDeliveryJournal(options:{root:string;journal:
         return commit(next,false);
       });
     },
-    async pending(max){if(!Number.isSafeInteger(max)||max<1||max>limits.nonterminal)fail();return scan(max);},
+    async pending(max){
+      if(!Number.isSafeInteger(max)||max<1||max>limits.nonterminal)fail();
+      return serializer.run('pending',async()=>{const selected=await scan(max,pendingCursor);if(selected.length)pendingCursor=selected.at(-1)!.identity.issueNumber;return selected;});
+    },
   };
 }
