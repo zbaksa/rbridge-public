@@ -44,8 +44,8 @@ describe('durable read-only core admission and scheduling',()=>{
     let nested:RBridgeJsonValue='leaf';for(let i=0;i<14;i++)nested={nested};const tooDeep={...f.submission(),operation:{kind:'PROCESS',action:'START',args:{deep:nested}}} as RBridgeOperationSubmissionV1;await expect(f.core.submit(tooDeep,f.context,signal())).rejects.toThrow();expect(f.journal.capacity().identities).toBe(0);
   });
   it('authorization returns before execution and its frozen snapshot stays exact after completion',async()=>{
-    let entered!:()=>void;const started=new Promise<void>(done=>{entered=done;}),held=gate();let f!:Awaited<ReturnType<typeof fixture>>;
-    f=await fixture({async execute(s){expect(f.serializer.isHeld(s.operationId)).toBe(false);expect((await f.journal.get(s.operationId))?.receipt.phase).toBe('RUNNING');entered();await held.pending;return {observed:'safe'};}});
+    let entered!:()=>void;const started=new Promise<void>(done=>{entered=done;}),held=gate();
+    const f:Awaited<ReturnType<typeof fixture>>=await fixture({async execute(s){expect(f.serializer.isHeld(s.operationId)).toBe(false);expect((await f.journal.get(s.operationId))?.receipt.phase).toBe('RUNNING');entered();await held.pending;return {observed:'safe'};}});
     const admitted=await f.core.submit(f.submission(),f.context,signal());expect(admitted.status).toBe('RECEIPT');if(admitted.status!=='RECEIPT')throw new Error('NO_RECEIPT');
     const initial=JSON.stringify(admitted);expect(admitted.receipt.phase).toBe('AUTHORIZED');expect(admitted.receipt.transitions.map(t=>t.phase)).toEqual(['CLAIMED','AUTHORIZED']);expect(Object.isFrozen(admitted.receipt.transitions)).toBe(true);await started;
     expect((await f.core.status('read-1',f.context)).status).toBe('RECEIPT');held.release();expect((await terminal(f)).transitions.map(t=>t.phase)).toEqual(['CLAIMED','AUTHORIZED','STARTING','RUNNING','TERMINAL']);expect(JSON.stringify(admitted)).toBe(initial);
@@ -86,5 +86,9 @@ describe('durable read-only core admission and scheduling',()=>{
     const f=await fixture(),files=createRBridgeStateFiles({checkFilesystem:async()=>undefined,io:{syncFile:async()=>{throw Object.assign(new Error('ENOSPC private detail'),{code:'ENOSPC'});}}}),results=await createRBridgeExecutionResults({...f,files});
     const core=createRBridgeExecutionCore({...f,results,subjects:{GITHUB:'zbaksa/rbridge-public:zbaksa',MCP:`uid:${f.uid}`},legacyReservations:{async isReserved(){return false;}},handler:{async execute(){return {read:'safe'};}}});cleanup.unshift(()=>core.close().catch(()=>undefined));
     await core.submit(f.submission(),f.context,signal());await expect.poll(async()=> (await f.journal.get('read-1'))?.receipt.phase,{timeout:3000}).toBe('TERMINAL');const receipt=(await f.journal.get('read-1'))!.receipt;expect(receipt.outcome).toBe('FAIL');expect(receipt.resultSha256).toBeUndefined();expect(receipt.reason).toBe('RBRIDGE_CORE_RESULT_COMMIT_FAILED');expect(f.journal.capacity().resultBytes).toBeGreaterThan(0);
+  });
+  it('the result commit verifies actual stored bytes before returning its digest',async()=>{
+    const f=await fixture();await f.running();const files=createRBridgeStateFiles({checkFilesystem:async()=>undefined,io:{async syncFile(handle){const size=(await handle.stat()).size;await handle.write(Buffer.alloc(size,120),0,size,0);await handle.sync();}}}),results=await createRBridgeExecutionResults({...f,files});
+    await expect(f.serializer.run('read-1',()=>results.commit('read-1',{observed:'safe'}))).rejects.toThrow('RBRIDGE_CORE_RESULT_DIGEST_MISMATCH');expect((await f.journal.get('read-1'))?.receipt.phase).toBe('RUNNING');
   });
 });

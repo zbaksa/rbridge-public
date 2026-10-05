@@ -1,7 +1,9 @@
-import type {RBridgeCorePort,RBridgeDeploymentBinding} from '../domain/rbridgeCoreProtocol.js';
-import type {RBridgeExecutionJournal} from './rbridgeExecutionJournal.js';
+import type {RBridgeCorePort,RBridgeCoreSubmitResult,RBridgeDeploymentBinding,RBridgeScope} from '../domain/rbridgeCoreProtocol.js';
+import {assertBoundedRBridgeJson,assertRBridgeResultRange,canonicalRBridgeJson,parseRBridgeDeploymentBinding} from '../domain/rbridgeCoreValidation.js';
+import {parseRBridgeOperationSubmissionV1,rbridgeOperationIntentDigest,type RBridgeExecutionPhase,type RBridgeExecutionReceiptV1,type RBridgeJsonValue,type RBridgeOperationSubmissionV1,type RBridgeTransportContextV1} from '../domain/rbridgeExecutionContract.js';
+import {parseRBridgePolicyDocument,parseRBridgeTransportContext,type RBridgeExecutionJournal,type RBridgeOperationRecordV1} from './rbridgeExecutionJournal.js';
 import type {RBridgeExecutionResults} from './rbridgeExecutionResults.js';
-import type {RBridgeExecutionPolicy} from './rbridgeExecutionPolicy.js';
+import {freezeRBridgeValue,type RBridgeExecutionPolicy} from './rbridgeExecutionPolicy.js';
 import type {RBridgeOperationSerializer} from './rbridgeOperationSerializer.js';
 import type {RBridgeReadonlyHandler} from './rbridgeReadonlyHandlers.js';
 export interface RBridgeExecutionCoreOptions{
@@ -9,4 +11,84 @@ export interface RBridgeExecutionCoreOptions{
   legacyReservations:{isReserved(id:string):Promise<boolean>};serializer:RBridgeOperationSerializer;handler:RBridgeReadonlyHandler;now?:()=>Date;
 }
 export type RBridgeExecutionCore=RBridgeCorePort&{recover():Promise<void>;close():Promise<void>};
-export function createRBridgeExecutionCore(options:RBridgeExecutionCoreOptions):RBridgeExecutionCore{void options;return {async submit(){throw new Error('NOT_IMPLEMENTED');},async status(){throw new Error('NOT_IMPLEMENTED');},async result(){throw new Error('NOT_IMPLEMENTED');},async requestCancel(){throw new Error('NOT_IMPLEMENTED');},async recover(){throw new Error('NOT_IMPLEMENTED');},async close(){throw new Error('NOT_IMPLEMENTED');}};}
+function fail(code:string):never{throw new Error(code);}
+function parseRBridgeOperationKey(value:string){if(typeof value!=='string'||!/^[a-z0-9][a-z0-9._:-]{0,127}$/.test(value))fail('RBRIDGE_CORE_OPERATION_ID_INVALID');}
+const json=(value:unknown)=>canonicalRBridgeJson(value as RBridgeJsonValue);
+export function createRBridgeExecutionCore(options:RBridgeExecutionCoreOptions):RBridgeExecutionCore{
+  const binding=parseRBridgeDeploymentBinding(options.binding),current=parseRBridgePolicyDocument(options.policy.document);
+  if(json(binding)!==json(current.binding)||options.subjects.MCP!==`uid:${binding.runtimeUid}`)fail('RBRIDGE_CORE_BINDING_INVALID');
+  const subjects={...options.subjects};
+  for(const [transport,authenticatedSubject] of Object.entries(subjects))parseRBridgeTransportContext({schema:'RBRIDGE_TRANSPORT_CONTEXT_V1',transport,authenticatedSubject,principalId:binding.principalId});
+  const {journal,serializer,results,handler}=options,now=options.now??(()=>new Date());
+  const queue=new Set<string>(),active=new Map<string,{controller:AbortController;promise:Promise<void>}>();
+  let closing=false,durabilityUnknown=false,wake:NodeJS.Immediate|undefined,closingPromise:Promise<void>|undefined;
+  function available(){if(closing)fail('RBRIDGE_CORE_CLOSED');if(durabilityUnknown)fail('RBRIDGE_CORE_DURABILITY_UNKNOWN');}
+  function authorized(value:RBridgeTransportContextV1){
+    const context=parseRBridgeTransportContext(value);
+    if(context.principalId!==binding.principalId||subjects[context.transport]===undefined||subjects[context.transport]!==context.authenticatedSubject)fail('RBRIDGE_CORE_SCOPE_INVALID');
+    return freezeRBridgeValue(context);
+  }
+  function scope(operationId:string):RBridgeScope{return {operationId,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId};}
+  function receipt(record:RBridgeOperationRecordV1){return freezeRBridgeValue({status:'RECEIPT' as const,receipt:record.receipt});}
+  function rejection(submission:RBridgeOperationSubmissionV1,reason:Extract<RBridgeCoreSubmitResult,{status:'REJECTED'}>['reason']):RBridgeCoreSubmitResult{return freezeRBridgeValue({status:'REJECTED',reason,operationId:submission.operationId,principalId:submission.principalId,targetInstanceId:submission.targetInstanceId});}
+  function stamp(record:RBridgeOperationRecordV1){const date=now(),ms=date.getTime();if(!Number.isFinite(ms))fail('RBRIDGE_CORE_TIME_INVALID');return new Date(Math.max(ms,Date.parse(record.receipt.transitions.at(-1)!.at))).toISOString();}
+  async function transition(record:RBridgeOperationRecordV1,phase:RBridgeExecutionPhase,patch:Partial<RBridgeExecutionReceiptV1>={}){
+    return journal.update(record.submission.operationId,record.revision,{...record,revision:record.revision+1,receipt:{...record.receipt,...patch,phase,transitions:[...record.receipt.transitions,{phase,at:stamp(record)}]}});
+  }
+  async function observe(record:RBridgeOperationRecordV1,context:RBridgeTransportContextV1){
+    if(record.receipt.phase==='TERMINAL')return record;
+    const old=record.observations[context.transport];if(old?.count===Number.MAX_SAFE_INTEGER)return record;
+    return journal.update(record.submission.operationId,record.revision,{...record,revision:record.revision+1,observations:{...record.observations,[context.transport]:old?{...old,count:old.count+1}:{first:context,count:1}}});
+  }
+  function pumpSoon(){if(!wake&&!durabilityUnknown)wake=setImmediate(()=>{wake=undefined;pump();});}
+  function pump(){
+    while(!durabilityUnknown&&active.size<current.limits.handlers&&queue.size){
+      const id=queue.values().next().value as string;queue.delete(id);const controller=new AbortController();
+      const promise=run(id,controller.signal).catch(()=>{durabilityUnknown=true;}).finally(()=>{active.delete(id);pumpSoon();});
+      active.set(id,{controller,promise});
+    }
+  }
+  async function finishError(id:string,outcome:'FAIL'|'BLOCKED',reason:string){
+    await serializer.run(id,async()=>{const record=await journal.get(id);if(record&&record.receipt.phase!=='TERMINAL')await transition(record,'TERMINAL',{outcome,reason,sideEffects:{state:'NONE_PROVEN'}});});
+  }
+  async function run(id:string,signal:AbortSignal){
+    const dispatched=await serializer.run(id,async()=>{
+      let record=await journal.get(id);if(!record)fail('RBRIDGE_CORE_RECORD_UNAVAILABLE');if(record.receipt.phase==='TERMINAL')return undefined;
+      if(record.receipt.phase!=='AUTHORIZED')fail('RBRIDGE_CORE_DISPATCH_PHASE_INVALID');
+      record=await transition(record,'STARTING');return transition(record,'RUNNING');
+    });
+    if(!dispatched)return;
+    let output:RBridgeJsonValue;
+    try{output=await handler.execute(dispatched.submission,dispatched.policyDocument,current,signal);assertBoundedRBridgeJson(output,{bytes:Math.min(dispatched.policyDocument.limits.outputBytes,current.limits.outputBytes),depth:Math.min(dispatched.policyDocument.limits.depth,current.limits.depth),nodes:Math.min(dispatched.policyDocument.limits.nodes,current.limits.nodes)});}
+    catch(error){const reason=error instanceof Error?error.message:'';await finishError(id,reason==='RBRIDGE_READ_POLICY_BLOCKED'?'BLOCKED':'FAIL',reason.startsWith('RBRIDGE_READ_')&&/^[A-Z_]+$/.test(reason)?reason:'RBRIDGE_CORE_READ_FAILED');return;}
+    await serializer.run(id,async()=>{
+      const record=await journal.get(id);if(!record)fail('RBRIDGE_CORE_RECORD_UNAVAILABLE');if(record.receipt.phase==='TERMINAL')return;
+      let committed:{sha256:string;bytes:number};
+      try{committed=await results.commit(id,output);}catch{await transition(record,'TERMINAL',{outcome:'FAIL',reason:'RBRIDGE_CORE_RESULT_COMMIT_FAILED',sideEffects:{state:'NONE_PROVEN'}});return;}
+      await transition(record,'TERMINAL',{outcome:'PASS',resultSha256:committed.sha256,postconditions:[{name:'read-within-policy',status:'PASS',evidenceSha256:record.receipt.policy.policySha256},{name:'result-digest',status:'PASS',evidenceSha256:committed.sha256}],sideEffects:{state:'NONE_PROVEN'}});
+    });
+  }
+  return {
+    async submit(value,contextValue,signal){
+      available();assertBoundedRBridgeJson(value);const submission=freezeRBridgeValue(parseRBridgeOperationSubmissionV1(value));let context:RBridgeTransportContextV1;
+      try{context=authorized(contextValue);if(submission.principalId!==binding.principalId||submission.targetInstanceId!==binding.targetInstanceId)fail('RBRIDGE_CORE_SCOPE_INVALID');}catch{return rejection(submission,'RBRIDGE_CORE_SCOPE_INVALID');}
+      if(signal.aborted)fail('RBRIDGE_CORE_ABORTED');
+      return serializer.run(submission.operationId,async()=>{
+        available();if(signal.aborted)fail('RBRIDGE_CORE_ABORTED');const existing=await journal.get(submission.operationId);
+        if(existing){if(existing.intentSha256!==rbridgeOperationIntentDigest(submission))return rejection(submission,'RBRIDGE_CORE_INTENT_COLLISION');return receipt(await observe(existing,context));}
+        if(await options.legacyReservations.isReserved(submission.operationId))return rejection(submission,'RBRIDGE_CORE_LEGACY_ID_RESERVED');
+        const capacity=journal.capacity();if(capacity.nonterminal>=current.limits.nonterminal||capacity.identities>=current.limits.identities||!capacity.canClaim())return rejection(submission,'RBRIDGE_CORE_CAPACITY_REACHED');
+        if(signal.aborted)fail('RBRIDGE_CORE_ABORTED');let record:RBridgeOperationRecordV1;
+        try{record=await journal.claim({submission,context,decision:options.policy.evaluate(submission)});}catch(error){if(error instanceof Error&&error.message==='RBRIDGE_CORE_CAPACITY_REACHED')return rejection(submission,'RBRIDGE_CORE_CAPACITY_REACHED');throw error;}
+        if(record.receipt.policy.decision==='BLOCK')return receipt(await transition(record,'TERMINAL',{outcome:'BLOCKED',reason:record.receipt.policy.reason??'RBRIDGE_CORE_POLICY_BLOCKED'}));
+        record=await transition(record,'AUTHORIZED');queue.add(submission.operationId);pumpSoon();return receipt(record);
+      });
+    },
+    async status(operationId,context){authorized(context);parseRBridgeOperationKey(operationId);if(durabilityUnknown)fail('RBRIDGE_CORE_DURABILITY_UNKNOWN');const record=await journal.get(operationId);return record?receipt(record):freezeRBridgeValue({status:'NOT_FOUND' as const,...scope(operationId)});},
+    async result(operationId,cursor,maxBytes,context){authorized(context);parseRBridgeOperationKey(operationId);assertRBridgeResultRange(cursor,maxBytes);if(durabilityUnknown)fail('RBRIDGE_CORE_DURABILITY_UNKNOWN');const record=await journal.get(operationId);return record?freezeRBridgeValue(await results.page(record,cursor,maxBytes)):freezeRBridgeValue({status:'NOT_FOUND' as const,...scope(operationId)});},
+    async requestCancel(){throw new Error('NOT_IMPLEMENTED');},async recover(){throw new Error('NOT_IMPLEMENTED');},
+    close(){
+      if(!closingPromise){closing=true;closingPromise=(async()=>{while(active.size||queue.size||wake){if(durabilityUnknown){if(wake){clearImmediate(wake);wake=undefined;}queue.clear();}else pump();if(active.size)await Promise.all([...active.values()].map(task=>task.promise));else if(wake)await new Promise<void>(done=>setImmediate(done));}if(durabilityUnknown)fail('RBRIDGE_CORE_DURABILITY_UNKNOWN');})();}return closingPromise;
+    },
+  };
+}

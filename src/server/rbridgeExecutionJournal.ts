@@ -22,10 +22,12 @@ export interface RBridgeExecutionJournal{
   rescanAccounting(releaseDelivery?:number):Promise<void>;
 }
 const ID=/^[a-z0-9][a-z0-9._:-]{0,127}$/;
-const bounds={bytes:limits.recordBytes,depth:limits.depth,nodes:8192};
+// A valid depth16 submission is nested once in this private record envelope.
+// Transport/input/output validators retain their original depth16 bounds.
+const bounds={bytes:limits.recordBytes,depth:limits.depth+1,nodes:8192};
 function fail(code='RBRIDGE_JOURNAL_INVALID'):never{throw new Error(code);}
 function missing(error:unknown){return (error as NodeJS.ErrnoException)?.code==='ENOENT';}
-function json(value:unknown):string{return canonicalRBridgeJson(value as RBridgeJsonValue);}
+function json(value:unknown):string{return canonicalRBridgeJson(value as RBridgeJsonValue,bounds);}
 function id(value:string):string{if(!ID.test(value))fail();return value;}
 function exact(value:unknown,keys:readonly string[]):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==keys.length||Object.keys(value).some(k=>!keys.includes(k)))fail();return value as Record<string,unknown>;}
 export function parseRBridgePolicyDocument(value:unknown):RBridgePolicyDocumentV1{

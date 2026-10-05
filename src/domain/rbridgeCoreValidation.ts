@@ -30,8 +30,8 @@ export function assertBoundedRBridgeJson(value:unknown,bounds:{bytes:number;dept
   }
   if(Buffer.byteLength(JSON.stringify(value),'utf8')>bounds.bytes)fail('RBRIDGE_CORE_VALUE_LIMIT');
 }
-export function canonicalRBridgeJson(value:RBridgeJsonValue):string{
-  assertBoundedRBridgeJson(value,{bytes:limits.outputBytes,depth:limits.depth,nodes:8192});
+export function canonicalRBridgeJson(value:RBridgeJsonValue,bounds={bytes:limits.outputBytes,depth:limits.depth,nodes:8192}):string{
+  assertBoundedRBridgeJson(value,bounds);
   function ordered(item:RBridgeJsonValue):RBridgeJsonValue{
     if(Array.isArray(item))return item.map(ordered);
     if(item!==null&&typeof item==='object')return Object.fromEntries(Object.keys(item).sort().map(key=>[key,ordered(item[key]!)]));
