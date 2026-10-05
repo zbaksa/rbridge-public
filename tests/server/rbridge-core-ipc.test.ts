@@ -85,6 +85,21 @@ describe('private one-RPC core IPC',()=>{
   it('fresh binding reports owner loss and closed clients cannot delegate',async()=>{
     const f=await createRBridgeIpcFixture(),server=await f.start(),client=await connectRBridgeCoreIpcClient({root:f.root,expectedBinding:f.deployment,files:f.files});clients.push(client);await server.close();await expect(client.binding()).rejects.toThrow();await client.close();await expect(client.status('health-1',f.context)).rejects.toThrow();expect(f.calls).toHaveLength(0);
   });
+  it.each(['incomplete deadline','oversized frame'] as const)('reclaims all64 rejected slots while peer write halves stay open (%s)',async failure=>{
+    const f=await createRBridgeIpcFixture(),server=await f.start(),sockets:Socket[]=[],ended:Array<Promise<Buffer>>=[];
+    try{
+      for(let n=0;n<64;n++){
+        const socket=new Socket({allowHalfOpen:true}),chunks:Buffer[]=[];sockets.push(socket);socket.on('error',()=>undefined);socket.on('data',data=>chunks.push(Buffer.from(data)));
+        ended.push(new Promise<Buffer>(done=>socket.once('end',()=>done(Buffer.concat(chunks)))));
+        await new Promise<void>((resolve,reject)=>{socket.once('error',reject);socket.connect(join(f.root,'core.sock'),()=>{socket.write(failure==='incomplete deadline'?'{':Buffer.alloc(65537,120));resolve();});});
+      }
+      const replies=await Promise.all(ended);for(const reply of replies)expect(JSON.parse(reply.toString()).reason).toBe('RBRIDGE_CORE_RPC_LIMIT');
+      // No peer ends or destroys its writable half before owner capacity is checked.
+      expect(sockets.every(socket=>!socket.writableEnded)).toBe(true);
+      await vi.waitFor(()=>expect(server.connectionCount()).toBe(0),{timeout:1000,interval:10});
+      expect(JSON.parse(await rawRBridgeRpc(f.root,[frame({schema:'RBRIDGE_CORE_RPC_V1',action:'BINDING'})])).action).toBe('BINDING');expect(f.calls).toHaveLength(0);
+    }finally{for(const socket of sockets)socket.destroy();}
+  },15000);
 });
 
 describe('IPC resources after disconnect with actual journal IO',()=>{

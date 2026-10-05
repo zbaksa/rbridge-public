@@ -2,6 +2,8 @@ import {afterEach,describe,expect,it} from 'vitest';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createRBridgeGitHubCore} from '../../src/adapters/rbridgeGitHubCore.js';
+import {createRemoteBridgeStore} from '../../src/server/remoteBridgeStore.js';
+import {createRemoteBridgeWorker} from '../../src/server/remoteBridgeWorker.js';
 import {cleanupRBridgeTestStates} from '../fixtures/rbridge-core-state.js';
 import {createRBridgeGitHubFixture,githubIssue,githubRepository,githubUnfence} from '../fixtures/rbridge-github.js';
 const cleanup:Array<()=>Promise<void>>=[];
@@ -63,4 +65,17 @@ describe('authenticated GitHub core admission',()=>{
     const f=await fixture(),request=f.issue();await f.adapter.admit(request);await f.terminal();const record=(await f.journal.get('shared-read'))!;
     expect(record.observations.GITHUB?.first).toEqual({schema:'RBRIDGE_TRANSPORT_CONTEXT_V1',transport:'GITHUB',authenticatedSubject:githubRepository+':bridge-owner',principalId:'operator',requestRef:'issue:17'});expect(record.receipt.targetInstanceId).toBe('aether');
   });
+  it('finalizes a later closed lost-ACK delivery despite20 permanently unavailable carriers and open-list failure',async()=>{
+    const f=await fixture(),requests=Array.from({length:21},(_,index)=>f.issue(githubIssue(index+1)));
+    for(const request of requests)expect(await f.adapter.admit(request)).toBe('CORE');
+    await f.terminal();const before=await readFile(join(f.root,'operations/shared-read.json'));
+    const first=await f.deliveries.pending(20),prefix=new Set(first.map(record=>record.identity.issueNumber)),later=requests.find(request=>!prefix.has(request.number))!;
+    for(const record of first)f.issues.get(record.identity.issueNumber)!.state='closed';
+    f.failAfter('CLOSE');expect(await f.adapter.admit(later)).toBe('PUBLICATION_UNAVAILABLE');expect(f.issues.get(later.number)!.state).toBe('closed');expect((await f.deliveries.get(later.number))!.state).toBe('PENDING');expect(f.comments.get(later.number)).toHaveLength(1);
+    const unavailable=async()=>{throw new Error('LEGACY_MUST_NOT_EXECUTE');};
+    const worker=createRemoteBridgeWorker({repository:githubRepository,authorLogin:f.options.authorLogin,instanceId:'aether',now:f.options.now,githubCore:f.adapter,reservations:{async isReserved(){return false;}},store:createRemoteBridgeStore(join(f.root,'unused-legacy')),controller:{submit:unavailable,status:unavailable,result:unavailable},github:{async listOpenRequests(){throw new Error('TEST_OPEN_LIST_UNAVAILABLE');},publishResult:unavailable}});
+    for(let pass=0;pass<2;pass++)await expect(worker.runOnce()).rejects.toThrow('TEST_OPEN_LIST_UNAVAILABLE');
+    expect((await f.deliveries.get(later.number))!.state).toBe('PUBLISHED');expect(f.comments.get(later.number)).toHaveLength(1);expect(f.calls).toBe(1);expect(await readFile(join(f.root,'operations/shared-read.json'))).toEqual(before);
+    for(const record of first){expect((await f.deliveries.get(record.identity.issueNumber))!.state).toBe('PENDING');expect(f.comments.get(record.identity.issueNumber)).toEqual([]);}
+  },15000);
 });

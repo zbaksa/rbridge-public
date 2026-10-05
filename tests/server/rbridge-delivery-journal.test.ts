@@ -24,6 +24,12 @@ describe('independent GitHub delivery storage',()=>{
     const f=await fixture();await f.deliveries.claim(identity(1));await f.deliveries.claim(identity(2));expect((await f.deliveries.pending(1)).map(r=>r.identity.issueNumber)).toHaveLength(1);expect((await f.deliveries.pending(128)).map(r=>r.identity.issueNumber).sort()).toEqual([1,2]);
     await expect(f.deliveries.pending(129)).rejects.toThrow();
   });
+  it('visits every retained pending carrier across bounded passes instead of retrying a fixed prefix',async()=>{
+    const f=await fixture();for(let number=1;number<=29;number++)await f.deliveries.claim(identity(number));
+    const first=await f.deliveries.pending(20),second=await f.deliveries.pending(20),visited=new Set([...first,...second].map(record=>record.identity.issueNumber));
+    expect(first).toHaveLength(20);expect(second).toHaveLength(20);expect(visited.size).toBe(29);expect(visited.has(29)).toBe(true);
+    for(let number=1;number<=29;number++)expect((await f.deliveries.get(number))!.state).toBe('PENDING');
+  });
   it('freezes published identity and rejects changed publication progress',async()=>{
     const f=await fixture(),first=await f.deliveries.claim(identity()),prepared=await f.deliveries.update(1,1,{...first,revision:2,publication:{envelopeSha256:'d'.repeat(64),totalBytes:80000,chunkCount:2,nextIndex:1}});
     await expect(f.deliveries.update(1,2,{...prepared,revision:3,publication:{...prepared.publication!,nextIndex:0}})).rejects.toThrow();
