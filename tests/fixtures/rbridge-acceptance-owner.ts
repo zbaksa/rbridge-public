@@ -18,7 +18,7 @@ export interface RBridgeAcceptanceFixture {home:string;root:string;sourceRoot:st
 type Message={type:string;id?:number;command?:string;value?:unknown;method?:string;args?:unknown[];name?:string;error?:string};
 function exited(child:ChildProcess){return child.exitCode!==null||child.signalCode!==null?Promise.resolve():new Promise<void>(done=>child.once('exit',()=>done()));}
 export async function createRBridgeAcceptanceFixture():Promise<RBridgeAcceptanceFixture>{
- const user=userInfo(),uid=process.getuid!();if(uid<=0||process.geteuid!()!==uid)throw new Error('TEST_NONROOT_OWNER_REQUIRED');
+ const uid=process.getuid!();if(uid<=0||process.geteuid!()!==uid)throw new Error('TEST_NONROOT_OWNER_REQUIRED');
  const home=await fs.mkdtemp(join(homedir(),'.rbridge-acceptance-')),sourceRoot=join(home,'source'),parent=join(home,'.local','state','rbridge'),root=join(parent,'execution-v2'),files=createRBridgeStateFiles();
  for(const path of [join(home,'.local'),join(home,'.local','state'),parent,sourceRoot])await files.ensureDirectory(path,uid);
  await fs.writeFile(join(sourceRoot,'source.txt'),'acceptance source\n',{mode:0o600});
