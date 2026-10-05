@@ -1,5 +1,5 @@
 import {describe,expect,it,vi} from 'vitest';
-import {resolveRemoteBridgeGitHubConfig,resolveRemoteBridgeInstanceId,resolveRemoteBridgeRuntimeConfig,runRemoteBridgeLoop} from '../../src/server/remoteBridgeMain.js';
+import {createRemoteBridgeLifecycleLock,resolveRemoteBridgeGitHubConfig,resolveRemoteBridgeInstanceId,resolveRemoteBridgeRuntimeConfig,runRemoteBridgeLoop} from '../../src/server/remoteBridgeMain.js';
 
 describe('remote bridge main loop',()=>{
  it('requires an explicit matching non-root runtime identity',()=>{const env={RBRIDGE_RUNTIME_USER:'bridge-runtime'};expect(resolveRemoteBridgeRuntimeConfig(env,{username:'bridge-runtime',homedir:'/srv/bridge-runtime',uid:1200})).toEqual({runtimeUser:'bridge-runtime',stateRoot:'/srv/bridge-runtime/.local/state/rbridge'});expect(()=>resolveRemoteBridgeRuntimeConfig({}, {username:'bridge-runtime',homedir:'/srv/bridge-runtime',uid:1200})).toThrow('REMOTE_BRIDGE_RUNTIME_USER_CONFIG_INVALID');expect(()=>resolveRemoteBridgeRuntimeConfig(env,{username:'other',homedir:'/srv/other',uid:1201})).toThrow('REMOTE_BRIDGE_RUNTIME_USER_REQUIRED');expect(()=>resolveRemoteBridgeRuntimeConfig(env,{username:'bridge-runtime',homedir:'/srv/bridge-runtime',uid:0})).toThrow('REMOTE_BRIDGE_RUNTIME_USER_REQUIRED');expect(()=>resolveRemoteBridgeRuntimeConfig(env,{username:'bridge-runtime',homedir:'relative',uid:1200})).toThrow('REMOTE_BRIDGE_HOME_INVALID');});
@@ -37,4 +37,14 @@ describe('remote bridge main loop',()=>{
  });
 
 
+});
+
+describe('relay composite owner lifecycle',()=>{
+ it('stops ingress and settles handlers and FlowPilot before releasing either exclusion',async()=>{
+  const events:string[]=[];let settle!:()=>void,flowStop!:()=>void;
+  const handler=new Promise<void>(done=>settle=done),flow=new Promise<void>(done=>flowStop=done);
+  const lock=createRemoteBridgeLifecycleLock({relay:{async release(){events.push('relay-released');}},owner:{async close(beforeRelease){events.push('ipc-stopped');await handler;events.push('handlers-settled');await beforeRelease?.();events.push('owner-released');}},async stopIngress(){events.push('flow-stopping');await flow;events.push('flow-stopped');}});
+  const closing=lock.release();void closing.catch(()=>undefined);await Promise.resolve();expect(events).toEqual(['flow-stopping','ipc-stopped']);settle();await new Promise<void>(done=>setImmediate(done));expect(events).toEqual(['flow-stopping','ipc-stopped','handlers-settled']);flowStop();await closing;await lock.release();expect(events).toEqual(['flow-stopping','ipc-stopped','handlers-settled','flow-stopped','owner-released','relay-released']);
+ });
+ it('retains relay exclusion when actual owner settlement fails',async()=>{const release=vi.fn(async()=>{}),owner={async close(){throw new Error('SETTLEMENT_FAILED');}};const lock=createRemoteBridgeLifecycleLock({relay:{release},owner,async stopIngress(){}});await expect(lock.release()).rejects.toThrow('SETTLEMENT_FAILED');expect(release).not.toHaveBeenCalled();});
 });

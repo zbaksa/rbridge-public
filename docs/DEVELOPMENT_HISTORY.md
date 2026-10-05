@@ -34,6 +34,14 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ---
 
+## 2026-10-05 — Shared read-only core P2A draft
+
+[PR #32](https://github.com/zbaksa/rbridge-public/pull/32) implements the approved shared owner for GitHub and MCP. New SAFE HEALTH and six FILE reads use scoped durable intent, original policy snapshots, independently verified output, recovery and cancellation. Disabled SAFE mutations/process/transfers have durable BLOCK receipts. Existing legacy V1/V2 records, V1/APP_RUN and FlowPilot keep their engine with a common core identity guard.
+
+The production main now acquires both exclusions before owner/guarded legacy initialization and retains them through actual core/FlowPilot settlement. Tests use real Linux locks, sockets and processes, modern/legacy official SDK stdio clients, authenticated GitHub convergence and IO/restart/publication faults. Disconnected IPC regression tests first reproduced excess unsettled delegation and premature close; the fix retains capacity until actual delegated work settles.
+
+Exact final source/tree, supported Node22 and complete verification are recorded in the PR. [P2A behavior and limits](remote-bridge-v2-p2a.md) distinguish executable actions, historical P1 behavior and future P2B–D. **Status: UNMERGED DRAFT. Live deployment: NOT DEPLOYED.** Existing historical source/CI/deployment entries below are unchanged.
+
 ## 2026-10-04 — Shared intent argument guard
 
 P2 preparation reproduced a shared-contract normalization defect: an own JSON `__proto__` argument could become an inherited handler value while its intent digest collapsed to the empty-argument digest. The MCP adapter already rejected this input; the shared P0 parser now rejects the same prototype-sensitive keys recursively for FILE, PROCESS and CHUNK arguments before either intent or scope hashing. String values and ordinary semantic digests remain unchanged.

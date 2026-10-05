@@ -1,4 +1,5 @@
-import {mkdtemp,readdir,rm,stat,writeFile} from 'node:fs/promises';
+import {link,lstat,mkdtemp,readFile,readdir,rm,stat,symlink,writeFile} from 'node:fs/promises';
+import {execFileSync,spawn} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,describe,expect,it} from 'vitest';
@@ -56,4 +57,22 @@ describe('remote bridge durable store',()=>{
     await expect(acquireRemoteBridgeProcessLock(dir)).rejects.toThrow('REMOTE_BRIDGE_PROCESS_LOCKED');
     await lock.release();
   });
+
+  it.each(['FIFO','symlink','hardlink','oversized','shared-mode'] as const)('refuses an unsafe relay lock without blocking, following or deleting it (%s)',async kind=>{
+    const dir=await root(),path=join(dir,'relay.lock'),target=join(dir,'retained-target'),stale='2147483647\n';
+    if(kind==='FIFO')execFileSync('/usr/bin/mkfifo',['-m','600',path]);
+    else if(kind==='symlink'){execFileSync('/usr/bin/mkfifo',['-m','600',target]);await symlink(target,path);}
+    else if(kind==='hardlink'){await writeFile(target,stale,{mode:0o600});await link(target,path);}
+    else await writeFile(path,kind==='oversized'?stale+' '.repeat(65536):stale,{mode:kind==='shared-mode'?0o644:0o600});
+    const before=await lstat(path),bytes=before.isFile()?await readFile(path):undefined;
+    const child=spawn(process.execPath,['--import','tsx','tests/fixtures/rbridge-relay-lock-child.ts',dir],{stdio:['ignore','pipe','pipe']});
+    let stdout='',stderr='',timedOut=false;child.stdout.on('data',data=>stdout+=String(data));child.stderr.on('data',data=>stderr+=String(data));
+    const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},3000);
+    try{await new Promise<void>((resolve,reject)=>{child.once('error',reject);child.once('exit',()=>resolve());});}finally{clearTimeout(timer);if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');}
+    expect(stdout).toContain('BEFORE_ACQUIRE\n');expect(stderr).toBe('');expect(timedOut).toBe(false);expect(stdout).toContain('REJECTED:REMOTE_BRIDGE_PROCESS_LOCKED\n');expect(stdout).not.toContain('ACQUIRED\n');
+    const after=await lstat(path);expect(after.ino).toBe(before.ino);expect(after.mode).toBe(before.mode);expect(after.nlink).toBe(before.nlink);
+    if(bytes)expect(await readFile(path)).toEqual(bytes);
+    if(kind==='symlink')expect((await lstat(target)).isFIFO()).toBe(true);
+    if(kind==='hardlink')expect(await readFile(target,'utf8')).toBe(stale);
+  },10000);
 });
