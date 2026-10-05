@@ -26,14 +26,21 @@ export function createRBridgeGitHubCore(options:RBridgeGitHubCoreOptions){
           const json:unknown=JSON.parse(issue.body);assertBoundedRBridgeJson(json);
           const request=parseRemoteBridgeRequestV2({...input,allowExpired:true});
           const submission=parseRBridgeOperationSubmissionV1({schema:'RBRIDGE_OPERATION_SUBMISSION_V1',operationId:request.requestId,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId,operation:request.operation});assertBoundedRBridgeJson(submission);
+          const identity={repository,issueNumber:issue.number,authorLogin,title:issue.title,bodySha256:sha(issue.body),requestSha256:remoteBridgeRequestV2Digest(request),operationId:submission.operationId,intentSha256:rbridgeOperationIntentDigest(submission)};
           const old=await deliveries.get(issue.number);
-          if(old){const state=await publisher.reconcile(old);return state==='UNAVAILABLE'||state==='IDENTITY_BLOCKED'?'PUBLICATION_UNAVAILABLE':'CORE';}
+          if(old){
+            if(Object.entries(identity).some(([key,value])=>old.identity[key as keyof typeof identity]!==value)){
+              if(old.state==='PENDING')await publisher.reconcile(old);
+              return 'PUBLICATION_UNAVAILABLE';
+            }
+            const state=await publisher.reconcile(old);return state==='UNAVAILABLE'||state==='IDENTITY_BLOCKED'?'PUBLICATION_UNAVAILABLE':'CORE';
+          }
           const ctx=context(issue.number),scope={operationId:submission.operationId,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId};
           const known=parseRBridgeCoreLookupResult(await core.status(submission.operationId,ctx),scope);
           if(known.status==='NOT_FOUND'){if(current.state!=='open')throw new Error('RBRIDGE_GITHUB_CLOSED_NEW_REQUEST');parseRemoteBridgeRequestV2(input);}
           const admitted=parseRBridgeCoreSubmitResult(await core.submit(submission,ctx,new AbortController().signal),submission);
           if(admitted.status==='REJECTED')return 'PUBLICATION_UNAVAILABLE';
-          const record=await deliveries.claim({repository,issueNumber:issue.number,authorLogin,title:issue.title,bodySha256:sha(issue.body),requestSha256:remoteBridgeRequestV2Digest(request),operationId:submission.operationId,intentSha256:rbridgeOperationIntentDigest(submission)});
+          const record=await deliveries.claim(identity);
           const state=await publisher.reconcile(record);return state==='UNAVAILABLE'||state==='IDENTITY_BLOCKED'?'PUBLICATION_UNAVAILABLE':'CORE';
         });
       }catch{return 'PUBLICATION_UNAVAILABLE';}
