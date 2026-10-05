@@ -6,8 +6,8 @@ import {cleanupRBridgeTestStates} from '../fixtures/rbridge-core-state.js';
 import {createRBridgeGitHubFixture,githubFence,githubHash,githubUnfence} from '../fixtures/rbridge-github.js';
 const cleanup:Array<()=>Promise<void>>=[];
 afterEach(async()=>{for(const run of cleanup.splice(0).reverse())await run();await cleanupRBridgeTestStates();});
-async function fixture(output?:Parameters<typeof createRBridgeGitHubFixture>[0]){const f=await createRBridgeGitHubFixture(output);cleanup.push(()=>f.core.close());return f;}
-async function ready(f:Awaited<ReturnType<typeof fixture>>){await f.adapter.admit(f.issue());return f.terminal();}
+async function fixture(output?:Parameters<typeof createRBridgeGitHubFixture>[0]){const f=await createRBridgeGitHubFixture(output);cleanup.push(()=>f.close());return f;}
+async function ready(f:Awaited<ReturnType<typeof fixture>>){expect(await f.adapter.admit(f.issue())).toBe('CORE');expect((await f.deliveries.get(17))!.state).toBe('PENDING');expect(f.comments.get(17)).toEqual([]);return f.terminal();}
 describe('independent resumable GitHub delivery',()=>{
   it('publication failure never reexecutes',async()=>{
     const f=await fixture(),original=await ready(f),before=await readFile(join(f.root,'operations/shared-read.json'));f.failAfter('COMMENT');

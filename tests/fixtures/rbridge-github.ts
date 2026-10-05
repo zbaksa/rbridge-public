@@ -16,7 +16,9 @@ export function githubIssue(number=17,id='shared-read',operation:RBridgeOperatio
 export async function createRBridgeGitHubFixture(output:RBridgeJsonValue={observed:'read'}){
   const state=await createRBridgeTestState(),results=await createRBridgeExecutionResults(state),deliveries=await createRBridgeDeliveryJournal(state);
   let calls=0,now=new Date('2026-10-05T10:01:00.000Z');
-  const core=createRBridgeExecutionCore({...state,results,subjects:{GITHUB:githubRepository+':'+githubAuthor,MCP:`uid:${state.uid}`},legacyReservations:{async isReserved(){return false;}},handler:{async execute(){calls++;return output;}}});
+  let releaseHandler!:()=>void;
+  const handlerGate=new Promise<void>(resolve=>{releaseHandler=resolve;});
+  const core=createRBridgeExecutionCore({...state,results,subjects:{GITHUB:githubRepository+':'+githubAuthor,MCP:`uid:${state.uid}`},legacyReservations:{async isReserved(){return false;}},handler:{async execute(){calls++;await handlerGate;return output;}}});
   const issues=new Map<number,GitHubBridgeIssue&{state:'open'|'closed'}>(),comments=new Map<number,RBridgeGitHubComment[]>(),events:string[]=[],pages:number[]=[];
   let nextId=1,failAt:string|undefined;
   function issue(value=githubIssue()){issues.set(value.number,{...value,state:'open'});comments.set(value.number,[]);return value;}
@@ -31,7 +33,9 @@ export async function createRBridgeGitHubFixture(output:RBridgeJsonValue={observ
   const options={repository:githubRepository,authorLogin:githubAuthor,binding:state.binding,core,deliveries,github,now:()=>now};
   const adapter=createRBridgeGitHubCore(options);
   async function terminal(id='shared-read'){
+    releaseHandler();
     const until=Date.now()+5000;while(Date.now()<until){const found=await core.status(id,state.context);if(found.status==='RECEIPT'&&found.receipt.phase==='TERMINAL')return found.receipt;await new Promise<void>(done=>setTimeout(done,5));}throw new Error('TEST_TERMINAL_DEADLINE');
   }
-  return {...state,results,deliveries,core,github,adapter,options,issues,comments,events,pages,issue,addComment,terminal,output,get calls(){return calls;},setNow(value:Date){now=value;},failAfter(name:string){failAt=name;}};
+  async function close(){releaseHandler();await core.close();}
+  return {...state,results,deliveries,core,github,adapter,options,issues,comments,events,pages,issue,addComment,terminal,close,output,get calls(){return calls;},setNow(value:Date){now=value;},failAfter(name:string){failAt=name;}};
 }

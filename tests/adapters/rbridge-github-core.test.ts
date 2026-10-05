@@ -6,7 +6,7 @@ import {cleanupRBridgeTestStates} from '../fixtures/rbridge-core-state.js';
 import {createRBridgeGitHubFixture,githubIssue,githubRepository,githubUnfence} from '../fixtures/rbridge-github.js';
 const cleanup:Array<()=>Promise<void>>=[];
 afterEach(async()=>{for(const run of cleanup.splice(0).reverse())await run();await cleanupRBridgeTestStates();});
-async function fixture(){const f=await createRBridgeGitHubFixture();cleanup.push(()=>f.core.close());return f;}
+async function fixture(){const f=await createRBridgeGitHubFixture();cleanup.push(()=>f.close());return f;}
 describe('authenticated GitHub core admission',()=>{
   it('authenticates before delegation and preserves known expired IDs',async()=>{
     const f=await fixture(),request=f.issue();await f.adapter.admit(request);const receipt=await f.terminal();
