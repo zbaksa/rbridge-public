@@ -13,7 +13,7 @@ function exited(child:ChildProcess){if(child.exitCode!==null||child.signalCode!=
 afterEach(async()=>{for(const child of children.splice(0)){child.kill('SIGKILL');await exited(child);}for(const pid of supervisors.splice(0))try{process.kill(pid,'SIGKILL');}catch{}await Promise.all(locks.splice(0).map(lock=>lock.close()));await Promise.all(roots.splice(0).map(path=>rm(path,{recursive:true,force:true})));});
 async function owner(path:string,mode='hold'){
   const child=spawn(process.execPath,['--import','tsx',resolve('tests/fixtures/rbridge-owner-lock-child.ts'),path,mode],{stdio:['ignore','pipe','pipe']});children.push(child);
-  const message=await new Promise<{state:string;pid?:number;inode?:number;supervisorPid?:number}>((done,reject)=>{
+  const message=await new Promise<{state:string;pid?:number;inode?:number;supervisorPid?:number;helperAcquired?:boolean}>((done,reject)=>{
     let stdout='',stderr='';const timer=setTimeout(()=>{child.kill('SIGKILL');reject(new Error('OWNER_FIXTURE_DEADLINE'));},5000);
     const fail=(error:Error)=>{clearTimeout(timer);reject(error);};child.once('error',fail);
     child.stderr!.on('data',b=>{stderr+=String(b);if(stderr.length>8192)fail(new Error('OWNER_FIXTURE_STDERR_LIMIT'));});
@@ -37,7 +37,7 @@ describe('owner-lifetime Linux flock',()=>{
     const replacement=await owner(path);expect(replacement.message.state).toBe('HELD');expect(replacement.message.inode).toBe(first.message.inode);
   });
   it('killed helper never confirms acquisition and cleanup permits a replacement',async()=>{
-    const path=await root(),killed=await owner(path,'kill-helper');expect(killed.message.state).toBe('REJECTED');await exited(killed.child);expect((await owner(path)).message.state).toBe('HELD');
+    const path=await root(),killed=await owner(path,'kill-helper');expect(killed.message.state).toBe('REJECTED');expect(killed.message.helperAcquired).toBe(true);await exited(killed.child);expect((await owner(path)).message.state).toBe('HELD');
   });
   it('unconfirmed acquisition never starts IPC and closes the actually acquired descriptor',async()=>{
     const path=await root();let ipcStarts=0;
