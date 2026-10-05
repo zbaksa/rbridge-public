@@ -51,6 +51,11 @@ describe('authenticated GitHub core admission',()=>{
     const f=await fixture(),request=f.issue();await f.adapter.admit(request);const original=await f.terminal();f.issues.get(17)!.authorLogin='attacker';
     await f.adapter.reconcileDeliveries(20);expect((await f.deliveries.get(17))!.state).toBe('IDENTITY_BLOCKED');expect(f.calls).toBe(1);expect((await f.journal.get('shared-read'))!.receipt).toEqual(original);expect(f.events).not.toContain('CLOSE');
   });
+  it('changed published issue identity cannot be reported as a successful admission',async()=>{
+    const f=await fixture();await f.adapter.admit(f.issue());const original=await f.terminal();await f.adapter.reconcileDeliveries(20);const published=(await f.deliveries.get(17))!,comments=structuredClone(f.comments.get(17));expect(published.state).toBe('PUBLISHED');
+    const changed=githubIssue(17,'shared-read',{kind:'FILE',action:'READ',target:'/mnt/data/other',args:{}});f.issues.set(17,{...changed,state:'open'});
+    expect(await f.adapter.admit(changed)).toBe('PUBLICATION_UNAVAILABLE');expect(await f.deliveries.get(17)).toEqual(published);expect((await f.journal.get('shared-read'))!.receipt).toEqual(original);expect(f.comments.get(17)).toEqual(comments);expect(f.calls).toBe(1);
+  });
   it('a closed fresh issue cannot admit an unexecuted operation',async()=>{
     const f=await fixture(),request=f.issue();f.issues.get(17)!.state='closed';expect(await f.adapter.admit(request)).toBe('PUBLICATION_UNAVAILABLE');expect(f.journal.capacity().identities).toBe(0);
   });

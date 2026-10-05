@@ -31,7 +31,7 @@ export async function createRBridgeGitHubFixture(output:RBridgeJsonValue={observ
   const options={repository:githubRepository,authorLogin:githubAuthor,binding:state.binding,core,deliveries,github,now:()=>now};
   const adapter=createRBridgeGitHubCore(options);
   async function terminal(id='shared-read'){
-    const until=Date.now()+5000;while(Date.now()<until){const record=await state.journal.get(id);if(record?.receipt.phase==='TERMINAL')return record.receipt;await new Promise<void>(done=>setTimeout(done,5));}throw new Error('TEST_TERMINAL_DEADLINE');
+    const until=Date.now()+5000;while(Date.now()<until){const found=await core.status(id,state.context);if(found.status==='RECEIPT'&&found.receipt.phase==='TERMINAL')return found.receipt;await new Promise<void>(done=>setTimeout(done,5));}throw new Error('TEST_TERMINAL_DEADLINE');
   }
   return {...state,results,deliveries,core,github,adapter,options,issues,comments,events,pages,issue,addComment,terminal,output,get calls(){return calls;},setNow(value:Date){now=value;},failAfter(name:string){failAt=name;}};
 }
