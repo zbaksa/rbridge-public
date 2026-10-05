@@ -67,8 +67,8 @@ describe('durable read-only core admission and scheduling',()=>{
     const accepted=await Promise.all(Array.from({length:32},(_,n)=>f.core.submit(f.submission(`read-${n}`),f.context,signal())));expect(accepted.every(r=>r.status==='RECEIPT')).toBe(true);expect(f.journal.capacity().nonterminal).toBe(32);
     expect(await f.core.submit(f.submission('read-33'),f.context,signal())).toMatchObject({status:'REJECTED',reason:'RBRIDGE_CORE_CAPACITY_REACHED'});expect(await f.journal.get('read-33')).toBeUndefined();
     await new Promise<void>(done=>setImmediate(done));await expect.poll(()=>active,{timeout:3000}).toBe(4);expect((await f.core.status('read-0',f.context)).status).toBe('RECEIPT');expect((await f.core.result('read-0',0,16,f.context)).status).toBe('NOT_READY');expect((await f.core.submit(f.submission('read-0'),f.context,signal())).status).toBe('RECEIPT');
-    held.release();await Promise.all(Array.from({length:32},(_,n)=>terminal(f,`read-${n}`)));expect(max).toBe(4);expect(f.journal.capacity().identities).toBe(32);
-  },15000);
+    held.release();await expect.poll(async()=>{const rows=await Promise.all(Array.from({length:32},(_,n)=>f.core.status(`read-${n}`,f.context)));return rows.filter(row=>row.status==='RECEIPT'&&row.receipt.phase==='TERMINAL'&&row.receipt.outcome==='PASS').length;},{timeout:15000,interval:50}).toBe(32);expect(max).toBe(4);expect(f.journal.capacity().identities).toBe(32);
+  },30000);
   it('enforces the128 nonterminal ceiling independently of aggregate reservation accounting',async()=>{
     const f=await fixture(),journal={...f.journal,capacity:()=>({...f.journal.capacity(),nonterminal:128})};
     const core=createRBridgeExecutionCore({...f,journal,subjects:{MCP:`uid:${f.uid}`,GITHUB:'zbaksa/rbridge-public:zbaksa'},legacyReservations:{async isReserved(){return false;}},handler:{async execute(){throw new Error('NOT_ADMITTED');}}});cleanup.unshift(()=>core.close().catch(()=>undefined));

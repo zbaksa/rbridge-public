@@ -25,20 +25,22 @@ export async function startRBridgeCoreIpcServer(options:RBridgeCoreIpcServerOpti
   const binding=freezeRBridgeValue(parseRBridgeCoreBinding(options.binding)),uid=binding.runtimeUid;runtime(uid);assertRBridgeOwnerLockHeld(options.root);
   if(activeServers.has(options.root))fail();activeServers.add(options.root);
   const files=options.files??createRBridgeStateFiles();let parent:FileHandle|undefined;
-  const sockets=new Set<Socket>();let ready=false,closing:Promise<void>|undefined;
+  const sockets=new Set<Socket>(),slots=new Set<Socket>(),delegations=new Set<Promise<void>>();let ready=false,closing:Promise<void>|undefined;
   const server=createServer({allowHalfOpen:true},socket=>{
     socket.on('error',()=>undefined);
-    if(!ready||sockets.size>=limits.connections){socket.destroy();return;}
-    sockets.add(socket);const buffer=Buffer.alloc(limits.requestBytes),controller=new AbortController();let total=0,finished=false,rpcTimer:ReturnType<typeof setTimeout>|undefined;
+    if(!ready||slots.size>=limits.connections){socket.destroy();return;}
+    sockets.add(socket);slots.add(socket);let delegationActive=false;
+    const releaseSlot=()=>{if(!sockets.has(socket)&&!delegationActive)slots.delete(socket);};
+    const buffer=Buffer.alloc(limits.requestBytes),controller=new AbortController();let total=0,finished=false,rpcTimer:ReturnType<typeof setTimeout>|undefined;
     const frameTimer=setTimeout(()=>finish({schema:'RBRIDGE_CORE_RPC_ERROR_V1',reason:'RBRIDGE_CORE_RPC_LIMIT'},true),limits.frameMs);
     function finish(response:RBridgeCoreRpcResponse,abort=false){
       if(finished)return;finished=true;clearTimeout(frameTimer);clearTimeout(rpcTimer);if(abort)controller.abort();
       try{socket.end(encoded(response,limits.responseBytes));}catch{socket.destroy();}
     }
-    socket.once('close',()=>{sockets.delete(socket);clearTimeout(frameTimer);clearTimeout(rpcTimer);if(!finished){finished=true;controller.abort();}});
+    socket.once('close',()=>{sockets.delete(socket);clearTimeout(frameTimer);clearTimeout(rpcTimer);if(!finished){finished=true;controller.abort();}releaseSlot();});
     socket.on('data',(data:Buffer)=>{if(finished)return;if(total+data.length>limits.requestBytes){finish({schema:'RBRIDGE_CORE_RPC_ERROR_V1',reason:'RBRIDGE_CORE_RPC_LIMIT'},true);return;}data.copy(buffer,total);total+=data.length;});
-    socket.once('end',()=>{void (async()=>{
-      if(finished)return;clearTimeout(frameTimer);let request:RBridgeCoreRpcRequest;
+    socket.once('end',()=>{delegationActive=true;const work=(async()=>{
+      if(finished||!ready)return;clearTimeout(frameTimer);let request:RBridgeCoreRpcRequest;
       try{assertRBridgeOwnerLockHeld(options.root);request=parseRBridgeCoreRpcRequest(decodeRBridgeRpcFrame(buffer.subarray(0,total),limits.requestBytes));}
       catch(error){finish({schema:'RBRIDGE_CORE_RPC_ERROR_V1',reason:(error as Error).message==='RBRIDGE_CORE_RPC_LIMIT'?'RBRIDGE_CORE_RPC_LIMIT':'RBRIDGE_CORE_RPC_INVALID'},true);return;}
       const context:RBridgeTransportContextV1={schema:'RBRIDGE_TRANSPORT_CONTEXT_V1',transport:'MCP',authenticatedSubject:`uid:${uid}`,principalId:binding.principalId,requestRef:`ipc:${request.action}${request.action==='BINDING'?'':':'+(request.action==='SUBMIT'?request.submission.operationId:request.operationId)}`};
@@ -54,7 +56,10 @@ export async function startRBridgeCoreIpcServer(options:RBridgeCoreIpcServerOpti
         }
         finish(parseRBridgeCoreRpcResponse(value,request,binding));
       }catch{finish({schema:'RBRIDGE_CORE_RPC_ERROR_V1',reason:'RBRIDGE_CORE_RPC_UNAVAILABLE'},true);}
-    })();});
+    })();delegations.add(work);
+      const settled=()=>{delegationActive=false;delegations.delete(work);releaseSlot();};
+      void work.then(settled,()=>{settled();finish({schema:'RBRIDGE_CORE_RPC_ERROR_V1',reason:'RBRIDGE_CORE_RPC_UNAVAILABLE'},true);});
+    });
   });
   try{
     await files.validateTree(options.root,uid);parent=await files.directory(options.root,uid,true);const path=rbridgeStateFdPath(parent,'core.sock');
@@ -62,7 +67,7 @@ export async function startRBridgeCoreIpcServer(options:RBridgeCoreIpcServerOpti
     await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(path,()=>{server.off('error',reject);resolve();});});
     await chmod(path,0o600);socketIdentity(await lstat(path),uid);assertRBridgeOwnerLockHeld(options.root);ready=true;
     const retained=parent;
-    return Object.freeze({connectionCount:()=>sockets.size,close(){closing??=(async()=>{ready=false;for(const socket of sockets)socket.destroy();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await retained.close();activeServers.delete(options.root);})();return closing;}});
+    return Object.freeze({connectionCount:()=>sockets.size,close(){closing??=(async()=>{ready=false;for(const socket of sockets)socket.destroy();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));while(delegations.size)await Promise.allSettled([...delegations]);await retained.close();activeServers.delete(options.root);})();return closing;}});
   }catch(error){ready=false;for(const socket of sockets)socket.destroy();if(server.listening)await new Promise<void>(resolve=>server.close(()=>resolve()));await parent?.close().catch(()=>undefined);activeServers.delete(options.root);throw error;}
 }
 export async function connectRBridgeCoreIpcClient(options:RBridgeCoreIpcClientOptions):Promise<RBridgeCorePort&{binding():Promise<RBridgeCoreBinding>;close():Promise<void>}>{

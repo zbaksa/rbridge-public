@@ -32,19 +32,20 @@ RBridge is public under the MIT license. The current codebase is **pre-1.0**: th
 
 A source checkout never grants machine access by itself. Every deployment must configure its own runtime identity, trusted GitHub repository/author, credentials, filesystem permissions, and optional execution broker.
 
-The [P1 MCP SAFE foundation](docs/MCP.md) adds local stdio discovery and a strict normalized adapter. Its shipped entrypoint returns BLOCKED until the shared durable execution core is connected in P2; it is not an executable V2 release.
+The [P2A shared read-only core](docs/remote-bridge-v2-p2a.md) connects GitHub and local MCP stdio to one durable owner in this source increment. New SAFE requests enable HEALTH and six bounded FILE read actions; other SAFE actions get a durable BLOCK. Existing legacy records, V1/APP_RUN and FlowPilot keep their original engine. [PR #32](https://github.com/zbaksa/rbridge-public/pull/32) remains an unmerged draft; installation and live deployment are qualified separately. The [P1 MCP foundation](docs/MCP.md) records the earlier transport-only behavior.
 
 ## What it can do
 
 | Capability | Current behavior |
 |---|---|
 | Application execution | Submit/status/result through a compatible controller broker using bounded tool payloads |
-| File operations | List, stat, read, multi-read, binary read/write, text write/append, exact edit, move and search |
-| Process sessions | Durable START / STATUS / READ_OUTPUT / WRITE_INPUT / TERMINATE lifecycle |
-| Large transfers | Chunk PUT / GET / FINALIZE with SHA-256 verification and durable manifests |
+| File operations | New SAFE: list, stat, read, multi-read, binary read and search; accepted legacy records keep their engine |
+| Process sessions | Existing accepted legacy lifecycle; new SAFE PROCESS is policy-blocked in P2A |
+| Large transfers | Existing accepted legacy transfers; new SAFE CHUNK is policy-blocked in P2A |
 | Health | Safe operational snapshot: release, uptime, queue/session/transfer counts and last GitHub poll |
 | Durable requests | Persistent phase/state, replay after restart, collision detection |
-| GitHub transport | Poll authorized Issues, publish structured result comments, close completed requests |
+| GitHub transport | Authenticated Issues share core identity with MCP; independent durable delivery verifies comments/chunks and closure |
+| MCP transport | Local stdio capabilities, submit, status, paged result and cancel through the checked bound owner |
 | Windmill orchestration | Recommended free/open-source workflow layer using the public GitHub transport |
 | Evidence | Deterministic request/result digests, durable state and replay/collision evidence |
 | Failure semantics | Distinguishes terminal failure, authorization block, and uncertain execution |
@@ -64,7 +65,7 @@ RBridge is **not trying to replace every remote-control tool**.
 | Source-controlled process profiles | **Yes** | Configurable terminal permissions/guardrails | No | Implementation-specific |
 | Structured execution certainty | PASS / FAIL / BLOCKED / UNKNOWN | Tool result/error model | Exit status / transport errors | Tool result/error model |
 | Headless Linux service | **Primary deployment** | Supported, but product is MCP/client-oriented | Yes | Depends on server |
-| MCP-native today | No | **Yes** | No | **Yes** |
+| MCP-native in this source | Local stdio to the shared owner | **Yes** | No | **Yes** |
 | Best fit | Autonomous or scheduled automation where replay/audit boundaries matter | Interactive AI-assisted computer use | Human/admin remote access | Connecting AI hosts to app-specific tools |
 
 For a detailed and sourced comparison, see [RBridge compared](docs/COMPARISON.md).
@@ -95,11 +96,13 @@ export RBRIDGE_RUNTIME_USER="$(id -un)"
 export RBRIDGE_GITHUB_REPOSITORY="YOUR_GITHUB_LOGIN/YOUR_CONTROL_REPO"
 export RBRIDGE_GITHUB_AUTHOR="YOUR_GITHUB_LOGIN"
 export RBRIDGE_RELEASE_SHA="$(git rev-parse HEAD)"
+export RBRIDGE_MCP_PRINCIPAL_ID="local-operator"
+export RBRIDGE_INSTANCE_ID="local-instance"
 
 node dist/server/server/remoteBridgeMain.js
 ```
 
-RBridge will poll only the configured repository and only requests authored by the configured login.
+RBridge will poll only the configured repository and only requests authored by the configured login. The P2A owner and MCP clients must use the same explicit principal/target and OS account on a supported persistent local filesystem; see [P2A configuration and limits](docs/remote-bridge-v2-p2a.md).
 
 ### 4. Send a health request
 
@@ -115,6 +118,7 @@ Full walkthrough: **[Quick Start](docs/QUICKSTART.md)**.
 - [Security model](docs/SECURITY_MODEL.md) — what RBridge does and does not protect
 - [Configuration](docs/CONFIGURATION.md) — environment variables and deployment dependencies
 - [Protocol reference](docs/PROTOCOL.md) — V2 request operations and constraints
+- [P2A shared core](docs/remote-bridge-v2-p2a.md) — connected GitHub/MCP reads, receipts, restart, cancellation, limits and installation boundary
 - [Windmill integration](docs/WINDMILL.md) — recommended public workflow orchestration
 - [Operations](docs/OPERATIONS.md) — health, logs, upgrade, backup and rollback
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — common error codes and recovery
@@ -147,7 +151,7 @@ RBridge is still privileged-adjacent software. A compromised trusted GitHub acco
 
 The public repository currently targets **Linux/systemd**.
 
-The base GitHub transport can serve HEALTH, FILE, PROCESS and CHUNK operations directly. Some capabilities have additional deployment dependencies:
+The P2A shared GitHub/MCP core enables HEALTH and bounded FILE reads. Existing accepted legacy records, V1/APP_RUN and FlowPilot continue on their original engine. New SAFE mutations, PROCESS and CHUNK are blocked. Additional deployment dependencies apply to the preserved legacy engine:
 
 - `APP_RUN` uses a compatible controller broker at the controller socket expected by the source.
 - Windmill is an external orchestrator and can use the public GitHub Issue transport without a Windmill-specific daemon inside RBridge.
