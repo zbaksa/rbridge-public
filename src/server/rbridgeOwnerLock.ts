@@ -4,6 +4,8 @@ import {lstat,open,type FileHandle} from 'node:fs/promises';
 import {RBRIDGE_CORE_LIMITS} from '../domain/rbridgeCoreProtocol.js';
 import {createRBridgeStateFiles,rbridgeStateFdPath,validateRBridgeStateHandle,type RBridgeStateFiles} from './rbridgeStateFiles.js';
 export interface RBridgeOwnerLockOptions{root:string;uid:number;files?:RBridgeStateFiles;runHelper?:(handle:FileHandle)=>Promise<void>;beforeConfirm?:()=>Promise<void>;}
+const heldOwners=new Map<string,FileHandle>();
+export function assertRBridgeOwnerLockHeld(root:string):void{if(!heldOwners.has(root))throw new Error('RBRIDGE_OWNER_LOCK_REQUIRED');}
 async function runFixedFlock(handle:FileHandle):Promise<void>{
   const child=spawn('/usr/bin/flock',['-n','9'],{shell:false,stdio:['ignore','ignore','ignore','ignore','ignore','ignore','ignore','ignore','ignore',handle.fd]});
   await new Promise<void>((resolve,reject)=>{
@@ -27,7 +29,8 @@ export async function acquireRBridgeOwnerLock(options:RBridgeOwnerLockOptions):P
     const visible=await lstat(path);validateRBridgeStateHandle(visible,uid,RBRIDGE_CORE_LIMITS.recordBytes);
     if(visible.dev!==identity.dev||visible.ino!==identity.ino)throw new Error('RBRIDGE_OWNER_LOCK_UNCONFIRMED');
     const retained=handle;let closing:Promise<void>|undefined;
-    return Object.freeze({close(){closing??=retained.close();return closing;}});
+    heldOwners.set(root,retained);
+    return Object.freeze({close(){if(!closing){if(heldOwners.get(root)===retained)heldOwners.delete(root);closing=retained.close();}return closing;}});
   }catch(error){await handle?.close().catch(()=>undefined);throw error;}
   finally{await parent.close();}
 }

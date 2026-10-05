@@ -1,14 +1,25 @@
 import {chmod,lstat,rm,symlink,writeFile} from 'node:fs/promises';
 import {Socket} from 'node:net';
 import {join} from 'node:path';
-import {afterEach,describe,expect,it} from 'vitest';
+import {afterEach,describe,expect,it,vi} from 'vitest';
 import {rbridgeOperationIntentDigest} from '../../src/domain/rbridgeExecutionContract.js';
-import {connectRBridgeCoreIpcClient,startRBridgeCoreIpcServer} from '../../src/server/rbridgeCoreIpc.js';
+import {connectRBridgeCoreIpcClient,decodeRBridgeRpcFrame,startRBridgeCoreIpcServer} from '../../src/server/rbridgeCoreIpc.js';
 import {cleanupRBridgeIpcFixtures,createRBridgeIpcFixture,rawRBridgeRpc} from '../fixtures/rbridge-ipc-owner.js';
 const clients:Array<{close():Promise<void>}>=[];
 afterEach(async()=>{await Promise.all(clients.splice(0).map(client=>client.close()));await cleanupRBridgeIpcFixtures();});
 const frame=(value:unknown)=>Buffer.from(JSON.stringify(value)+'\n');
 const result=(action:string,value:unknown)=>({schema:'RBRIDGE_CORE_RPC_RESULT_V1',action,value});
+
+describe('raw UTF8 frame boundaries',()=>{
+  it.each([65536,131072])('counts every byte including newline at the %s-byte boundary',limit=>{
+    const value='a'.repeat(limit-3),bytes=frame(value);expect(bytes.length).toBe(limit);expect(decodeRBridgeRpcFrame(bytes,limit)).toBe(value);
+    expect(()=>decodeRBridgeRpcFrame(Buffer.concat([bytes.subarray(0,-1),Buffer.from(' \n')]),limit)).toThrow('RBRIDGE_CORE_RPC_LIMIT');
+  });
+  it('requires one complete newline frame with fatal UTF8 and valid JSON',()=>{
+    expect(decodeRBridgeRpcFrame(frame({x:'é🧭'}),65536)).toEqual({x:'é🧭'});
+    for(const bytes of [Buffer.from([0xff,10]),Buffer.from('{\n'),Buffer.from('{}'),Buffer.from('{}\n '),Buffer.from('{}\n{}\n'),Buffer.from('\n')])expect(()=>decodeRBridgeRpcFrame(bytes,65536)).toThrow('RBRIDGE_CORE_RPC_INVALID');
+  });
+});
 
 describe('private one-RPC core IPC',()=>{
   it('requires a held owner lock before creating a socket',async()=>{
@@ -37,6 +48,7 @@ describe('private one-RPC core IPC',()=>{
     try{for(let n=0;n<64;n++){const socket=new Socket();sockets.push(socket);socket.on('error',()=>undefined);await new Promise<void>((resolve,reject)=>{socket.once('error',reject);socket.connect(join(f.root,'core.sock'),resolve);});}await new Promise<void>(done=>setImmediate(done));expect(server.connectionCount()).toBe(64);
       const extra=new Socket();sockets.push(extra);extra.on('error',()=>undefined);await new Promise<void>(done=>{extra.once('close',()=>done());extra.connect(join(f.root,'core.sock'));});expect(server.connectionCount()).toBe(64);expect(f.calls).toHaveLength(0);
     }finally{for(const socket of sockets)socket.destroy();}
+    await vi.waitFor(()=>expect(server.connectionCount()).toBe(0));
     const response=JSON.parse(await rawRBridgeRpc(f.root,[frame({schema:'RBRIDGE_CORE_RPC_V1',action:'BINDING'})]));expect(response.action).toBe('BINDING');
   });
   it('rejects socket modes, symlinks, ancestor modes, wrong UID and unavailable owner',async()=>{
