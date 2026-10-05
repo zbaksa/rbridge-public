@@ -1,8 +1,8 @@
 import {McpServer,type CallToolResult} from '@modelcontextprotocol/server';
 import {z} from 'zod/v4';
-import type {RBridgeCoreBinding,RBridgeCorePort} from '../domain/rbridgeCoreProtocol.js';
-import {assertBoundedRBridgeJson,parseRBridgeExecutionReceipt} from '../domain/rbridgeCoreValidation.js';
-import {parseRBridgeOperationSubmissionV1,RBRIDGE_SAFE_CAPABILITY_KINDS,rbridgeOperationIntentDigest,type RBridgeOperationSubmissionV1,type RBridgeTransportContextV1} from '../domain/rbridgeExecutionContract.js';
+import {RBRIDGE_CORE_LIMITS as limits,type RBridgeCoreBinding,type RBridgeCoreCancellationResult,type RBridgeCoreLookupResult,type RBridgeCorePort,type RBridgeCoreResultPage,type RBridgeScope} from '../domain/rbridgeCoreProtocol.js';
+import {assertBoundedRBridgeJson,parseRBridgeCoreBinding,parseRBridgeCoreCancellationResult,parseRBridgeCoreLookupResult,parseRBridgeCoreResultPage,parseRBridgeCoreSubmitResult} from '../domain/rbridgeCoreValidation.js';
+import {parseRBridgeOperationSubmissionV1,RBRIDGE_SAFE_CAPABILITY_KINDS,type RBridgeOperationSubmissionV1,type RBridgeTransportContextV1} from '../domain/rbridgeExecutionContract.js';
 
 export interface RBridgeMcpBinding{readonly authenticatedSubject:string;readonly principalId:string;readonly targetInstanceId:string;}
 export type RBridgeMcpCore=RBridgeCorePort;
@@ -43,14 +43,34 @@ export function resolveRBridgeMcpStdioBinding(env:Record<string,string|undefined
 }
 
 export function createRBridgeMcpSafeServer(options:RBridgeMcpSafeOptions):McpServer{
-  const binding=validateBinding(options.binding),core=options.core;
+  const binding=validateBinding(options.binding),core=options.core,bindingProvider=options.bindingProvider;
   const context:RBridgeTransportContextV1=Object.freeze({schema:'RBRIDGE_TRANSPORT_CONTEXT_V1',transport:'MCP',authenticatedSubject:binding.authenticatedSubject,principalId:binding.principalId});
   const server=new McpServer({name:'rbridge',version:'0.1.0-dev'});
+  const scope=(operationId:string):RBridgeScope=>({operationId,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId});
+  async function connection(){
+    if(!core)return {connected:false as const,reason:'RBRIDGE_MCP_CORE_NOT_CONFIGURED'};
+    try{
+      const owner=bindingProvider?parseRBridgeCoreBinding(await bindingProvider()):undefined;
+      if(owner&&(binding.authenticatedSubject!==`uid:${owner.runtimeUid}`||owner.principalId!==binding.principalId||owner.targetInstanceId!==binding.targetInstanceId))fail('RBRIDGE_MCP_BINDING_INVALID');
+      return {connected:true as const,owner};
+    }catch{return {connected:false as const,reason:'RBRIDGE_MCP_CORE_UNAVAILABLE'};}
+  }
+  async function query(tool:string,operationId:string,signal:AbortSignal,invoke:(expected:RBridgeScope)=>Promise<RBridgeCoreLookupResult|RBridgeCoreResultPage|RBridgeCoreCancellationResult>){
+    const expected=scope(operationId),base={schema:'RBRIDGE_MCP_CORE_QUERY_RESULT_V1',tool,...expected};
+    if(signal.aborted)return response({...base,status:'BLOCKED',reason:'RBRIDGE_MCP_ABORTED_BEFORE_QUERY'},true);
+    const connected=await connection();if(!connected.connected)return response({...base,status:'BLOCKED',reason:connected.reason},true);
+    if(signal.aborted)return response({...base,status:'BLOCKED',reason:'RBRIDGE_MCP_ABORTED_BEFORE_QUERY'},true);
+    try{const result=await invoke(expected);return response({schema:base.schema,tool,result},result.status==='REJECTED');}
+    catch{return response({...base,status:'UNCERTAIN',reason:'RBRIDGE_MCP_CORE_RESULT_UNKNOWN'},true);}
+  }
   server.registerTool('rbridge_capabilities',{
-    title:'RBridge SAFE capabilities',description:'Discover this transport binding and whether the shared durable execution core is connected.',inputSchema:z.strictObject({}),annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false}
-  },async()=>response({schema:'RBRIDGE_MCP_CAPABILITIES_V1',mode:'SAFE',principalId:binding.principalId,targetInstanceId:binding.targetInstanceId,supportedKinds:[...RBRIDGE_SAFE_CAPABILITY_KINDS],executionAvailable:core!==undefined,executionStatus:core?'CORE_CONNECTED':'BLOCKED'}));
+    title:'RBridge SAFE capabilities',description:'Discover the current owner connection, enabled actions and policy.',inputSchema:z.strictObject({}),annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false}
+  },async()=>{
+    const connected=await connection(),owner=connected.connected?connected.owner:undefined;
+    return response({schema:'RBRIDGE_MCP_CAPABILITIES_V1',mode:'SAFE',principalId:binding.principalId,targetInstanceId:binding.targetInstanceId,supportedKinds:[...RBRIDGE_SAFE_CAPABILITY_KINDS],enabledActions:owner?[...owner.enabledActions]:[],...(owner?{policySha256:owner.policySha256}:{}),executionAvailable:connected.connected,executionStatus:connected.connected?'CORE_CONNECTED':'BLOCKED',...(!connected.connected?{reason:connected.reason}:{})});
+  });
   server.registerTool('rbridge_submit',{
-    title:'Submit a SAFE operation',description:'Submit one transport-neutral operation ID to the shared durable core. Keep the same ID when reconciling; no automatic retry. The P1 entrypoint returns BLOCKED until P2 connects that core.',inputSchema,annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:false}
+    title:'Submit a SAFE operation',description:'Submit an operation to the durable owner. Keep the same operation ID when reconciling an uncertain acknowledgement.',inputSchema,annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false,openWorldHint:false}
   },async(input,request)=>{
     let submission:RBridgeOperationSubmissionV1;
     try{boundedJson(input);submission=freeze(parseRBridgeOperationSubmissionV1({schema:'RBRIDGE_OPERATION_SUBMISSION_V1',...input,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId}));}
@@ -58,10 +78,23 @@ export function createRBridgeMcpSafeServer(options:RBridgeMcpSafeOptions):McpSer
     const scope={schema:'RBRIDGE_MCP_SUBMISSION_RESULT_V1',operationId:submission.operationId,principalId:submission.principalId,targetInstanceId:submission.targetInstanceId};
     if(!core)return response({...scope,status:'BLOCKED',reason:'RBRIDGE_MCP_CORE_NOT_CONFIGURED'},true);
     if(request.mcpReq.signal.aborted)return response({...scope,status:'BLOCKED',reason:'RBRIDGE_MCP_ABORTED_BEFORE_SUBMISSION'},true);
+    const connected=await connection();if(!connected.connected)return response({...scope,status:'BLOCKED',reason:connected.reason},true);
+    if(request.mcpReq.signal.aborted)return response({...scope,status:'BLOCKED',reason:'RBRIDGE_MCP_ABORTED_BEFORE_SUBMISSION'},true);
     try{
-      const receipt=parseRBridgeExecutionReceipt(await core.submit(submission,context,request.mcpReq.signal),submission,rbridgeOperationIntentDigest(submission));
+      const result=parseRBridgeCoreSubmitResult(await core.submit(submission,context,request.mcpReq.signal),submission);
+      if(result.status==='REJECTED')return response({...scope,status:'BLOCKED',reason:result.reason},true);
+      const receipt=result.receipt;
       return response({...scope,status:'CORE_RECEIPT',receipt},receipt.outcome!==undefined&&receipt.outcome!=='PASS');
     }catch{return response({...scope,status:'UNCERTAIN',reason:'RBRIDGE_MCP_CORE_RESULT_UNKNOWN'},true);}
   });
+  server.registerTool('rbridge_status',{
+    title:'Read operation status',description:'Read the existing durable receipt for an operation ID.',inputSchema:z.strictObject({operationId:z.string().regex(ID_RE)}),annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}
+  },async(input,request)=>query('rbridge_status',input.operationId,request.mcpReq.signal,async expected=>parseRBridgeCoreLookupResult(await core!.status(input.operationId,context),expected)));
+  server.registerTool('rbridge_result',{
+    title:'Read an output page',description:'Read a bounded output page and its whole-result SHA256.',inputSchema:z.strictObject({operationId:z.string().regex(ID_RE),cursor:z.number().int().min(0).max(limits.outputBytes),maxBytes:z.number().int().min(1).max(limits.pageBytes)}),annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}
+  },async(input,request)=>query('rbridge_result',input.operationId,request.mcpReq.signal,async expected=>parseRBridgeCoreResultPage(await core!.result(input.operationId,input.cursor,input.maxBytes,context),expected,input.cursor,input.maxBytes)));
+  server.registerTool('rbridge_cancel',{
+    title:'Request cancellation',description:'Record cancellation intent for the original operation digest. Acknowledgement of intent does not prove completion.',inputSchema:z.strictObject({operationId:z.string().regex(ID_RE),intentSha256:z.string().regex(/^[0-9a-f]{64}$/)}),annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}
+  },async(input,request)=>query('rbridge_cancel',input.operationId,request.mcpReq.signal,async expected=>parseRBridgeCoreCancellationResult(await core!.requestCancel(input.operationId,input.intentSha256,context),expected,input.intentSha256)));
   return server;
 }

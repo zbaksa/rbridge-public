@@ -6,7 +6,7 @@ import {readFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {RBRIDGE_ENABLED_ACTIONS,type RBridgeCoreBinding,type RBridgeCorePort} from '../../src/domain/rbridgeCoreProtocol.js';
-import {rbridgeOperationIntentDigest} from '../../src/domain/rbridgeExecutionContract.js';
+import {rbridgeOperationIntentDigest,type RBridgeExecutionReceiptV1} from '../../src/domain/rbridgeExecutionContract.js';
 import {createRBridgeMcpSafeServer} from '../../src/server/rbridgeMcpSafe.js';
 import {connectRBridgeCoreIpcClient} from '../../src/server/rbridgeCoreIpc.js';
 import {cleanupRBridgeIpcFixtures,createRBridgeIpcFixture} from '../fixtures/rbridge-ipc-owner.js';
@@ -53,6 +53,13 @@ describe('checked MCP shared-core mapping',()=>{
   it.each(['rbridge_status','rbridge_result','rbridge_cancel'])('an invalid delegated %s response is uncertain and cannot leak text',async tool=>{
     const core=mcpTestPort(async()=>{throw new Error();});core.status=async()=>({status:'NOT_FOUND',operationId:'q',principalId:'attacker',targetInstanceId:binding.targetInstanceId});core.result=async()=>{throw new Error('PRIVATE_QUERY_TEXT');};core.requestCancel=async()=>({status:'NOT_FOUND',operationId:'different',principalId:binding.principalId,targetInstanceId:binding.targetInstanceId});const client=await memory(core),args=tool==='rbridge_status'?{operationId:'q'}:tool==='rbridge_result'?{operationId:'q',cursor:0,maxBytes:1}:{operationId:'q',intentSha256:'a'.repeat(64)};
     const result=await client.callTool({name:tool,arguments:args});expect(object(result)).toMatchObject({status:'UNCERTAIN',reason:'RBRIDGE_MCP_CORE_RESULT_UNKNOWN'});expect(JSON.stringify(result)).not.toContain('PRIVATE_QUERY_TEXT');
+  });
+  it.each(['hash','range','base64','scope','extra','bytes'] as const)('rejects an unverified result-page response (%s)',async problem=>{
+    const bytes=Buffer.from('{"ok":true}'),hash=createHash('sha256').update(bytes).digest('hex');
+    const receipt:RBridgeExecutionReceiptV1={schema:'RBRIDGE_EXECUTION_RECEIPT_V1',operationId:'q',principalId:binding.principalId,targetInstanceId:binding.targetInstanceId,intentSha256:'a'.repeat(64),policy:{schema:'RBRIDGE_POLICY_SNAPSHOT_V1',mode:'SAFE',policyVersion:'test',policySha256:'b'.repeat(64),decision:'ALLOW'},phase:'TERMINAL',outcome:'PASS',resultSha256:hash,cancellation:{state:'NONE'},sideEffects:{state:'NONE_PROVEN'},transitions:(['CLAIMED','AUTHORIZED','STARTING','RUNNING','TERMINAL'] as const).map((phase,index)=>({phase,at:`2026-10-05T00:00:00.00${index}Z`})),postconditions:[]};
+    const page={status:'RESULT' as const,receipt,resultSha256:hash,cursor:0,nextCursor:bytes.length,eof:true,dataBase64:bytes.toString('base64')};
+    if(problem==='hash')page.resultSha256='c'.repeat(64);if(problem==='range')page.nextCursor++;if(problem==='base64')page.dataBase64='not-base64';if(problem==='scope')page.receipt={...receipt,principalId:'attacker'};if(problem==='extra')Object.assign(page,{untrusted:true});if(problem==='bytes'){page.dataBase64=Buffer.alloc(32769).toString('base64');page.nextCursor=32769;}
+    const core=mcpTestPort(async()=>{throw new Error();}),result=vi.fn(async()=>page);core.result=result;const client=await memory(core);expect(object(await client.callTool({name:'rbridge_result',arguments:{operationId:'q',cursor:0,maxBytes:32768}}))).toMatchObject({status:'UNCERTAIN',reason:'RBRIDGE_MCP_CORE_RESULT_UNKNOWN'});expect(result).toHaveBeenCalledTimes(1);
   });
 });
 describe('real SDK stdio with an actual journal and Linux owner',()=>{
