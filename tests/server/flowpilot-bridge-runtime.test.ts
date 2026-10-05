@@ -1,13 +1,33 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {it} from 'vitest';
 import { createFlowPilotBridgeRuntime } from '../../src/server/flowPilotBridgeRuntime.js';
+import { createRBridgeLegacyClaimGuard } from '../../src/server/rbridgeLegacyReservations.js';
+import { createRBridgeOperationSerializer } from '../../src/server/rbridgeOperationSerializer.js';
 
 const remoteBridgeToken = 'b'.repeat(40), callbackToken = 'c'.repeat(40);
 const policyUrl = 'http://127.0.0.1:18088/api/v1/automation-engine/policy';
+it('runtime passes the common claim guard before controller execution or journal creation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'flowpilot-guard-'));
+  let calls = 0;
+  const runtime = createFlowPilotBridgeRuntime({
+    root, port: 0,
+    env: { COCWIN_FLOWPILOT_INGRESS_ENABLED: 'true', FLOWPILOT_REMOTE_BRIDGE_TOKEN: remoteBridgeToken, FLOWPILOT_CALLBACK_TOKEN: callbackToken },
+    claimGuard: createRBridgeLegacyClaimGuard({ serializer: createRBridgeOperationSerializer(), core: { has: async () => true } }),
+    controller: { async submit() { calls++; return { state: 'RUNNING' }; }, async status() { return {}; }, async result() { return {}; } },
+  });
+  assert.ok(runtime);
+  try {
+    const address = await runtime.start();
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/execute`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${remoteBridgeToken}` }, body: JSON.stringify(envelope('http://127.0.0.1:8097/api/v1/executor/callback')) });
+    assert.notEqual(response.status, 202);
+    assert.equal(calls, 0);
+    assert.deepEqual(await readdir(root), []);
+  } finally { await runtime.stop(); await rm(root, { recursive: true, force: true }); }
+});
 function envelope(callbackUrl: string) { return {
   schema: 'FLOWPILOT_REMOTE_BRIDGE_V1', operationId: 'op_run_0000000001_probe_a1', runId: 'run_0000000001',
   stepId: 'probe', attempt: 1, fencingToken: 7, idempotencyKey: 'fp:run_0000000001:probe:1',

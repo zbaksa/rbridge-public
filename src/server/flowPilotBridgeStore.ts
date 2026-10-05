@@ -3,6 +3,7 @@ import { chmod, link, lstat, mkdir, open, readdir, rename, unlink } from 'node:f
 import { join } from 'node:path';
 import { flowPilotAppIdentity, flowPilotOperationDigest, type FlowPilotBridgeOperation } from '../domain/flowPilotBridgeProtocol.js';
 import type { FlowPilotBridgePhase, FlowPilotBridgeRecord, FlowPilotBridgeStore } from './flowPilotBridgeGateway.js';
+import type { RBridgeLegacyClaimGuard } from './rbridgeOperationSerializer.js';
 
 interface PersistedRecord extends FlowPilotBridgeRecord {
   schema: 'COCWIN_FLOWPILOT_BRIDGE_STORE_V1';
@@ -20,6 +21,7 @@ interface PersistedTombstone {
 }
 
 export interface FlowPilotBridgeStoreOptions {
+  claimGuard?: RBridgeLegacyClaimGuard;
   maxPendingRecords?: number;
   pendingBatchSize?: number;
   maxCompletedRecords?: number;
@@ -275,6 +277,8 @@ export function createFlowPilotBridgeStore(
   options: FlowPilotBridgeStoreOptions = {},
 ): FlowPilotBridgeStore {
   const runExclusive = createOperationSerializer();
+  const runClaim = <T>(id: string, task: () => Promise<T>): Promise<T> => options.claimGuard
+    ? options.claimGuard.run(id, () => runExclusive(id, task)) : runExclusive(id, task);
   const maxPendingRecords = options.maxPendingRecords ?? 10_000;
   const pendingBatchSize = options.pendingBatchSize ?? 100;
   const maxCompletedRecords = options.maxCompletedRecords ?? 10_000;
@@ -291,7 +295,7 @@ export function createFlowPilotBridgeStore(
   }
   return {
     async claim(input: FlowPilotBridgeRecord) {
-      return runExclusive(input.operation.operationId, async () => {
+      return runClaim(input.operation.operationId, async () => {
         if (input.phase !== 'CLAIMED' || input.callback !== undefined || !SHA_RE.test(input.digest)) fail('FLOWPILOT_BRIDGE_CLAIM_INVALID');
         const app = flowPilotAppIdentity(input.operation);
         if (input.digest !== flowPilotOperationDigest(input.operation) || input.appId !== app.appId || input.jobId !== app.jobId) fail('FLOWPILOT_BRIDGE_CLAIM_INVALID');

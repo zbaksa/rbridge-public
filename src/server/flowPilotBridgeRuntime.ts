@@ -3,6 +3,7 @@ import { createFlowPilotBridgeGateway } from './flowPilotBridgeGateway.js';
 import { createFlowPilotBridgeIngress } from './flowPilotBridgeIngress.js';
 import { createFlowPilotBridgeStore } from './flowPilotBridgeStore.js';
 import { createFlowPilotCallbackClient, validateFlowPilotCallbackUrl } from './flowPilotCallbackClient.js';
+import type { RBridgeLegacyClaimGuard } from './rbridgeOperationSerializer.js';
 
 interface ControllerPort {
   submit(app: string, job: string, payload: unknown): Promise<Record<string, unknown>>;
@@ -16,6 +17,7 @@ export interface FlowPilotBridgeRuntimeOptions {
   env: Record<string, string | undefined>;
   host?: string;
   port?: number;
+  claimGuard?: RBridgeLegacyClaimGuard;
 }
 
 function secret(env: Record<string, string | undefined>, name: string): string {
@@ -55,7 +57,8 @@ export function createFlowPilotBridgeRuntime(options: FlowPilotBridgeRuntimeOpti
       ? 8098
       : Number(options.env.COCWIN_FLOWPILOT_INGRESS_PORT));
   const port = ingressPort(configuredPort, options.port === 0);
-  const store = createFlowPilotBridgeStore(join(options.root, 'flowpilot'));
+  const store = createFlowPilotBridgeStore(join(options.root, 'flowpilot'), undefined,
+    options.claimGuard ? { claimGuard: options.claimGuard } : {});
   const callback = createFlowPilotCallbackClient();
   const cocwinPolicyUrl = options.env.RBRIDGE_COCWIN_POLICY_URL;
   const gateway = createFlowPilotBridgeGateway({
