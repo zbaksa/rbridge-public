@@ -21,13 +21,18 @@ function binary(value:unknown,expectedSha:unknown){if(typeof value!=='string'||!
 function inside(root:string,path:string){const rel=relative(root,path);return rel===''||(!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('..'+sep));}
 function fdPath(handle:FileHandle,name?:string){const base=join(PROC_FD,String(handle.fd));return name===undefined?base:join(base,name);}
 
+export function assertRemoteBridgeFileTargetPolicy(target:string,allowedRoots:readonly string[]):{path:string;root:string}{
+  const path=lexical(target);secret(path);const root=allowedRoots.find(r=>path===r||path.startsWith(r+sep));
+  if(!root)fail('REMOTE_BRIDGE_FILE_ROOT_DENIED');return {path,root};
+}
+
 export function createRemoteBridgeFileOps(config:RemoteBridgeFileOpsConfig){
   if(!Array.isArray(config.allowedRoots)||config.allowedRoots.length<1||config.allowedRoots.length>16)fail('REMOTE_BRIDGE_FILE_ROOTS_INVALID');
   const roots=[...new Set(config.allowedRoots.map(root=>lexical(root)))].sort((a,b)=>b.length-a.length);
   if(!Number.isInteger(config.maxReadBytes)||config.maxReadBytes<1||config.maxReadBytes>16*1024*1024)fail('REMOTE_BRIDGE_FILE_READ_LIMIT_INVALID');
   if(!Number.isInteger(config.maxSearchResults)||config.maxSearchResults<1||config.maxSearchResults>5000)fail('REMOTE_BRIDGE_FILE_SEARCH_LIMIT_INVALID');
 
-  function rootFor(path:string){const p=lexical(path);secret(p);const root=roots.find(r=>p===r||p.startsWith(r+sep));if(!root)fail('REMOTE_BRIDGE_FILE_ROOT_DENIED');return {path:p,root};}
+  function rootFor(path:string){return assertRemoteBridgeFileTargetPolicy(path,roots);}
   async function verifyRoot(root:string){const info=await lstat(root).catch(()=>fail('REMOTE_BRIDGE_FILE_ROOT_INVALID'));if(info.isSymbolicLink()||!info.isDirectory())fail('REMOTE_BRIDGE_FILE_ROOT_INVALID');if(await realpath(root)!==root)fail('REMOTE_BRIDGE_FILE_ROOT_INVALID');}
   async function noSymlinks(path:string,root:string,finalMayMissing=false){await verifyRoot(root);const rel=relative(root,path);if(rel.startsWith('..')||isAbsolute(rel))fail('REMOTE_BRIDGE_FILE_ROOT_DENIED');let current=root;const parts=rel?rel.split(sep):[];for(let i=0;i<parts.length;i++){current=join(current,parts[i]!);try{const info=await lstat(current);if(info.isSymbolicLink())fail('REMOTE_BRIDGE_FILE_SYMLINK_DENIED');}catch(error){if(errno(error)==='ENOENT'&&finalMayMissing&&i===parts.length-1)return;throw error;}}}
   async function verifyHandle(handle:FileHandle,root:string){const actual=await realpath(fdPath(handle)).catch(()=>fail('REMOTE_BRIDGE_FILE_HANDLE_INVALID'));if(!inside(root,actual))fail('REMOTE_BRIDGE_FILE_ROOT_DENIED');secret(actual);return actual;}
