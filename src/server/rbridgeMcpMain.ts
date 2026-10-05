@@ -6,13 +6,16 @@ import {RBRIDGE_CORE_LIMITS} from '../domain/rbridgeCoreProtocol.js';
 import {connectRBridgeCoreIpcClient} from './rbridgeCoreIpc.js';
 import {createRBridgeMcpSafeServer,resolveRBridgeMcpStdioBinding} from './rbridgeMcpSafe.js';
 
+export function resolveRBridgeMcpStateRoot(home:string):string{
+  if(!isAbsolute(home)||home==='/'||home==='/root'||home.startsWith('//')||home.includes('\0')||resolve(home)!==home)throw new Error('RBRIDGE_MCP_HOME_INVALID');
+  return join(home,'.local','state','rbridge','execution-v2');
+}
 export async function runRBridgeMcpMain():Promise<StdioServerHandle>{
   const user=userInfo(),uid=typeof process.getuid==='function'?process.getuid():user.uid;
   const euid=typeof process.geteuid==='function'?process.geteuid():user.uid;
   if(euid!==user.uid)throw new Error('RBRIDGE_MCP_RUNTIME_IDENTITY_INVALID');
   const binding=resolveRBridgeMcpStdioBinding(process.env,{username:user.username,uid,euid});
-  if(!isAbsolute(user.homedir)||user.homedir==='/'||user.homedir==='/root'||user.homedir.startsWith('//')||user.homedir.includes('\0')||resolve(user.homedir)!==user.homedir)throw new Error('RBRIDGE_MCP_HOME_INVALID');
-  const core=await connectRBridgeCoreIpcClient({root:join(user.homedir,'.local','state','rbridge'),expectedBinding:{runtimeUid:uid,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId}});
+  const core=await connectRBridgeCoreIpcClient({root:resolveRBridgeMcpStateRoot(user.homedir),expectedBinding:{runtimeUid:uid,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId}});
   const transport=new StdioServerTransport(process.stdin,process.stdout,{maxBufferSize:RBRIDGE_CORE_LIMITS.requestBytes}),originalClose=transport.close.bind(transport);
   let closing:Promise<void>|undefined;
   transport.close=()=>closing??=(async()=>{try{await originalClose();}finally{await core.close();}})();

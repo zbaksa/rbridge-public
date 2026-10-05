@@ -6,7 +6,7 @@ import {resolve} from 'node:path';
 import {describe,expect,it,vi} from 'vitest';
 import {rbridgeOperationIntentDigest,type RBridgeExecutionReceiptV1,type RBridgeOperationSubmissionV1} from '../../src/domain/rbridgeExecutionContract.js';
 import {createRBridgeMcpSafeServer,resolveRBridgeMcpStdioBinding,type RBridgeMcpCore} from '../../src/server/rbridgeMcpSafe.js';
-import {runRBridgeMcpMain} from '../../src/server/rbridgeMcpMain.js';
+import {resolveRBridgeMcpStateRoot,runRBridgeMcpMain} from '../../src/server/rbridgeMcpMain.js';
 import {mcpTestPort} from '../fixtures/rbridge-stdio-owner.js';
 
 const env={RBRIDGE_RUNTIME_USER:'bridge-test',RBRIDGE_MCP_PRINCIPAL_ID:'operator-test',RBRIDGE_INSTANCE_ID:'target-test'};
@@ -25,6 +25,12 @@ async function session(core:Pick<RBridgeMcpCore,'submit'>|undefined,mode:'legacy
 }
 
 describe('MCP stdio identity boundary',()=>{
+  it('uses the approved execution-v2 subtree under verified OS homedir',()=>{
+    expect(resolveRBridgeMcpStateRoot('/srv/bridge-runtime')).toBe('/srv/bridge-runtime/.local/state/rbridge/execution-v2');
+  });
+  it.each(['relative','/','/root','//srv/user','/srv/user/../other','/srv/user/','/srv/user\0'])('rejects an invalid OS homedir %j',home=>{
+    expect(()=>resolveRBridgeMcpStateRoot(home)).toThrow('RBRIDGE_MCP_HOME_INVALID');
+  });
   it('maps the verified OS user to deployment-owned principal and target',()=>{
     expect(binding()).toEqual({authenticatedSubject:'uid:1027',principalId:'operator-test',targetInstanceId:'target-test'});
     expect(Object.isFrozen(binding())).toBe(true);

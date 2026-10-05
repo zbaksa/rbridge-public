@@ -25,17 +25,17 @@ export async function createRBridgeStdioOwnerFixture(options:{fixedHome?:boolean
   const user=userInfo(),uid=process.getuid!();
   if(uid<=0||process.geteuid!()!==uid||user.uid!==uid)throw new Error('TEST_NONROOT_OWNER_REQUIRED');
   const files=createRBridgeStateFiles({checkFilesystem:async()=>undefined});
-  let root:string;
+  let root:string,relayRoot:string;
   if(options.fixedHome){
     for(const path of [join(user.homedir,'.local'),join(user.homedir,'.local','state')]){
       try{const checked=await files.directory(path,uid);await checked.close();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;await files.ensureDirectory(path,uid);}
     }
-    root=join(user.homedir,'.local','state','rbridge');await files.ensureDirectory(root,uid);
-  }else root=await mkdtemp(join(homedir(),'.rbridge-stdio-'));
-  await files.validateTree(root,uid);
-  const relay=await acquireRemoteBridgeProcessLock(root);
+    relayRoot=join(user.homedir,'.local','state','rbridge');await files.ensureDirectory(relayRoot,uid);root=join(relayRoot,'execution-v2');
+  }else{root=await mkdtemp(join(homedir(),'.rbridge-stdio-'));relayRoot=root;}
+  await files.validateTree(relayRoot,uid);
+  const relay=await acquireRemoteBridgeProcessLock(relayRoot);
   // A positive production-entrypoint test must never touch existing user state.
-  if((await readdir(root)).some(name=>name!=='relay.lock')){await relay.release();throw new Error('TEST_STATE_NOT_EMPTY');}
+  if((await readdir(relayRoot)).some(name=>name!=='relay.lock')){await relay.release();throw new Error('TEST_STATE_NOT_EMPTY');}
   const deployment={runtimeUid:uid,principalId:'operator-test',targetInstanceId:'target-test'};
   let owner:Awaited<ReturnType<typeof acquireRBridgeOwnerLock>>|undefined,core:ReturnType<typeof createRBridgeExecutionCore>|undefined,ipc:Awaited<ReturnType<typeof startRBridgeCoreIpcServer>>|undefined,sourceRoot:string|undefined;
   let releaseHealth!:()=>void,entered!:()=>void,calls=0;
@@ -46,9 +46,10 @@ export async function createRBridgeStdioOwnerFixture(options:{fixedHome?:boolean
     // Remove only this fixture's files while relay exclusion is still held.
     for(const name of ['manifest.json','operations','results','deliveries','core.sock','owner.lock','source'])await rm(join(root,name),{recursive:true,force:true});
     if(sourceRoot)await rm(sourceRoot,{recursive:true,force:true});
-    await relay.release();await rmdir(root);
+    if(root!==relayRoot)await rmdir(root);await relay.release();await rmdir(relayRoot);
   }
   try{
+    if(root!==relayRoot)await files.ensureDirectory(root,uid);
     owner=await acquireRBridgeOwnerLock({root,uid,files});
     const serializer=createRBridgeOperationSerializer(),policy=createRBridgeExecutionPolicy(deployment),journal=await createRBridgeExecutionJournal({root,binding:deployment,serializer,files}),results=await createRBridgeExecutionResults({root,journal,files});
     sourceRoot=await mkdtemp(join(homedir(),'.rbridge-stdio-source-'));await writeFile(join(sourceRoot,'read.txt'),'é durable read\n',{mode:0o600});
