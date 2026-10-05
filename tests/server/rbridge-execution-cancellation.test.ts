@@ -41,4 +41,10 @@ describe('durable cancellation and actual handler settlement',()=>{
     const journal={...f.journal,async claim(...args:Parameters<typeof actual>){const record=await actual(...args);controller.abort();return record;}};
     const core=createRBridgeExecutionCore({...f,journal,subjects:{GITHUB:'example/control:operator',MCP:`uid:${f.uid}`},legacyReservations:{async isReserved(){return false;}},handler:{async execute(){await held.pending;return null;}}});cleanup.unshift(()=>core.close());await core.submit(f.submission(),f.context,controller.signal);held.release();await expect.poll(async()=> (await f.journal.get('read-1'))?.receipt.phase,{timeout:3000}).toBe('TERMINAL');const receipt=(await f.journal.get('read-1'))!.receipt;expect(receipt.outcome).toBe('TERMINATED');expect(receipt.transitions.map(t=>t.phase)).toEqual(['CLAIMED','AUTHORIZED','TERMINAL']);
   });
+  it('shutdown waits for an admission whose durable claim acknowledgement is still pending',async()=>{
+    const held=gate(),f=await fixture({async execute(){return null;}}),actual=f.journal.claim;let entered!:()=>void;const started=new Promise<void>(done=>{entered=done;});
+    const journal={...f.journal,async claim(...args:Parameters<typeof actual>){const record=await actual(...args);entered();await held.pending;return record;}};
+    const core=createRBridgeExecutionCore({...f,journal,subjects:{GITHUB:'example/control:operator',MCP:`uid:${f.uid}`},legacyReservations:{async isReserved(){return false;}},handler:{async execute(){return null;}}});cleanup.unshift(()=>core.close());
+    const admitting=core.submit(f.submission(),f.context,new AbortController().signal);await started;let closed=false;const closing=core.close().then(()=>{closed=true;});await new Promise<void>(done=>setImmediate(done));expect(closed).toBe(false);held.release();await admitting;await closing;expect((await f.journal.get('read-1'))?.receipt.phase).toBe('TERMINAL');
+  });
 });
