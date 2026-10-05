@@ -1,11 +1,10 @@
-import {createHash} from 'node:crypto';
 import {lstat,opendir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {z} from 'zod/v4';
 import {RBRIDGE_CORE_LIMITS as limits,RBRIDGE_ENABLED_ACTIONS,type RBridgeDeploymentBinding} from '../domain/rbridgeCoreProtocol.js';
 import {assertBoundedRBridgeJson,canonicalRBridgeJson,parseRBridgeDeploymentBinding,parseRBridgeExecutionReceipt} from '../domain/rbridgeCoreValidation.js';
 import {canTransitionRBridgeExecutionPhase,parseRBridgeOperationSubmissionV1,rbridgeOperationIntentDigest,type RBridgeExecutionReceiptV1,type RBridgeJsonValue,type RBridgeOperationSubmissionV1,type RBridgeTransportContextV1} from '../domain/rbridgeExecutionContract.js';
-import {freezeRBridgeValue,type RBridgePolicyDecision,type RBridgePolicyDocumentV1} from './rbridgeExecutionPolicy.js';
+import {evaluateRBridgePolicyDocument,freezeRBridgeValue,type RBridgePolicyDecision,type RBridgePolicyDocumentV1} from './rbridgeExecutionPolicy.js';
 import {createRBridgeStateFiles,rbridgeStateFdPath,validateRBridgeStateHandle,type RBridgeStateFiles} from './rbridgeStateFiles.js';
 import type {RBridgeOperationSerializer} from './rbridgeOperationSerializer.js';
 export interface RBridgeOperationRecordV1{
@@ -27,7 +26,6 @@ const bounds={bytes:limits.recordBytes,depth:limits.depth,nodes:8192};
 function fail(code='RBRIDGE_JOURNAL_INVALID'):never{throw new Error(code);}
 function missing(error:unknown){return (error as NodeJS.ErrnoException)?.code==='ENOENT';}
 function json(value:unknown):string{return canonicalRBridgeJson(value as RBridgeJsonValue);}
-function digest(value:unknown):string{return createHash('sha256').update(json(value)).digest('hex');}
 function id(value:string):string{if(!ID.test(value))fail();return value;}
 function exact(value:unknown,keys:readonly string[]):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==keys.length||Object.keys(value).some(k=>!keys.includes(k)))fail();return value as Record<string,unknown>;}
 export function parseRBridgePolicyDocument(value:unknown):RBridgePolicyDocumentV1{
@@ -50,7 +48,8 @@ function record(value:unknown,filenameId:string,binding:RBridgeDeploymentBinding
   const submission=parseRBridgeOperationSubmissionV1(row.submission),intentSha256=rbridgeOperationIntentDigest(submission),policyDocument=parseRBridgePolicyDocument(row.policyDocument);
   if(submission.operationId!==filenameId||submission.principalId!==binding.principalId||submission.targetInstanceId!==binding.targetInstanceId||row.intentSha256!==intentSha256||json(policyDocument.binding)!==json(binding))fail();
   const receipt=parseRBridgeExecutionReceipt(row.receipt,submission,intentSha256);
-  if(receipt.policy.policySha256!==digest(policyDocument)||receipt.policy.policyVersion!==policyDocument.version)fail();
+  if(json(receipt.policy)!==json(evaluateRBridgePolicyDocument(policyDocument,submission).snapshot))fail('RBRIDGE_JOURNAL_POLICY_MISMATCH');
+  if(receipt.policy.decision==='BLOCK'&&receipt.phase!=='CLAIMED'&&!(receipt.phase==='TERMINAL'&&receipt.outcome==='BLOCKED'&&receipt.transitions.length===2))fail();
   if(!row.observations||typeof row.observations!=='object'||Array.isArray(row.observations))fail();
   for(const [transport,observation] of Object.entries(row.observations)){
     if(!['MCP','GITHUB','LOCAL'].includes(transport))fail();const observed=exact(observation,['first','count']),first=parseRBridgeTransportContext(observed.first);

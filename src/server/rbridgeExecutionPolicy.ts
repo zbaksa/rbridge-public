@@ -47,12 +47,13 @@ function reasonFor(document:RBridgePolicyDocumentV1,submission:RBridgeOperationS
 }
 export function createRBridgeExecutionPolicy(binding:RBridgeDeploymentBinding):RBridgeExecutionPolicy{
   const document:RBridgePolicyDocumentV1=freezeRBridgeValue({schema:'RBRIDGE_POLICY_DOCUMENT_V1',version:'safe-core-p2a-v1',binding:parseRBridgeDeploymentBinding(binding),enabledActions:[...RBRIDGE_ENABLED_ACTIONS],allowedRoots:['/mnt/data'],limits:{...RBRIDGE_CORE_LIMITS},recovery:{incompleteReadonly:'REOBSERVE',mutation:'NEVER_RETRY'}});
-  const policySha256=createHash('sha256').update(canonicalRBridgeJson(document as unknown as RBridgeJsonValue)).digest('hex');
-  return Object.freeze({document,evaluate(submission:RBridgeOperationSubmissionV1):RBridgePolicyDecision{
-    const reason=reasonFor(document,submission);
-    return freezeRBridgeValue({document,snapshot:{schema:'RBRIDGE_POLICY_SNAPSHOT_V1',mode:'SAFE',policyVersion:document.version,policySha256,decision:reason?'BLOCK':'ALLOW',...(reason?{reason}:{})}});
-  }});
+  return Object.freeze({document,evaluate:(submission:RBridgeOperationSubmissionV1)=>evaluateRBridgePolicyDocument(document,submission)});
 }
+export function evaluateRBridgePolicyDocument(document:RBridgePolicyDocumentV1,submission:RBridgeOperationSubmissionV1):RBridgePolicyDecision{
+  const reason=reasonFor(document,submission),policySha256=createHash('sha256').update(canonicalRBridgeJson(document as unknown as RBridgeJsonValue)).digest('hex');
+  return freezeRBridgeValue({document,snapshot:{schema:'RBRIDGE_POLICY_SNAPSHOT_V1',mode:'SAFE',policyVersion:document.version,policySha256,decision:reason?'BLOCK':'ALLOW',...(reason?{reason}:{})}});
+}
+
 export function isRBridgePolicyRecoveryAllowed(original:RBridgePolicyDocumentV1,current:RBridgePolicyDocumentV1,submission:RBridgeOperationSubmissionV1):boolean{
   return original.binding.runtimeUid===current.binding.runtimeUid&&original.recovery.incompleteReadonly==='REOBSERVE'&&current.recovery.incompleteReadonly==='REOBSERVE'&&reasonFor(original,submission)===undefined&&reasonFor(current,submission)===undefined;
 }
