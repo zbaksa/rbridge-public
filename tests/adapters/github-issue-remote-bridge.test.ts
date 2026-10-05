@@ -11,6 +11,31 @@ const rows=[
 ];
 const result={schema:'COCWIN_REMOTE_BRIDGE_RESULT_V1',requestId:'bridge.req.1',issueNumber:49,status:'PASS',requestSha256:'a'.repeat(64),resultSha256:'b'.repeat(64),controllerResult:{state:'SUCCEEDED'},completedAt:'2026-09-16T18:12:00.000Z'};
 const hash=(value:Buffer|string)=>createHash('sha256').update(value).digest('hex');
+describe('bounded core GitHub API primitives',()=>{
+  it('reads exact issue and bounded comment pages from the configured repository',async()=>{
+    const calls:Parameters<GhCommandRunner>[0][]=[],comment={id:99,body:'hello',user:{login:AUTHOR},html_url:'https://github.com/'+REPO+'/issues/49#issuecomment-99'};
+    const runner:GhCommandRunner=async input=>{calls.push(input);return {exitCode:0,stderr:'',stdout:JSON.stringify(input.args.some(a=>a.includes('/comments?'))?[comment]:{number:49,title:rows[1]!.title,body:requestBody,user:{login:AUTHOR},html_url:rows[1]!.url,state:'open'})};};
+    const gh=createGitHubIssueRemoteBridge({repository:REPO,authorLogin:AUTHOR,runner});
+    expect(await gh.readIssue(49)).toEqual({number:49,title:rows[1]!.title,body:requestBody,authorLogin:AUTHOR,url:rows[1]!.url,state:'open'});
+    expect(await gh.readCommentPage(49,2)).toEqual([{id:99,body:'hello',authorLogin:AUTHOR,url:comment.html_url}]);
+    expect(calls[1]!.args).toEqual(['api','--hostname','github.com','repos/'+REPO+'/issues/49/comments?per_page=20&page=2']);
+    expect(calls.every(c=>c.command==='/usr/bin/gh'&&c.timeoutMs===30000&&c.maxOutputBytes===2000000)).toBe(true);
+    const before=calls.length;for(const page of [0,53,1.5])await expect(gh.readCommentPage(49,page)).rejects.toThrow();expect(calls).toHaveLength(before);
+  });
+  it('posts bounded JSON over stdin and independently closes the fixed issue',async()=>{
+    const calls:Parameters<GhCommandRunner>[0][]=[],body='```json\n{}\n```\n';
+    const runner:GhCommandRunner=async input=>{calls.push(input);return {exitCode:0,stderr:'',stdout:JSON.stringify({id:100,body,user:{login:AUTHOR},html_url:'https://github.com/'+REPO+'/issues/49#issuecomment-100'})};};
+    const gh=createGitHubIssueRemoteBridge({repository:REPO,authorLogin:AUTHOR,runner});expect((await gh.postComment(49,body)).id).toBe(100);await gh.closeIssue(49);
+    expect(calls[0]!.args).toEqual(['api','--hostname','github.com','--method','POST','repos/'+REPO+'/issues/49/comments','--input','-']);expect(calls[0]!.stdin).toBe(JSON.stringify({body}));expect(calls[1]!.args).toEqual(['issue','close','49','--repo',REPO,'--reason','completed']);
+    await expect(gh.postComment(49,'x'.repeat(60000))).rejects.toThrow();expect(calls).toHaveLength(2);
+  });
+  it('refuses oversized responses, pull requests and foreign issue or comment identities',async()=>{
+    for(const stdout of ['x'.repeat(2000001),JSON.stringify({number:49,pull_request:{},title:rows[1]!.title,body:requestBody,user:{login:AUTHOR},html_url:rows[1]!.url,state:'open'}),JSON.stringify({number:49,title:rows[1]!.title,body:requestBody,user:{login:AUTHOR},html_url:'https://github.com/evil/repo/issues/49',state:'open'})]){
+      const gh=createGitHubIssueRemoteBridge({repository:REPO,authorLogin:AUTHOR,runner:async()=>({exitCode:0,stdout,stderr:''})});await expect(gh.readIssue(49)).rejects.toThrow();
+    }
+    const gh=createGitHubIssueRemoteBridge({repository:REPO,authorLogin:AUTHOR,runner:async()=>({exitCode:0,stderr:'',stdout:JSON.stringify({id:1,body:'hello',user:{login:'attacker'},html_url:'https://github.com/'+REPO+'/issues/49#issuecomment-1'})})});await expect(gh.postComment(49,'hello')).rejects.toThrow();
+  });
+});
 function fenced(value:unknown){return '```json\n'+JSON.stringify(value,null,2)+'\n```\n';}
 function jsonFromFence(body:string){return JSON.parse(body.replace(/^```json\n/,'').replace(/\n```\n$/,'')) as Record<string,unknown>;}
 

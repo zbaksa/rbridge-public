@@ -5,6 +5,13 @@ export interface GhCommandInput {command:string;args:string[];stdin?:string;time
 export interface GhCommandOutput {exitCode:number;stdout:string;stderr:string;}
 export type GhCommandRunner=(input:GhCommandInput)=>Promise<GhCommandOutput>;
 export interface GitHubBridgeIssue {number:number;title:string;body:string;authorLogin:string;url:string;}
+export interface RBridgeGitHubComment {id:number;authorLogin:string;body:string;url:string;}
+export interface RBridgeGitHubPort {
+  readIssue(number:number):Promise<GitHubBridgeIssue&{state:'open'|'closed'}>;
+  readCommentPage(number:number,page:number):Promise<readonly RBridgeGitHubComment[]>;
+  postComment(number:number,body:string):Promise<RBridgeGitHubComment>;
+  closeIssue(number:number):Promise<void>;
+}
 export interface GitHubIssueRemoteBridgeOptions {runner?:GhCommandRunner;repository:string;authorLogin:string;}
 const COMMAND='/usr/bin/gh',PREFIX='[COCWIN BRIDGE REQUEST] ',MAX_OUTPUT=2_000_000,MAX_COMMENT=60_000,MAX_RAW_CHUNK=40_000;
 function fail(code:string,detail?:string):never{throw new Error(detail?`${code}:${detail}`:code);}
@@ -40,6 +47,10 @@ export function createGitHubIssueRemoteBridge(options:GitHubIssueRemoteBridgeOpt
     const manifest={schema:'COCWIN_REMOTE_BRIDGE_RESULT_MANIFEST_V1',transferId,count,totalBytes:data.length,objectSha256};if(existing.manifest){if(JSON.stringify(existing.manifest)!==JSON.stringify(manifest))fail('REMOTE_BRIDGE_GITHUB_RESUME_COLLISION');}else await comment(issue,fence(manifest));
   }
   return {
+    async readIssue(_number:number):Promise<GitHubBridgeIssue&{state:'open'|'closed'}>{void _number;throw new Error('NOT_IMPLEMENTED');},
+    async readCommentPage(_number:number,_page:number):Promise<readonly RBridgeGitHubComment[]>{void _number;void _page;throw new Error('NOT_IMPLEMENTED');},
+    async postComment(_number:number,_body:string):Promise<RBridgeGitHubComment>{void _number;void _body;throw new Error('NOT_IMPLEMENTED');},
+    async closeIssue(_number:number):Promise<void>{void _number;throw new Error('NOT_IMPLEMENTED');},
     async listOpenRequests():Promise<GitHubBridgeIssue[]>{
       const raw=await run(['issue','list','--repo',repository,'--state','open','--limit','1000','--json','number,title,body,author,url']);let value:unknown;try{value=JSON.parse(raw);}catch{fail('REMOTE_BRIDGE_GITHUB_LIST_INVALID');}if(!Array.isArray(value))fail('REMOTE_BRIDGE_GITHUB_LIST_INVALID');const result:GitHubBridgeIssue[]=[];
       for(const item of value){if(!item||typeof item!=='object'||Array.isArray(item))fail('REMOTE_BRIDGE_GITHUB_LIST_INVALID');const row=item as Record<string,unknown>,author=row.author;if(!Number.isSafeInteger(row.number)||typeof row.title!=='string'||typeof row.body!=='string'||typeof row.url!=='string'||!author||typeof author!=='object'||Array.isArray(author)||typeof (author as Record<string,unknown>).login!=='string')fail('REMOTE_BRIDGE_GITHUB_LIST_INVALID');if(!row.title.startsWith(PREFIX)||(author as Record<string,unknown>).login!==authorLogin)continue;result.push({number:Number(row.number),title:row.title,body:row.body,authorLogin,url:row.url});}
