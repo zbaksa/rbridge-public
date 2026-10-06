@@ -3,6 +3,8 @@ import hashlib
 import copy
 import json
 import importlib.util
+from dataclasses import replace
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
@@ -48,6 +50,33 @@ class QualificationTests(unittest.TestCase):
             for value in values:
                 self.assertRaises(ValueError,open_qualified_transaction_ledger,value,object())
                 self.assertRaises(ValueError,open_qualified_resume_ledger,value,'a'*32)
+
+    def test_complete_bundle_metadata_binds_reader_context_canary_and_artifact_without_minting_origin(self):
+        from rbridge_installation.qualification import _QualifiedBundle,_bundle_pin
+        p=self.profile
+        runtime=SimpleNamespace(kind='RUNTIME',sha256=p.runtime.manifest_sha256,source_sha=p.runtime.source_sha,
+            tree_sha=p.runtime.tree_sha,node_sha256=p.runtime.node_sha256)
+        toolkit_manifest=SimpleNamespace(kind='TOOLKIT',sha256=p.toolkit.manifest_sha256,source_sha=p.toolkit.source_sha,
+            tree_sha=p.toolkit.tree_sha,node_sha256=p.runtime.node_sha256)
+        artifact=SimpleNamespace(path=Path(p.paths.release_parent)/p.runtime.source_sha,
+            manifest_sha256=p.runtime.manifest_sha256,source_sha=p.runtime.source_sha,scope='ROOT_DESCRIPTOR_PUBLICATION')
+        # Pure synthetic metadata only. A constructor or its digest must never
+        # enter the physical-origin registry, even with complete scope strings.
+        bundle=_QualifiedBundle(profile=p,runtime_artifact=artifact,runtime_manifest=runtime,toolkit_manifest=toolkit_manifest,
+            readers_sha256='a'*64,reader_context_sha256='b'*64,helper_sha256='c'*64,canary_bytes=b'fixture canary',
+            python_closure_sha256='d'*64,evidence_sha256='e'*64)
+        pin=_bundle_pin(bundle)
+        self.assertEqual(bundle.reader_context_sha256,'b'*64)
+        variants=(replace(bundle,reader_context_sha256='f'*64),replace(bundle,canary_bytes=b'changed canary'),
+            replace(bundle,readers_sha256='f'*64),replace(bundle,helper_sha256='f'*64),
+            replace(bundle,python_closure_sha256='f'*64),replace(bundle,evidence_sha256='f'*64),
+            replace(bundle,runtime_artifact=SimpleNamespace(**{**vars(artifact),'path':Path('/other/artifact')})),
+            replace(bundle,runtime_manifest=SimpleNamespace(**{**vars(runtime),'tree_sha':'f'*40})),
+            replace(bundle,toolkit_manifest=SimpleNamespace(**{**vars(toolkit_manifest),'sha256':'f'*64})))
+        with patch('rbridge_installation.protected_copy.os.open',side_effect=AssertionError('Metadata must not open Root files')):
+            for value in (bundle,*variants):
+                self.assertRaisesRegex(ValueError,'QUALIFICATION_PHYSICAL_ORIGIN_UNQUALIFIED',self.verify,p,value)
+        for value in variants:self.assertNotEqual(_bundle_pin(value),pin)
 
     def test_source_ci_is_pinned_to_full_log_commit_tree_and_required_steps(self):
         log=b'full fixture CI log\n'

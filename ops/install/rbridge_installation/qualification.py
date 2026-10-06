@@ -235,12 +235,32 @@ class _QualifiedBundle:
     runtime_manifest:object
     toolkit_manifest:object
     readers_sha256:str
+    reader_context_sha256:str
     helper_sha256:str
     canary_bytes:bytes
+    python_closure_sha256:str
     evidence_sha256:str
 
 
 _qualified=weakref.WeakKeyDictionary()
+
+
+def _bundle_pin(bundle):
+    """Pure complete metadata digest, never a physical-origin registration."""
+    if type(bundle) is not _QualifiedBundle:_fail('QUALIFICATION_BUNDLE_INVALID')
+    try:
+        if type(bundle.canary_bytes) is not bytes or not 1<=len(bundle.canary_bytes)<=4096:
+            _fail('QUALIFICATION_BUNDLE_INVALID')
+        return report_sha256({'profile_sha256':report_sha256(bundle.profile),
+            'runtime_artifact':{'path':str(bundle.runtime_artifact.path),'manifest_sha256':bundle.runtime_artifact.manifest_sha256,
+                'source_sha':bundle.runtime_artifact.source_sha,'scope':bundle.runtime_artifact.scope},
+            'manifests':[{'kind':m.kind,'sha256':m.sha256,'source_sha':m.source_sha,'tree_sha':m.tree_sha,
+                'node_sha256':m.node_sha256} for m in (bundle.runtime_manifest,bundle.toolkit_manifest)],
+            'readers_sha256':bundle.readers_sha256,'reader_context_sha256':bundle.reader_context_sha256,
+            'helper_sha256':bundle.helper_sha256,'canary_bytes':len(bundle.canary_bytes),
+            'canary_sha256':hashlib.sha256(bundle.canary_bytes).hexdigest(),'python_closure_sha256':bundle.python_closure_sha256,
+            'evidence_sha256':bundle.evidence_sha256})
+    except (ValueError,TypeError,AttributeError,UnicodeError,RecursionError):_fail('QUALIFICATION_BUNDLE_INVALID')
 
 
 def verify_qualification_bundle(profile,bundle):
@@ -248,14 +268,29 @@ def verify_qualification_bundle(profile,bundle):
     # this registry. Only the concrete physical collector can issue a token.
     if type(bundle) is not _QualifiedBundle or bundle not in _qualified:
         _fail('QUALIFICATION_PHYSICAL_ORIGIN_UNQUALIFIED')
+    if report_sha256(profile)!=report_sha256(bundle.profile) or _bundle_pin(bundle)!=_qualified[bundle]:
+        _fail('QUALIFICATION_BUNDLE_CHANGED')
     from .host_backend import _assert_kernel_namespace
     from .protected_copy import verify_published,FilesystemAuthority
     import os
     if os.getuid()!=0 or os.geteuid()!=0:_fail('QUALIFICATION_ROOT_REQUIRED')
     _assert_kernel_namespace()
-    if report_sha256(profile)!=report_sha256(bundle.profile) or bundle.evidence_sha256!=_qualified[bundle]:
-        _fail('QUALIFICATION_BUNDLE_CHANGED')
+    from .profile import parse_profile
+    p=parse_profile(json.loads(encode_report(profile)))
+    if (bundle.runtime_manifest.kind!='RUNTIME' or bundle.toolkit_manifest.kind!='TOOLKIT'
+            or any(not _hash(v) for v in (bundle.readers_sha256,bundle.reader_context_sha256,bundle.helper_sha256,
+                bundle.python_closure_sha256,bundle.evidence_sha256))
+            or hashlib.sha256(bundle.canary_bytes).hexdigest()!=p.service.canary_sha256
+            or bundle.runtime_artifact.path!=Path(p.paths.release_parent)/p.runtime.source_sha
+            or bundle.runtime_artifact.manifest_sha256!=p.runtime.manifest_sha256
+            or bundle.runtime_artifact.source_sha!=p.runtime.source_sha
+            or bundle.runtime_artifact.scope!='ROOT_DESCRIPTOR_PUBLICATION'):_fail('QUALIFICATION_BUNDLE_INVALID')
+    root=Path(p.paths.release_parent)/('toolkit-'+p.toolkit.source_sha)
+    verify_import_closure(root,p,{'python_closure_sha256':bundle.python_closure_sha256})
     for manifest in (bundle.runtime_manifest,bundle.toolkit_manifest):
+        pin=p.runtime if manifest.kind=='RUNTIME' else p.toolkit
+        if (manifest.source_sha!=pin.source_sha or manifest.tree_sha!=pin.tree_sha or manifest.sha256!=pin.manifest_sha256
+                or manifest.node_sha256!=p.runtime.node_sha256):_fail('QUALIFICATION_BUNDLE_INVALID')
         name=manifest.source_sha if manifest.kind=='RUNTIME' else 'toolkit-'+manifest.source_sha
         authority=FilesystemAuthority(0,profile.binding.uid,Path(profile.paths.release_parent),manifest.kind,True,
             manifest.sha256,manifest.source_sha,manifest.tree_sha)
