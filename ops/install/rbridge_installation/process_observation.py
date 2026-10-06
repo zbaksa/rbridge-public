@@ -5,7 +5,7 @@ import json
 import os
 import re
 import time
-from .host_backend import QualifiedHostBackend, _kernel_bytes, _assert_kernel_namespace
+from .host_backend import QualifiedHostBackend, _kernel_bytes, _assert_process_view
 from .models import InstallationError, encode_report, record, report_sha256
 from .pause_backup import PauseLease
 
@@ -31,7 +31,7 @@ def probe_kernel_process(pid):
     """Return an actual stable identity, or twice-observed absence. Partial loss is unknown."""
     if type(pid) is not int or not 2 <= pid <= 2147483647:
         raise ProcessObservationError('PROCESS_PROBE_PID_INVALID')
-    _assert_kernel_namespace()
+    _assert_process_view()
     root = '/proc/' + str(pid)
     try:
         try:

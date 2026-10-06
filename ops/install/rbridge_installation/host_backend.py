@@ -82,10 +82,19 @@ def validate_kernel_namespace_evidence(value):
     if found!=required:fail()
 
 
+def _assert_process_view():
+    """PID coherence for a raw read; it never qualifies Root host authority."""
+    try:
+        if os.readlink('/proc/self')!=str(os.getpid()):raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
+        match=re.search(rb'^Pid:\s+([0-9]+)$',_kernel_bytes('/proc/self/status'),re.M)
+        if not match or int(match[1])!=os.getpid():raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
+    except OSError:raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED') from None
+
+
 def _assert_kernel_namespace():
     try:
         # Numeric PID paths must identify this process namespace, never a host view.
-        if os.readlink('/proc/self')!=str(os.getpid()):raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
+        _assert_process_view()
         def links():return {kind:[os.readlink('/proc/self/ns/'+kind),os.readlink('/proc/1/ns/'+kind)] for kind in ('pid','mnt','user','cgroup')}
         before=links()
         value={'pid':os.getpid(),'self_link':os.readlink('/proc/self'),
