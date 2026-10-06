@@ -53,6 +53,25 @@ function request(context:GateContext,issue:IssueEvidence,now:Date,allowExpired:b
   const parsed=parseRemoteBridgeRequestV2({title:issue.title,body:issue.body,author:issue.author,repository:b.repository,expectedAuthor:b.author,expectedRepository:b.repository,now,allowExpired});
   const digest=remoteBridgeRequestV2Digest(parsed);return {parsed,digest,schema:'COCWIN_REMOTE_BRIDGE_RESULT_V2',jobId:parsed.operation.kind==='APP_RUN'?parsed.operation.jobId:'host-'+digest.slice(0,48)};
 }
+export async function collectLegacyIssueNumbers(context:GateContext):Promise<readonly number[]>{
+  await context.snapshot.verify();
+  if(context.snapshot.treeSHA256!==context.token.tree_sha256||context.snapshot.entries.length!==context.token.entries||context.snapshot.bytes!==context.token.bytes||context.snapshot.reasonCodes.length)fail('LEGACY_DISCOVERY_SNAPSHOT_UNQUALIFIED');
+  const numbers=new Set<number>(),started=performance.now();
+  for(const entry of context.snapshot.entries.filter(e=>!e.path.includes('/'))){
+    if(performance.now()-started>=context.profile.budget.scan_ms)fail('LEGACY_SCAN_DEADLINE');
+    if(entry.kind==='DIRECTORY'){
+      if(!['flowpilot','sessions','transfers','execution-v2'].includes(entry.path))fail('LEGACY_UNKNOWN_ROOT');continue;
+    }
+    if(entry.path==='relay.lock'){
+      if(entry.kind!=='FILE'||entry.nlink!==1||entry.size>32||!/^[1-9][0-9]*\n?$/.test((await context.snapshot.read(entry.path,32)).toString('utf8')))fail('LEGACY_RELAY_LOCK_UNCLASSIFIED');continue;
+    }
+    if(entry.kind!=='FILE'||entry.nlink!==1||!entry.path.endsWith('.json')||entry.size>context.profile.budget.record_bytes)fail('LEGACY_UNKNOWN_OR_OVERSIZED_RECORD');
+    const row=parseRecord(parseStrictJson(new TextDecoder('utf-8',{fatal:true}).decode(await context.snapshot.read(entry.path))),entry.path).row;
+    if(Number(row.issueNumber)>2147483647)fail('LEGACY_LOOKUP_NUMBER_INVALID');numbers.add(Number(row.issueNumber));
+  }
+  await context.snapshot.verify();return Object.freeze([...numbers].sort((a,b)=>a-b));
+}
+
 export async function auditLegacyGate(context:GateContext):Promise<GateReport>{
   const evidence:Array<{path:string;file_sha256:string;issue_capture_sha256:string;branch:string}>=[];
   try{

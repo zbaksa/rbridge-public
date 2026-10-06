@@ -68,6 +68,38 @@ async function log(context:GateContext,id:string,r:Record<string,unknown>,maximu
   if(total!==r.outputBytes)fail('PROCESS_OUTPUT_ACCOUNTING_MISMATCH');return {sha256:entry.sha256,decoded_bytes:total,frames};
 }
 
+export interface ProcessProbeTarget{session_id:string;pid:number;start_ticks:string;identity_sha256:string;}
+export async function collectProcessProbeTargets(context:GateContext):Promise<readonly ProcessProbeTarget[]>{
+  await context.snapshot.verify();
+  if(context.snapshot.treeSHA256!==context.token.tree_sha256||context.snapshot.entries.length!==context.token.entries||context.snapshot.bytes!==context.token.bytes||context.snapshot.reasonCodes.length)fail('PROCESS_DISCOVERY_SNAPSHOT_UNQUALIFIED');
+  const ids=new Set<string>(),claims=new Map<string,Record<string,unknown>>(),owned=new Set<string>(),started=performance.now();
+  for(const entry of context.snapshot.entries.filter(e=>e.path==='sessions'||e.path.startsWith('sessions/'))){
+    if(performance.now()-started>=context.profile.budget.scan_ms)fail('PROCESS_SCAN_DEADLINE');
+    const parts=entry.path.split('/');
+    if(parts.length===1||parts.length===2&&parts[1]==='start-claims'){
+      if(entry.kind!=='DIRECTORY'||entry.mode!==0o700)fail('PROCESS_DIRECTORY_INVALID');continue;
+    }
+    if(parts[1]==='start-claims'){
+      if(parts.length!==3||!/^[0-9a-f]{64}\.json$/.test(parts[2]!))fail('PROCESS_UNKNOWN_CLAIM');
+      const claim=await read(context,entry.path);fields(claim,['schema','ownerDigest','sessionId','profileId','createdAt']);
+      if(claim.schema!=='COCWIN_REMOTE_BRIDGE_PROCESS_START_CLAIM_V1'||claim.ownerDigest!==parts[2]!.slice(0,-5)||typeof claim.sessionId!=='string'||!ID.test(claim.sessionId)||typeof claim.profileId!=='string'||owned.has(claim.sessionId))fail('PROCESS_CLAIM_IDENTITY_INVALID');
+      date(claim.createdAt);owned.add(claim.sessionId);claims.set(String(claim.ownerDigest),claim);continue;
+    }
+    if(!ID.test(parts[1]??''))fail('PROCESS_UNKNOWN_SESSION');
+    if(parts.length===2){if(entry.kind!=='DIRECTORY'||entry.mode!==0o700)fail('PROCESS_DIRECTORY_INVALID');ids.add(parts[1]!);}
+    else if(parts.length!==3||!['spec.json','record.json','output.ndjson','control.sock'].includes(parts[2]!))fail('PROCESS_UNKNOWN_OR_INTERRUPTED_ENTRY');
+  }
+  const targets:ProcessProbeTarget[]=[];
+  for(const id of [...ids].sort()){
+    if(performance.now()-started>=context.profile.budget.scan_ms)fail('PROCESS_SCAN_DEADLINE');
+    const s=await read(context,`sessions/${id}/spec.json`);spec(s,id,context);const r=await read(context,`sessions/${id}/record.json`);record(r,s);
+    const claim=claims.get(String(s.ownerDigest));if(!claim||['sessionId','profileId','createdAt','ownerDigest'].some(k=>claim[k]!==s[k]))fail('PROCESS_CLAIM_SPEC_RECORD_MISMATCH');claims.delete(String(s.ownerDigest));
+    const identity=r.identity===null?null:object(r.identity);
+    targets.push({session_id:id,pid:r.pid===null?0:Number(r.pid),start_ticks:identity?String(identity.startTimeTicks):'0',identity_sha256:installHash(identity)});
+  }
+  if(claims.size)fail('PROCESS_ORPHAN_START_CLAIM');await context.snapshot.verify();return Object.freeze(targets.map(target=>Object.freeze(target)));
+}
+
 export async function auditProcessGate(context:GateContext,observations:readonly ProcessObservation[]):Promise<GateReport>{
   const evidence:Array<{session_id:string;record_sha256:string;spec_sha256:string;observation_sha256:string;identity_recorded:boolean;terminal_state:string;log:unknown}>=[],started=performance.now();
   try{

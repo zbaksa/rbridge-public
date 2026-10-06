@@ -7,7 +7,7 @@ import {parseRemoteBridgeRequest,remoteBridgeRequestDigest} from '../../src/doma
 import {parseRemoteBridgeRequestV2,remoteBridgeRequestV2Digest} from '../../src/domain/remoteBridgeStage2Protocol.js';
 import {parseRBridgeInstallProfile,encodeInstallReport,type IssueEvidence} from '../../src/installation/types.js';
 import {openFixtureReadonlySnapshot} from '../../src/installation/readonlySnapshot.js';
-import {auditLegacyGate} from '../../src/installation/legacyGate.js';
+import {auditLegacyGate,collectLegacyIssueNumbers} from '../../src/installation/legacyGate.js';
 import type {GateContext} from '../../src/installation/gateContext.js';
 const sha=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex'),cleanup:Array<()=>Promise<void>>=[];
 afterEach(async()=>{for(const close of cleanup.splice(0).reverse())await close();});
@@ -33,6 +33,10 @@ async function fixture(options:{size?:number;phase?:string;changedBody?:boolean;
   return {context,record,root};
 }
 describe('complete immutable legacy gate',()=>{
+  it('discovers every retained issue number before authenticated lookup without declaring admission PASS',async()=>{
+    const f=await fixture({missingLookup:true});expect(await collectLegacyIssueNumbers(f.context)).toEqual([17]);
+    const invalid=await fixture({mutate:r=>{r.issueNumber=2147483648;delete r.result;r.phase='SUBMITTED';}});await expect(collectLegacyIssueNumbers(invalid.context)).rejects.toThrow();
+  });
   it('preserves closed unscoped unresolved history and published terminal results',async()=>{
     for(const phase of ['SUBMITTED','TERMINAL','PUBLISHED']){const f=await fixture({phase}),before=f.context.snapshot.treeSHA256;expect((await auditLegacyGate(f.context)).status).toBe('PASS');await f.context.snapshot.verify();expect(f.context.snapshot.treeSHA256).toBe(before);expect('scopeSha256'in f.record).toBe(false);}
   });

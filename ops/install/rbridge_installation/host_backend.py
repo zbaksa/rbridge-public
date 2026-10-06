@@ -232,7 +232,12 @@ class QualifiedHostBackend:
                 status=_kernel_bytes('/proc/'+name+'/status');match=re.search(rb'^Uid:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)$',status,re.M)
                 if not match:raise PauseError('HOST_PROCESS_IDENTITY_UNKNOWN')
                 if 1027 not in [int(n) for n in match.groups()]:continue
-                # No same-UID process is presumed read-only from its name alone.
+                # Only our concrete root-launched, immutable helper may be exempted.
+                reader=getattr(self,'readonly_helpers',{}).get(int(name))
+                if reader is not None:
+                    from .readonly_helper import _HeldReadonlyHelper,QualifiedReadonlyAuditRunner
+                    if type(reader) is not _HeldReadonlyHelper or type(reader.owner) is not QualifiedReadonlyAuditRunner or reader.owner.lease.backend is not self:raise PauseError('HOST_READONLY_HELPER_UNQUALIFIED')
+                    if reader.matches_pid(int(name)):continue
                 writers.append(int(name))
             except FileNotFoundError:continue
             except PermissionError:raise PauseError('HOST_PROCESS_IDENTITY_UNKNOWN') from None

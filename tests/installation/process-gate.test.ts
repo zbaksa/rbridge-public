@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {afterEach,describe,expect,it} from 'vitest';
 import {resolveRemoteBridgeProcessCommandProfile} from '../../src/domain/remoteBridgeHostProfiles.js';
-import {auditProcessGate} from '../../src/installation/processGate.js';
+import {auditProcessGate,collectProcessProbeTargets} from '../../src/installation/processGate.js';
 import {installHash} from '../../src/installation/gateContext.js';
 import type {ProcessObservation} from '../../src/installation/types.js';
 import {fixtureGateContext} from './fixtureContext.js';
@@ -27,6 +27,11 @@ async function fixture(options:{malformed?:boolean;claimReceipt?:boolean;log?:st
   return {context,observation,record,spec};
 }
 describe('complete offline process settlement',()=>{
+  it('exports complete source-validated targets without claiming kernel absence',async()=>{
+    const f=await fixture();expect(await collectProcessProbeTargets(f.context)).toEqual([{session_id:f.observation.session_id,pid:f.observation.pid,start_ticks:f.observation.start_ticks,identity_sha256:f.observation.identity_sha256}]);
+    const fast=await fixture({mutateRecord:r=>{r.identity=null;}});expect((await collectProcessProbeTargets(fast.context))[0]!.start_ticks).toBe('0');
+    const invalid=await fixture({claimReceipt:true});await expect(collectProcessProbeTargets(invalid.context)).rejects.toThrow();
+  });
   it('malformed records cannot hide behind empty observations or zero stats',async()=>{
     const f=await fixture({malformed:true});expect((await auditProcessGate(f.context,[])).status).not.toBe('PASS');await f.context.snapshot.verify();
   });
