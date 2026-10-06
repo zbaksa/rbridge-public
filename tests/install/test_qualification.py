@@ -77,6 +77,8 @@ class QualificationTests(unittest.TestCase):
             for value in (bundle,*variants):
                 self.assertRaisesRegex(ValueError,'QUALIFICATION_PHYSICAL_ORIGIN_UNQUALIFIED',self.verify,p,value)
         for value in variants:self.assertNotEqual(_bundle_pin(value),pin)
+        for canary in (b'',b'x'*4097,b'\xff',None):
+            self.assertRaisesRegex(ValueError,'QUALIFICATION_BUNDLE_INVALID',_bundle_pin,replace(bundle,canary_bytes=canary))
 
     def test_source_ci_is_pinned_to_full_log_commit_tree_and_required_steps(self):
         log=b'full fixture CI log\n'

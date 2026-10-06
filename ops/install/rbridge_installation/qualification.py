@@ -251,6 +251,7 @@ def _bundle_pin(bundle):
     try:
         if type(bundle.canary_bytes) is not bytes or not 1<=len(bundle.canary_bytes)<=4096:
             _fail('QUALIFICATION_BUNDLE_INVALID')
+        bundle.canary_bytes.decode('utf-8',errors='strict')
         return report_sha256({'profile_sha256':report_sha256(bundle.profile),
             'runtime_artifact':{'path':str(bundle.runtime_artifact.path),'manifest_sha256':bundle.runtime_artifact.manifest_sha256,
                 'source_sha':bundle.runtime_artifact.source_sha,'scope':bundle.runtime_artifact.scope},
