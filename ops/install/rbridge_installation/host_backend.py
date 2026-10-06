@@ -15,7 +15,7 @@ from .models import PauseError,encode_report,report_sha256
 from .profile import parse_profile
 from .protected_copy import ProtectedParent,FilesystemAuthority,FILE_FLAGS
 
-PROPERTIES=('ExecStart','User','Group','FragmentPath','DropInPaths','EnvironmentFiles','CPUQuotaPerSecUSec','Restart','NoNewPrivileges','ProtectSystem','ProtectHome','ReadWritePaths','ControlGroup','MainPID','ActiveState','SubState','InvocationID')
+PROPERTIES=('ExecStart','User','Group','FragmentPath','DropInPaths','EnvironmentFiles','Environment','UnsetEnvironment','CPUQuotaPerSecUSec','Restart','NoNewPrivileges','ProtectSystem','ProtectHome','ReadWritePaths','ControlGroup','MainPID','ActiveState','SubState','InvocationID')
 
 def normalize_exec_start(value):
     match=re.fullmatch(r'\{ path=([^;{}]+) ; argv\[\]=([^;{}]+) ; ignore_errors=(yes|no) ; [^{}]*\}',value)
@@ -118,6 +118,8 @@ class QualifiedHostBackend:
             self.cgroups[unit]=cgroup
         return result
     def _config(self,rows):
+        from .configuration import normalize_owned_rows
+        rows=normalize_owned_rows(self,rows)
         fragment=rows['FragmentPath'];dropins=shlex.split(rows['DropInPaths'])
         if not fragment or len(dropins)>32:raise PauseError('HOST_UNIT_FILES_UNCLASSIFIED')
         files={'fragment':{'path':fragment,'sha256':hashlib.sha256(_protected_bytes(fragment,1048576)).hexdigest()},'dropins':[{'path':p,'sha256':hashlib.sha256(_protected_bytes(p,1048576)).hexdigest()} for p in dropins]}
@@ -146,6 +148,8 @@ class QualifiedHostBackend:
     def stop_unit(self,unit):
         if unit!='rbridge.service' or unit!=self.profile.service.unit:raise PauseError('HOST_UNIT_NOT_APPROVED')
         self._run(('stop','rbridge.service'),self.profile.budget.stop_ms,65536)
+    def reload_configuration(self):
+        self._run(('daemon-reload',),self.profile.budget.stop_ms,65536)
     def probe_process(self,pid):
         from .process_observation import probe_kernel_process
         return probe_kernel_process(pid)
