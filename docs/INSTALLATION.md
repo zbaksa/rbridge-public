@@ -2,6 +2,8 @@
 
 RBridge is currently **Linux/systemd-first**. This document describes the supported shape of a production-style deployment; exact usernames, groups, paths and controller integration remain deployment choices.
 
+For a P2A upgrade of an existing service, follow the [approved installation design](superpowers/specs/2026-10-05-p2a-installation-design.md) and [implementation plan](superpowers/plans/2026-10-06-p2a-installation-native.md). The account creation and first-service setup examples below are for a new deployment. They do not authorize an existing service switch.
+
 ## 1. Runtime requirements
 
 Required for the base GitHub transport:
@@ -57,23 +59,11 @@ The shipped systemd template expects an immutable-style current-release layout:
 /usr/local/libexec/rbridge/current -> releases/<sha>
 ```
 
-One possible staging pattern:
+Stage the complete final material under a new, unused release name. Copying only `dist` and `package.json` is incomplete: the running entry points also need their exact locked production dependencies.
 
-```bash
-SHA="$(git rev-parse HEAD)"
+The P2A runtime manifest inventories `dist`, `node_modules`, `package.json` and `package-lock.json`. The separate toolkit manifest also includes its reviewed `ops` and contract files and the locked MCP client dependency needed by its readers. Build and install dependencies as a non-root account before protecting the material. Root must not run npm, compile a checkout or import runtime-owned installation modules.
 
-sudo install -d -o root -g root -m 0755 \
-  "/usr/local/libexec/rbridge/releases/$SHA"
-
-sudo cp -a dist package.json \
-  "/usr/local/libexec/rbridge/releases/$SHA/"
-
-sudo ln -sfn \
-  "/usr/local/libexec/rbridge/releases/$SHA" \
-  /usr/local/libexec/rbridge/current
-```
-
-For stronger immutability, make release files root-owned and non-writable by the runtime account.
+Bind every final name, byte, mode and confined link to a manifest; copy into a create-only protected stage; verify the entire published tree again. Release files must be root-owned and non-writable by the runtime account. An existing release, unexpected file, escaping link or changed ancestor blocks publication rather than being overwritten. Staging leaves `current` and the running service unchanged.
 
 ## 5. Prepare durable state
 
@@ -177,13 +167,22 @@ Then test only the capabilities you actually intend to expose.
 
 ## Upgrade rule
 
-Treat source/CI acceptance and live deployment acceptance as separate gates:
+Treat each gate as separate evidence:
 
-1. build and test the exact candidate;
-2. stage a new immutable release directory;
-3. preserve durable state;
-4. point `current` to the new release;
-5. restart and run HEALTH/canaries;
-6. roll back the pointer/service if acceptance fails.
+| Gate | Required observation | What it establishes |
+| --- | --- | --- |
+| Source | Exact commit/tree and complete non-root CI logs | Source tests and checks passed on that revision |
+| Final artifacts | Complete runtime/toolkit manifests and actual owner, IPC, MCP and helper fixture receipts on the profile's exact Node binary | The final material executes in its qualified isolated fixture |
+| Readers | Every registered reader's full case inputs, verdicts, archive/adoption evidence and exact closure | Actual reader qualification; a reference parser PASS is insufficient |
+| Privileged fixtures | Isolated Root copy, crash/ledger, configuration CAS, fake-unit stop, helper-family and bootstrap observations | Privileged mechanics were exercised without changing production |
+| Root imports/bootstrap | Protected interpreter/stdlib/shared-library closure and exact reviewed, authenticated bootstrap bytes | The command's execution provenance is qualified |
+| Maintained pause | Fresh lock, unchanged service identity, settled writers/helpers, full snapshot and all five correlated gates | The current stopped state is eligible for the authorized transaction |
+| Installed acceptance | Fresh invocation, HEALTH and FILE_READ receipts, actual readers, controlled same-candidate restart and original-ID replay | The installed candidate is accepted |
+
+The Native installation branch remains under development. Its qualification assessment always reports `BLOCKED` and cannot render an owner command. The physical collector, reviewed command dispatch and complete host qualification are still required. A source test, artifact hash, scope label or caller-supplied PASS cannot grant Root readiness.
+
+Once a complete reviewed bundle exists, preparation remains separate from explicit switch authorization. Before changing configuration or the pointer, the transaction records intent, maintains exclusion, independently verifies its protected backup and checks the stopped durable state. Original environment files, drop-ins, unrelated settings and the original pointer are preserved by ownership and compare-and-swap checks.
+
+After `START_ATTEMPTED`, an acceptance failure requires stopping and preserving the candidate's durable state and evidence. Automatically returning to the old pointer or restoring the old backup is unavailable. Before any start attempt, restoration of only the transaction's exact owned configuration/pointer additions still requires fresh compatible gates and observed ownership. See the recovery and exit meanings in [Operations](OPERATIONS.md).
 
 See [Operations](OPERATIONS.md).

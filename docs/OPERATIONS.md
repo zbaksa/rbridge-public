@@ -57,22 +57,11 @@ Important subtrees include request state, process sessions and transfers.
 
 ### Backup
 
-For a consistent offline backup:
+For a consistent offline backup, maintain exclusion, stop admissions and independently observe that the service, alternate writers, process sessions and owned helper families have settled. A successful `systemctl stop` acknowledgement alone does not prove this.
 
-1. stop RBridge;
-2. copy the state root while preserving permissions;
-3. restart RBridge;
-4. run a fresh HEALTH request.
+Copy the complete stopped state into a protected create-only destination. Retain unknown names and historical hardlink evidence; never delete or repair them to make a gate pass. Preserve original state bytes and metadata. Verify the full backup manifest, directory ownership/inodes and copied bytes independently both before and after publication. Reading the backup for verification must preserve its recorded timestamps.
 
-Example:
-
-```bash
-sudo systemctl stop rbridge.service
-sudo cp -a /home/rbridge/.local/state/rbridge /backup/location/
-sudo systemctl start rbridge.service
-```
-
-Do not use a casual recursive copy as a live-state migration while the service is mutating records.
+Restart only through the approved recovery or installation decision for the observed state. A casual recursive copy followed by an unconditional start does not provide P2A maintenance qualification.
 
 ## Upgrade
 
@@ -89,33 +78,44 @@ Before upgrading from an older unscoped release:
 
 This is intentional: silently trusting an old record after repository/author/target identity changes would reintroduce the replay problem.
 
-Recommended release workflow:
+Release preparation:
 
 1. identify exact candidate SHA;
 2. run `npm ci --ignore-scripts`;
 3. run `npm run verify`;
 4. confirm CI for the exact SHA;
-5. stage a new immutable release directory;
-6. leave durable state in place;
-7. update the `current` symlink atomically;
-8. restart RBridge;
-9. run HEALTH and capability-specific canaries;
-10. keep the old release until acceptance is complete.
+5. stage and independently verify the complete immutable release and its locked dependencies;
+6. qualify the exact final runtime/toolkit, actual readers and isolated privileged fixtures;
+7. retain durable state and record the reviewed bundle, original configuration and current pointer.
+
+Changing the service requires a complete qualified command and separate explicit switch authorization. The maintained pause, five stopped-state gates, configuration/pointer CAS and installed acceptance sequence are described in [Installation](INSTALLATION.md). Keep the original release and every transaction record throughout recovery.
 
 Avoid overwriting an existing immutable release directory.
 
 ## Rollback
 
-If a new release fails acceptance:
+P2A recovery depends on whether a start was attempted, including an attempted start whose acknowledgement was lost or failed.
 
-1. stop the new service process;
-2. point `current` back to the previous known-good release;
-3. restore deployment environment only if it changed;
-4. restart;
-5. run HEALTH;
-6. inspect durable state before retrying any operation that may have executed.
+Before `START_ATTEMPTED`, the transaction may restore only its exact owned configuration additions and pointer change after independently rechecking ownership, exclusion, the snapshot and compatible gates. It leaves the service stopped. A concurrent original-file edit, replaced object, unknown writer or uncertain durable intent blocks restoration and retains the evidence.
 
-The last point matters: durable state may contain valid work produced before a later acceptance failure.
+At or after `START_ATTEMPTED`, do not return to the old pointer, restore an old state snapshot, restart the old service or clear publication/operation history. The candidate may already have admitted work. Stop it through the concrete host backend, prove the service and all writers/helpers have settled, and preserve all current state, manifests, receipts and configuration for compatible recovery. Missing settlement remains `HOLD_UNSETTLED`.
+
+## Maintenance resume and result meanings
+
+A lock is held by the current foreground process only; it does not survive process death. A new process must freshly acquire exclusion and inspect the complete private maintenance registry. An unfinished predecessor, active peer lock, corrupt ledger, partial backup or unknown helper object blocks a new transaction. Resume uses the exact existing transaction ledger and full private evidence; a missing ledger or lock is never initialized as recovery.
+
+| Transaction exit | Meaning |
+| --- | --- |
+| `0` / `ACCEPTED` | Fresh final invocation and complete installed acceptance were recorded |
+| `2` / `BLOCKED`, `UNKNOWN` or `HOLD_UNSETTLED` | Preconditions, durable ownership or observed settlement are incomplete; inspect the reason codes and preserve the hold |
+| `3` / `RESTORED_PRE_START_STOPPED` | Exact owned changes were restored before any start attempt; the service remains stopped |
+| `4` / `STOPPED_POST_START_HOLD` | Post-start stop and writer/helper settlement were observed; the old restart remains forbidden |
+
+These are transaction outcomes, not generic meanings for every reader/audit CLI exit. A durable `ACCEPTED` marker alone does not provide fresh live acceptance. A status read reports ledger history and explicitly leaves live state unobserved.
+
+The foreground CLI retains exclusion for its bounded owner-present window after a failed transaction. When that window ends, it leaves durable evidence and reports that fresh reacquisition is required. It never promises a surviving flock. The bootstrap wrapper preserves the child/sudo exit status without exiting the interactive parent shell; shell liveness alone is not a successful installation result.
+
+The current Native qualification/bootstrap implementation is incomplete and refuses Root command readiness. Source fixtures and CI can pass while actual artifact, reader, import-closure or privileged qualification remains `UNKNOWN`. Do not assemble a production command from draft components or serialized PASS reports.
 
 ## GitHub transport housekeeping
 

@@ -105,7 +105,7 @@ def _session_rows(session, deadline):
 
 
 def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
-                      child_specs=(), guard=None, ready=None):
+                      child_specs=(), guard=None, ready=None, started=None, heartbeat=None):
     """Private fixed launch primitive; no shell, ambient credentials or name kills.
 
     Returned output is accompanied by launch/settlement facts. Missing namespace,
@@ -163,12 +163,18 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
         token=_stat(child.pid)
         if token['session']!=child.pid or token['ppid']!=os.getpid(): _fail('OWNED_HELPER_PARENT_UNQUALIFIED')
         proof['start_ticks']=token['start_ticks']
+        if started is not None:
+            # The immutable launcher receives our actual child only after its
+            # executable, ancestry and complete current family were examined.
+            if not census() or parent is None: _fail('OWNED_HELPER_PARENT_UNQUALIFIED')
+            started(child)
         for stream in (child.stdin,child.stdout,child.stderr): os.set_blocking(stream.fileno(),False)
         for stream in (child.stdout,child.stderr): selector.register(stream,selectors.EVENT_READ)
         if released and pending: selector.register(child.stdin,selectors.EVENT_WRITE)
         elif released: child.stdin.close()
         while selector.get_map():
             census()
+            if heartbeat is not None: heartbeat()
             remaining=deadline-time.monotonic()
             if remaining<=0: _fail('OWNED_HELPER_DEADLINE')
             for key,_ in selector.select(min(remaining,0.1)):

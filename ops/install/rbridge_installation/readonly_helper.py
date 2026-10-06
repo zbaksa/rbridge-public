@@ -5,11 +5,9 @@ import os
 from pathlib import Path
 import re
 import secrets
-import selectors
 import select
 import signal
 import stat
-import subprocess
 import sys
 import time
 from .artifact import _identity, validate_manifest
@@ -18,6 +16,7 @@ from .models import InstallationError, PauseError, encode_report, report_sha256,
 from .pause_backup import PauseLease, capture_snapshot
 from .protected_copy import FilesystemAuthority, verify_published
 from .process_observation import probe_kernel_process
+from .owned_process import run_owned_process, validate_owned_session, assert_owned_helpers_settled
 
 
 class ReadonlyHelperError(InstallationError):
@@ -64,6 +63,17 @@ def parse_helper_ready(raw, nonce):
     except (ValueError,TypeError,KeyError):_fail('HELPER_READY_INVALID')
     if row['schema']!='RBRIDGE_INSTALL_HELPER_READY_V1' or row['nonce']!=nonce or type(row['pid']) is not int or not 2<=row['pid']<=2147483647:_fail('HELPER_READY_INVALID')
     return row['pid']
+
+
+def validate_readonly_ready(raw, nonce, parent_pid, observed, spec):
+    """Correlate the nonce packet to the launch census; no authority is minted."""
+    pid=parse_helper_ready(raw,nonce)
+    if type(observed) is not dict or parent_pid not in observed:_fail('HELPER_PROCESS_NOT_OWNED')
+    parent=observed[parent_pid]
+    validate_owned_session(parent,list(observed.values()),[spec])
+    row=observed.get(pid)
+    if pid==parent_pid or row is None or row['ppid']!=parent_pid:_fail('HELPER_PROCESS_NOT_OWNED')
+    return pid
 
 
 def validate_discovery(value, profile, token):
@@ -182,60 +192,58 @@ class QualifiedReadonlyAuditRunner:
         body=encode_report(value)
         if len(body)>p.budget.carrier_bytes:_fail('HELPER_INPUT_LIMIT')
         nonce=secrets.token_hex(32);env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':p.binding.home,'USER':p.binding.account,'LOGNAME':p.binding.account,'LC_ALL':'C','RBRIDGE_INSTALL_HELPER_NONCE':nonce}
-        child=subprocess.Popen([self.runuser.path,'--user','rbridge','--',p.runtime.node_path,str(self.entrypoint)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,cwd='/',start_new_session=True)
-        try:parentfd=os.pidfd_open(child.pid,0)
-        except OSError:
-            child.kill();child.wait(timeout=p.budget.stop_ms/1000);_fail('HELPER_PARENT_IDENTITY_UNAVAILABLE')
-        held=None;selector=selectors.DefaultSelector();out=bytearray();errors=bytearray();pending=memoryview(body);ready=False;deadline=min(self.lease.deadline,time.monotonic()+p.budget.scan_ms/1000)
+        node_args=[p.runtime.node_path,str(self.entrypoint)]
+        parent_args=[self.runuser.path,'--user',p.binding.account,'--',*node_args]
+        spec={'exe':p.runtime.node_path,'argv':node_args,'uid':p.binding.uid,'gid':p.binding.gid,
+            'groups':list(p.binding.supplementary_gids),'parent_argv':parent_args,'max_count':1}
+        held=None;child=None;registered=False
+        def started(actual):
+            nonlocal child
+            child=actual
+        def ready(raw,observed):
+            nonlocal held,registered
+            if child is None:_fail('HELPER_PARENT_IDENTITY_UNAVAILABLE')
+            pid=validate_readonly_ready(raw,nonce,child.pid,observed,spec)
+            held=_HeldReadonlyHelper(self,child,pid)
+            if not hasattr(self.lease.backend,'readonly_helpers'):self.lease.backend.readonly_helpers={}
+            if pid in self.lease.backend.readonly_helpers:_fail('HELPER_PROCESS_NOT_OWNED')
+            self.lease.backend.readonly_helpers[pid]=held
+            registered=True
+            self.lease.check()
+        def heartbeat():
+            if held is not None and not selectors_ready(held.pidfd) and child.poll() is None:self.lease.check()
+        remaining=min(p.budget.scan_ms,int((self.lease.deadline-time.monotonic())*1000))
+        if remaining<=0:_fail('HELPER_COMMAND_DEADLINE')
         try:
-            for stream in (child.stdin,child.stdout,child.stderr):os.set_blocking(stream.fileno(),False)
-            selector.register(child.stdout,selectors.EVENT_READ);selector.register(child.stderr,selectors.EVENT_READ)
-            while selector.get_map():
-                remaining=deadline-time.monotonic()
-                if remaining<=0:_fail('HELPER_COMMAND_DEADLINE')
-                for key,_ in selector.select(min(remaining,0.2)):
-                    if key.fileobj is child.stdin:
-                        pending=pending[os.write(key.fd,pending):]
-                        if not pending:selector.unregister(child.stdin);child.stdin.close()
-                        continue
-                    chunk=os.read(key.fd,65536)
-                    if not chunk:selector.unregister(key.fileobj);continue
-                    destination=out if key.fileobj is child.stdout else errors;destination.extend(chunk)
-                    if len(out)+len(errors)>p.budget.carrier_bytes:_fail('HELPER_OUTPUT_LIMIT')
-                    if key.fileobj is child.stderr and not ready:
-                        if len(errors)>4096:_fail('HELPER_READY_INVALID')
-                        if b'\n' in errors:
-                            pid=parse_helper_ready(bytes(errors),nonce);held=_HeldReadonlyHelper(self,child,pid)
-                            if not hasattr(self.lease.backend,'readonly_helpers'):self.lease.backend.readonly_helpers={}
-                            self.lease.backend.readonly_helpers[pid]=held;ready=True;self.lease.check();selector.register(child.stdin,selectors.EVENT_WRITE)
-                            self.helper_evidence.append({'scope':'ROOT_LAUNCHED_EXACT_READONLY_HELPER','facts':held.facts,'parent_facts':held.parent_facts,'node_sha256':p.runtime.node_sha256,'toolkit_manifest_sha256':self.manifest.sha256,'profile_sha256':report_sha256(p),'snapshot_sha256':report_sha256(token),'nonce_sha256':hashlib.sha256(nonce.encode()).hexdigest(),'input_sha256':hashlib.sha256(body).hexdigest()})
-                    if held is not None and not selectors_ready(held.pidfd) and child.poll() is None:self.lease.check()
-            code=child.wait(timeout=max(0.001,deadline-time.monotonic()))
-            if not ready or code not in (0,2,4,5):_fail('HELPER_COMMAND_FAILED')
-            result=_json(bytes(out),p.budget.carrier_bytes)
+            out,errors,session=run_owned_process(self.runuser,parent_args[1:],remaining,p.budget.carrier_bytes,
+                input_bytes=body,env=env,child_specs=[spec],guard=self._qualify,
+                started=started,heartbeat=heartbeat,ready=ready)
+            code=session['exit_code']
+            if held is None or parse_helper_ready(errors,nonce)!=held.pid or code not in (0,2,4,5):_fail('HELPER_COMMAND_FAILED')
+            result=_json(out,p.budget.carrier_bytes)
             if type(result) is not dict:_fail('HELPER_PACKET_INVALID')
-            self.helper_evidence[-1].update(output_sha256=hashlib.sha256(out).hexdigest(),exit_code=code)
+            self.helper_evidence.append({'scope':'ROOT_LAUNCHED_EXACT_READONLY_HELPER',
+                'facts':held.facts,'parent_facts':held.parent_facts,'node_sha256':p.runtime.node_sha256,
+                'toolkit_manifest_sha256':self.manifest.sha256,'profile_sha256':report_sha256(p),
+                'snapshot_sha256':report_sha256(token),'nonce_sha256':hashlib.sha256(nonce.encode()).hexdigest(),
+                'input_sha256':hashlib.sha256(body).hexdigest(),'input_json':body.decode('utf-8'),
+                'output_sha256':hashlib.sha256(out).hexdigest(),'output_json':out.decode('utf-8'),
+                'ready_json':errors.decode('utf-8'),'exit_code':code,'session':session})
             if result.get('status')=='PASS' and code!=0:_fail('HELPER_EXIT_VERDICT_MISMATCH')
             if value['schema']=='RBRIDGE_INSTALL_DISCOVERY_INPUT_V1':return validate_discovery(result,p,token)
             return validate_gate_bundle(result,token)
-        except (OSError,subprocess.TimeoutExpired):_fail('HELPER_COMMAND_UNAVAILABLE')
+        except OSError:_fail('HELPER_COMMAND_UNAVAILABLE')
         finally:
-            selector.close()
-            # Signal only the exact processes held by our own pidfds; no PID-name kills.
+            # The common launch primitive settles every retained family member
+            # before this exact pause exemption may be removed.
+            assert_owned_helpers_settled()
             if held is not None:
-                try:signal.pidfd_send_signal(held.pidfd,signal.SIGKILL)
-                except ProcessLookupError:pass
-            try:child.wait(timeout=p.budget.stop_ms/1000)
-            except subprocess.TimeoutExpired:
-                try:signal.pidfd_send_signal(parentfd,signal.SIGKILL)
-                except ProcessLookupError:pass
-                child.wait(timeout=p.budget.stop_ms/1000)
-            if held is not None:
-                # Twice-observed absence precedes removal of the pause exemption.
-                if probe_kernel_process(held.pid) is not None:_fail('HELPER_SETTLEMENT_UNPROVEN')
-                self.lease.backend.readonly_helpers.pop(held.pid,None);os.close(held.pidfd)
-            os.close(parentfd)
-            for stream in (child.stdin,child.stdout,child.stderr):stream.close()
+                if (not selectors_ready(held.pidfd) or probe_kernel_process(held.pid) is not None
+                        or probe_kernel_process(held.pid) is not None):_fail('HELPER_SETTLEMENT_UNPROVEN')
+                if registered:
+                    if self.lease.backend.readonly_helpers.get(held.pid) is not held:_fail('HELPER_PROCESS_NOT_OWNED')
+                    self.lease.backend.readonly_helpers.pop(held.pid)
+                os.close(held.pidfd)
             self._qualify();self.lease.check()
 
 

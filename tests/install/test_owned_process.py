@@ -60,5 +60,15 @@ class OwnedProcessTests(unittest.TestCase):
                     self.assertRaises(ValueError, self.run, None, (), 1000, 4096)
             launch.assert_not_called()
 
+    def test_launch_and_heartbeat_callbacks_cannot_bypass_root_preconditions(self):
+        from unittest.mock import Mock
+        started, heartbeat, ready = Mock(), Mock(), Mock()
+        with patch('rbridge_installation.owned_process.subprocess.Popen') as launch:
+            with patch('rbridge_installation.owned_process._assert_kernel_namespace',side_effect=ValueError('incoherent')):
+                self.assertRaises(ValueError,self.run,None,(),1000,4096,
+                    started=started,heartbeat=heartbeat,ready=ready)
+            launch.assert_not_called();started.assert_not_called()
+            heartbeat.assert_not_called();ready.assert_not_called()
+
 
 if __name__ == '__main__': unittest.main()

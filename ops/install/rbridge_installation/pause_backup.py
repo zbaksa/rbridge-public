@@ -125,7 +125,11 @@ def reacquire_exclusion(profile,backend,ledger):
         except FileExistsError:fd=os.open(path.name,os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=guard.fd)
         row=os.fstat(fd)
         if not stat.S_ISREG(row.st_mode) or row.st_uid!=os.getuid() or row.st_nlink!=1 or row.st_mode&0o7777!=0o600:raise PauseError('PAUSE_LOCK_UNPROTECTED')
-        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lease=PauseLease(profile,backend,ledger,fd,_identity(row),None,guard);lease.check_exclusion();return lease
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lease=PauseLease(profile,backend,ledger,fd,_identity(row),None,guard);lease.check_exclusion()
+        if scope=='QUALIFIED_HOST_PAUSE':
+            from .maintenance_registry import assert_no_unfinished_transactions
+            assert_no_unfinished_transactions(ledger.parent_fd,ledger)
+        return lease
     except BaseException:
         if fd is not None:os.close(fd)
         guard.close();raise

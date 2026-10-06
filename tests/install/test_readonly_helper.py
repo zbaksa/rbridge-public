@@ -28,6 +28,28 @@ class ReadonlyHelperTests(unittest.TestCase):
         for raw in (json.dumps({**packet,'nonce':'b'*64}).encode()+b'\n',json.dumps({**packet,'pid':True}).encode()+b'\n',b'{"schema":"wrong","schema":"RBRIDGE_INSTALL_HELPER_READY_V1","pid":31337,"nonce":"'+b'a'*64+b'"}\n',json.dumps(packet).encode(),json.dumps({**packet,'extra':True}).encode()+b'\n'):
             with self.assertRaises(self.error):self.ready(raw,'a'*64)
 
+    def test_ready_cannot_register_an_unobserved_or_foreign_child(self):
+        from rbridge_installation.readonly_helper import validate_readonly_ready
+        parent = {'pid':20,'start_ticks':'100','ppid':10,'session':20,
+            'uid':[0]*4,'gid':[0]*4,'groups':[0],'exe':'/usr/sbin/runuser',
+            'argv':['/usr/sbin/runuser','--user','rbridge','--','/usr/bin/node','/protected/audit.js']}
+        node = {'pid':21,'start_ticks':'101','ppid':20,'session':20,
+            'uid':[1027]*4,'gid':[1027]*4,'groups':[1027],
+            'exe':'/usr/bin/node','argv':['/usr/bin/node','/protected/audit.js']}
+        spec = {'exe':node['exe'],'argv':node['argv'],'uid':1027,'gid':1027,
+            'groups':[],'parent_argv':parent['argv'],'max_count':1}
+        def packet(pid):
+            return json.dumps({'schema':'RBRIDGE_INSTALL_HELPER_READY_V1','pid':pid,'nonce':'a'*64}).encode()+b'\n'
+        observed = {20:parent,21:node}
+        self.assertEqual(validate_readonly_ready(packet(21),'a'*64,20,observed,spec),21)
+        for pid,rows in ((22,observed),(20,observed),(21,{20:parent}),
+                         (21,{20:parent,21:{**node,'ppid':1}}),
+                         (21,{20:parent,21:{**node,'uid':[0]*4}}),
+                         (21,{20:parent,21:{**node,'argv':['/usr/bin/node','/other.js']}}),
+                         (21,{20:parent,21:node,22:{**node,'pid':22}})):
+            with self.subTest(pid=pid,rows=rows):
+                self.assertRaises(ValueError,validate_readonly_ready,packet(pid),'a'*64,20,rows,spec)
+
     def test_discovery_binds_full_sorted_targets_to_profile_and_snapshot_without_kernel_claim(self):
         packet = {'schema':'RBRIDGE_INSTALL_DISCOVERY_RESULT_V1','scope':'READONLY_PROBE_TARGETS_ONLY','status':'PASS','reason_codes':[],'profile_sha256':self.sha(self.profile),'snapshot_sha256':self.sha(self.token),'core_absence_sha256':'f'*64,'issue_numbers':[17,23],'process_targets':[{'session_id':'a'*32,'pid':31337,'start_ticks':'123','identity_sha256':'e'*64}]}
         self.assertEqual(self.discovery(packet,self.profile,self.token)['issue_numbers'],[17,23])
