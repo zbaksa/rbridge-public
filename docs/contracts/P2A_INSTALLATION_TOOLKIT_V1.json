@@ -1544,6 +1544,273 @@
           "maximum": 9007199254740991
         }
       }
+    },
+    "McpReaderScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationId",
+        "principalId",
+        "targetInstanceId",
+        "runtime_uid",
+        "intent_sha256",
+        "policy_sha256",
+        "deadline_ms"
+      ],
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "principalId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "targetInstanceId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "runtime_uid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "intent_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "policy_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "deadline_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 180000
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "output_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ReaderAdoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "reader_id",
+        "owner",
+        "workflow",
+        "entrypoint",
+        "source_sha256",
+        "version",
+        "trusted_context_sha256",
+        "fixture_set_sha256",
+        "adopted_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_READER_ADOPTION_V1"
+        },
+        "reader_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "trusted_context_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "fixture_set_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "adopted_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "ReaderRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "readers",
+        "adoptions"
+      ],
+      "properties": {
+        "readers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReaderRegistration"
+          },
+          "maxItems": 64
+        },
+        "adoptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReaderAdoption"
+          },
+          "maxItems": 64
+        }
+      }
+    },
+    "ReaderInvocationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reader_id",
+        "fixture_id",
+        "case_id",
+        "input_sha256",
+        "output_sha256",
+        "scope",
+        "input_json",
+        "verdict_json"
+      ],
+      "properties": {
+        "reader_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "fixture_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "case_id": {
+          "enum": [
+            "C01",
+            "C02",
+            "C03",
+            "C04",
+            "C05",
+            "C06",
+            "C07",
+            "C08",
+            "C09"
+          ]
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "output_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "scope": {
+          "enum": [
+            "REFERENCE_PARSER_ONLY",
+            "QUALIFIED_INSTALLED_READER"
+          ]
+        },
+        "input_json": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 67108864
+        },
+        "verdict_json": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 67108864
+        }
+      }
+    },
+    "ReaderQualificationReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "referenceAcceptance",
+        "actualAcceptance",
+        "reason_codes",
+        "acceptedCases",
+        "invocations"
+      ],
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_READER_QUALIFICATION_V1"
+        },
+        "referenceAcceptance": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "actualAcceptance": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "maxItems": 100000
+        },
+        "acceptedCases": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "C01",
+              "C02",
+              "C03",
+              "C04",
+              "C05",
+              "C06",
+              "C07",
+              "C08",
+              "C09"
+            ]
+          },
+          "maxItems": 9
+        },
+        "invocations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReaderInvocationEvidence"
+          },
+          "maxItems": 32768
+        }
+      }
     }
   }
 }
