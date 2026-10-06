@@ -5,6 +5,10 @@ import {INSTALL_CONTRACT_SCHEMA} from '../../src/installation/contractSchema.js'
 
 const profile=()=>JSON.parse(readFileSync(new URL('../fixtures/rbridge-install-profile.json',import.meta.url),'utf8')) as Record<string,unknown>;
 describe('strict installation profile',()=>{
+  it('binds the FILE canary to the existing Core read root',()=>{
+    const p=profile();(p.paths as Record<string,unknown>).canary_path='/mnt/data/fixture-canary.txt';expect(parseRBridgeInstallProfile(p).paths.canary_path).toBe('/mnt/data/fixture-canary.txt');
+    for(const path of ['/home/rbridge/fixture-canary.txt','/mnt/data','/mnt/database/canary','/mnt/data/../canary']){(p.paths as Record<string,unknown>).canary_path=path;expect(()=>parseRBridgeInstallProfile(p)).toThrow();}
+  });
   it('shares readiness, discovery and complete audit wire contracts with Python',()=>{
     const ready={schema:'RBRIDGE_INSTALL_HELPER_READY_V1',pid:31337,nonce:'a'.repeat(64)};
     expect(()=>validateInstallContract(ready,'HelperReady')).not.toThrow();

@@ -44,6 +44,12 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             p.binding.uid = 0
         self.assertEqual(p.binding.supplementary_gids, ())
+    def test_file_canary_stays_inside_existing_core_read_root(self):
+        p=valid_profile();p['paths']['canary_path']='/mnt/data/fixture-canary.txt'
+        self.assertEqual(self.parse(p).paths.canary_path,'/mnt/data/fixture-canary.txt')
+        for path in ('/home/rbridge/fixture-canary.txt','/mnt/data','/mnt/database/canary','/mnt/data/../canary'):
+            p['paths']['canary_path']=path
+            with self.subTest(path=path),self.assertRaises(self.error):self.parse(p)
 
     def test_unsafe_paths_tool_roles_and_bounds_are_rejected(self):
         for section, key, value in [('paths', 'state_root', '/home/rbridge/../other'), ('budget', 'lookup_batch', 26), ('budget', 'record_bytes', 65536), ('toolkit', 'python_version', '3.10.9')]:

@@ -20,7 +20,7 @@ def parse_profile(value):
         env = [e.path for e in profile.service.environment_files]
         if len(set(env)) != len(env) or profile.paths.binding_env in env: raise ValueError()
         if profile.paths.state_root != b.home + '/.local/state/rbridge': raise ValueError()
-        if not profile.paths.canary_path.startswith(b.home + '/'): raise ValueError()
+        if not profile.paths.canary_path.startswith('/mnt/data/'): raise ValueError()
         if len(set(r.reader_id for r in profile.readers)) != len(profile.readers): raise ValueError()
         return profile
     except (ValueError, TypeError, KeyError, AttributeError, UnicodeError):

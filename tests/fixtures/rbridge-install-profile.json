@@ -62,7 +62,7 @@
     "lock_path": "/run/rbridge-installation.lock",
     "binding_env": "/etc/rbridge/p2a-binding.env",
     "binding_dropin": "/etc/systemd/system/rbridge.service.d/60-p2a-binding.conf",
-    "canary_path": "/home/rbridge/fixture-canary.txt"
+    "canary_path": "/mnt/data/fixture-canary.txt"
   },
   "service": {
     "unit": "rbridge.service",

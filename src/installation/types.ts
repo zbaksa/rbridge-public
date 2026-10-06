@@ -75,6 +75,6 @@ export function parseRBridgeInstallProfile(value:unknown):InstallProfile{
   if(paths.some(path=>!path.startsWith('/')||path==='/'||/[\x00\r\n]/.test(path)||path.split('/').slice(1).some(part=>part===''||part==='.'||part==='..')))invalid();
   if(p.tools.length!==3||new Set(p.tools.map(t=>t.role)).size!==3)invalid();
   const env=p.service.environment_files.map(e=>e.path);
-  if(new Set(env).size!==env.length||env.includes(p.paths.binding_env)||p.paths.state_root!==b.home+'/.local/state/rbridge'||!p.paths.canary_path.startsWith(b.home+'/')||new Set(p.readers.map(r=>r.reader_id)).size!==p.readers.length)invalid();
+  if(new Set(env).size!==env.length||env.includes(p.paths.binding_env)||p.paths.state_root!==b.home+'/.local/state/rbridge'||!p.paths.canary_path.startsWith('/mnt/data/')||new Set(p.readers.map(r=>r.reader_id)).size!==p.readers.length)invalid();
   return freeze(p);
 }
