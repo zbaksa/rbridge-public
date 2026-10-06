@@ -72,5 +72,33 @@ class AcceptanceTransportTests(unittest.TestCase):
     def test_plain_context_scope_strings_never_construct_actual_backend(self):
         self.assertRaises(ValueError,self.Backend,{'scope':'QUALIFIED_INSTALLED_ACCEPTANCE'},None)
 
+    def test_replay_requires_local_publication_matching_exact_authenticated_carrier(self):
+        try:
+            from rbridge_installation.acceptance_transport import validate_delivery_publication
+        except ImportError:self.fail('Post-restart durable publication comparison is not implemented')
+        from rbridge_installation.models import report_sha256
+        intent='d'*64; envelope='e'*64
+        record={'schema':'RBRIDGE_GITHUB_DELIVERY_V1','revision':2,
+            'identity':{'repository':self.profile.binding.repository,'issueNumber':17,
+                'authorLogin':self.profile.binding.author,'title':self.issue['title'],
+                'bodySha256':report_sha256(self.request),'requestSha256':report_sha256(self.request),
+                'operationId':self.request['requestId'],'intentSha256':intent},
+            'state':'PUBLISHED','publication':{'envelopeSha256':envelope,'totalBytes':100,
+                'chunkCount':0,'nextIndex':0,'receiptCommentId':20},'lastReason':'RBRIDGE_GITHUB_PUBLISHED','attempts':1}
+        expected={'intent_sha256':intent,'comment_id':20,'envelope_sha256':envelope,'envelope_bytes':100}
+        self.assertEqual(validate_delivery_publication(self.profile,self.request,17,record,expected,True),record)
+        pending={**record,'state':'PENDING'}
+        self.assertEqual(validate_delivery_publication(self.profile,self.request,17,pending,expected,False),pending)
+        self.assertRaises(ValueError,validate_delivery_publication,self.profile,self.request,17,pending,expected,True)
+        for change in ({'identity':{**record['identity'],'requestSha256':'f'*64}},
+                       {'publication':{**record['publication'],'receiptCommentId':21}},
+                       {'publication':{**record['publication'],'envelopeSha256':'f'*64}},
+                       {'publication':{**record['publication'],'nextIndex':1}},
+                       {'publication':None}, {'revision':9007199254740992},
+                       {'attempts':9007199254740992}, {'lastReason':'bad\0reason'},
+                       {'publication':{**record['publication'],'manifestCommentId':20}},
+                       {'state':'IDENTITY_BLOCKED'}):
+            self.assertRaises(ValueError,validate_delivery_publication,self.profile,self.request,17,{**record,**change},expected,True)
+
 
 if __name__=='__main__':unittest.main()

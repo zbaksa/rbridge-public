@@ -110,6 +110,39 @@ def build_carrier_capture(profile,request,number,before,comments,after,viewer,co
 _backends=weakref.WeakSet()
 
 
+def validate_delivery_publication(profile,request,number,record,expected,require_published):
+    """Data predicate only; the concrete backend separately pins descriptor origin."""
+    keys={'schema','revision','identity','state','lastReason','attempts'}
+    if (type(record) is not dict or set(record)-keys-{'publication'} or not keys<=set(record)
+            or record['schema']!='RBRIDGE_GITHUB_DELIVERY_V1' or type(record['revision']) is not int or not 1<=record['revision']<=9007199254740991
+            or type(record['attempts']) is not int or not 0<=record['attempts']<=9007199254740991
+            or type(record['lastReason']) is not str or '\0' in record['lastReason'] or len(record['lastReason'].encode())>512
+            or record['state'] not in ('PENDING','PUBLISHED')):_fail('ACCEPTANCE_LOCAL_PUBLICATION_INVALID')
+    identity={'repository':profile.binding.repository,'issueNumber':number,'authorLogin':profile.binding.author,
+        'title':'[COCWIN BRIDGE REQUEST] '+request['requestId'],'bodySha256':report_sha256(request),
+        'requestSha256':report_sha256(request),'operationId':request['requestId'],'intentSha256':expected['intent_sha256']}
+    if record['identity']!=identity:_fail('ACCEPTANCE_LOCAL_PUBLICATION_IDENTITY_CHANGED')
+    publication=record.get('publication')
+    if 'publication' in record:
+        required={'envelopeSha256','totalBytes','chunkCount','nextIndex'}
+        if (type(publication) is not dict or set(publication)-required-{'manifestCommentId','receiptCommentId'}
+                or not required<=set(publication) or publication['envelopeSha256']!=expected['envelope_sha256']
+                or type(publication['totalBytes']) is not int or publication['totalBytes']!=expected['envelope_bytes']
+                or type(publication['chunkCount']) is not int or not 0<=publication['chunkCount']<=256
+                or type(publication['nextIndex']) is not int or not 0<=publication['nextIndex']<=publication['chunkCount']
+                or (publication['chunkCount']==0 and 'manifestCommentId' in publication)
+                or (publication['chunkCount']>0 and publication['chunkCount']!=(publication['totalBytes']+39999)//40000)
+                or ('receiptCommentId' in publication and publication['receiptCommentId']!=expected['comment_id'])
+                or ('manifestCommentId' in publication and publication['manifestCommentId']!=expected['comment_id'])):
+            _fail('ACCEPTANCE_LOCAL_PUBLICATION_TRUTH_CHANGED')
+    if record['state']=='PUBLISHED':
+        if (publication is None or publication.get('receiptCommentId')!=expected['comment_id']
+                or publication['chunkCount']>0 and publication.get('manifestCommentId')!=expected['comment_id']
+                or publication['nextIndex']!=publication['chunkCount']):_fail('ACCEPTANCE_LOCAL_PUBLICATION_INVALID')
+    elif require_published:raise AcceptanceNotReady('ACCEPTANCE_LOCAL_PUBLICATION_PENDING')
+    return record
+
+
 class QualifiedAcceptanceBackend:
     scope='QUALIFIED_INSTALLED_ACCEPTANCE'
     def __init__(self,context,host):
@@ -297,7 +330,60 @@ class QualifiedAcceptanceBackend:
         if original is not None:value['original']=original
         result=self._reader(value)
         self._validate_named_readers(result,context.operation_ids)
+        for index,(request,carrier) in enumerate(zip(requests,carriers)):
+            operation=result['report']['operations'][index]
+            github=_json(operation['github_verdict_json'].encode())
+            receipt=github['receipt'];claimed=receipt['transitions'][0]['at'];terminal=receipt['transitions'][-1]['at']
+            if not request['createdAt']<=claimed<=terminal<=result['report']['captured_at']:
+                _fail('ACCEPTANCE_ADMISSION_TIME_CHANGED')
+            expected={'intent_sha256':self._mcp_expectation(request)['intent_sha256'],
+                'comment_id':operation['comment_id'],'envelope_sha256':github['evidence']['envelope_sha256'],
+                'envelope_bytes':len(base64.b64decode(github['evidence']['raw_envelope_base64'],validate=True))}
+            live=self._read_delivery(carrier['number'])
+            validate_delivery_publication(self.profile,request,carrier['number'],live['record'],expected,stage=='REPLAY')
+            context.prepared.evidence.write('accept-local-publication',{'stage':stage,'delivery':live,
+                'created_at':request['createdAt'],'claimed_at':claimed,'terminal_at':terminal,
+                'captured_at':result['report']['captured_at'],'health_metadata':github.get('output') if index==0 else None})
         return result['report']
+    def _read_delivery(self,number):
+        from .protected_copy import DIR_FLAGS
+        # Walk and retain every ancestor. Runtime-owned state is data, never code.
+        path=Path(self.profile.paths.state_root)/'execution-v2/deliveries/github'/str(number)
+        directory=path.parent;handles=[];links=[];fd=None
+        try:
+            parent=os.open('/',DIR_FLAGS);handles.append(parent);current=''
+            for part in directory.parts[1:]:
+                current+='/'+part;before=os.stat(part,dir_fd=parent,follow_symlinks=False)
+                runtime=current==self.profile.binding.home or current.startswith(self.profile.binding.home+'/')
+                owner=self.profile.binding.uid if runtime else 0
+                if (not stat.S_ISDIR(before.st_mode) or before.st_uid!=owner or before.st_mode&0o6022
+                        or current.startswith(self.profile.binding.home+'/.local') and before.st_mode&0o7777!=0o700):
+                    _fail('ACCEPTANCE_STATE_ANCESTOR_UNQUALIFIED')
+                child=os.open(part,DIR_FLAGS,dir_fd=parent);handles.append(child)
+                links.append((parent,part,child,before));parent=child
+            def stable(s):return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid)
+            def check():
+                for parent,name,child,before in links:
+                    if stable(before)!=stable(os.fstat(child)) or stable(before)!=stable(os.stat(name,dir_fd=parent,follow_symlinks=False)):
+                        _fail('ACCEPTANCE_STATE_ANCESTOR_CHANGED')
+            check();name=str(number)+'.json';fd=os.open(name,FILE_FLAGS,dir_fd=handles[-1]);before=os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid!=self.profile.binding.uid or before.st_nlink!=1
+                    or before.st_mode&0o7777!=0o600 or not 0<before.st_size<=self.profile.budget.record_bytes):
+                _fail('ACCEPTANCE_LOCAL_PUBLICATION_UNQUALIFIED')
+            raw=bytearray()
+            while len(raw)<=before.st_size:
+                chunk=os.read(fd,min(65536,before.st_size+1-len(raw)))
+                if not chunk:break
+                raw.extend(chunk)
+            if (len(raw)!=before.st_size or _identity(before)!=_identity(os.fstat(fd))
+                    or _identity(before)!=_identity(os.stat(name,dir_fd=handles[-1],follow_symlinks=False))):
+                raise AcceptanceNotReady('ACCEPTANCE_LOCAL_PUBLICATION_CHANGED')
+            check();record=_json(bytes(raw),self.profile.budget.record_bytes)
+            if encode_report(record)!=raw:_fail('ACCEPTANCE_LOCAL_PUBLICATION_NOT_CANONICAL')
+            return {'record':record,'file_sha256':hashlib.sha256(raw).hexdigest(),'identity':list(map(str,_identity(before)))}
+        finally:
+            if fd is not None:os.close(fd)
+            for handle in reversed(handles):os.close(handle)
     def _validate_named_readers(self,result,ids):
         if result.get('schema')!='RBRIDGE_INSTALL_NAMED_READERS_V1' or result.get('report',{}).get('status')!='PASS':
             _fail('ACCEPTANCE_NAMED_READERS_NOT_PASS')
