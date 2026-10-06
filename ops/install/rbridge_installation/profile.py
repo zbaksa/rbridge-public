@@ -1,5 +1,6 @@
 import re
-from .models import ProfileError, record
+import json
+from .models import ProfileError,record,encode_report
 
 def parse_profile(value):
     try:
@@ -25,3 +26,17 @@ def parse_profile(value):
         return profile
     except (ValueError, TypeError, KeyError, AttributeError, UnicodeError):
         raise ProfileError('PROFILE_INVALID') from None
+
+
+def assert_reader_profile_extension(original,target):
+    """Pure comparison, not approval or origin: only reader metadata may differ.
+
+    Actual fixture receipt timestamps precede finalized reader fixture/adoption
+    pins. Reusing those original bytes must preserve every host/artifact/binding,
+    service, path, tool and budget field, plus the original observation itself.
+    """
+    before=json.loads(encode_report(original));after=json.loads(encode_report(target))
+    p=parse_profile(before);q=parse_profile(after)
+    before.pop('readers');after.pop('readers')
+    if encode_report(before)!=encode_report(after):raise ProfileError('PROFILE_ARTIFACT_CONTEXT_CHANGED')
+    return p,q

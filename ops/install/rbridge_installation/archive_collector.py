@@ -19,7 +19,7 @@ from .github_lookup import QualifiedGitHubReadBackend,lookup_issues,_query,_time
 from .host_backend import _assert_kernel_namespace
 from .models import InstallationError,encode_report,report_sha256
 from .owned_process import assert_owned_helpers_settled
-from .profile import parse_profile
+from .profile import parse_profile,assert_reader_profile_extension
 from .qualification import verify_import_closure
 from .readonly_helper import _json
 
@@ -171,7 +171,7 @@ def collect_root_archive(profile,runtime_manifest,toolkit_manifest,pins,qualific
     token=_RootArchiveObservation(report_sha256(p),encode_report(pins).decode(),encode_report(capture).decode(),
         encode_report(evidence).decode(),encode_report(backend.query_evidence).decode())
     if len(encode_report(token))>p.budget.carrier_bytes:_fail('ARCHIVE_COLLECTOR_EVIDENCE_BYTE_LIMIT')
-    _observations[token]=(report_sha256(token),runtime_manifest,toolkit_manifest)
+    _observations[token]=(report_sha256(token),runtime_manifest,toolkit_manifest,p)
     return token
 
 
@@ -195,7 +195,7 @@ def _query_bytes(query):
 
 def verify_root_archive_observation(profile,token,runtime_manifest,toolkit_manifest,qualification_request):
     if type(token) is not _RootArchiveObservation or token not in _observations:_fail('ARCHIVE_COLLECTOR_ORIGIN_UNQUALIFIED')
-    pin,original_runtime,original_toolkit=_observations[token]
+    pin,original_runtime,original_toolkit,_original_profile=_observations[token]
     if (report_sha256(token)!=pin or token.profile_sha256!=report_sha256(profile)
             or report_sha256(runtime_manifest)!=report_sha256(original_runtime)
             or report_sha256(toolkit_manifest)!=report_sha256(original_toolkit)):_fail('ARCHIVE_COLLECTOR_OBSERVATION_CHANGED')
@@ -225,3 +225,13 @@ def verify_root_archive_observation(profile,token,runtime_manifest,toolkit_manif
     return {'schema':'RBRIDGE_ROOT_ARCHIVE_OBSERVATION_V1','scope':'ROOT_AUTHENTICATED_ARCHIVE_BYTES',
         'status':'PASS','capture':capture,'pins':pins,'evidence':evidence,'queries':queries,
         'reader_semantics':'NOT_PERFORMED','may_execute':False,'service_action_authorized':False}
+
+
+def verify_root_archive_for_reader_profile(profile,token,runtime_manifest,toolkit_manifest,qualification_request):
+    if type(token) is not _RootArchiveObservation or token not in _observations:_fail('ARCHIVE_COLLECTOR_ORIGIN_UNQUALIFIED')
+    pin,_runtime,_toolkit,original_profile=_observations[token]
+    if report_sha256(token)!=pin:_fail('ARCHIVE_COLLECTOR_OBSERVATION_CHANGED')
+    original,target=assert_reader_profile_extension(original_profile,profile)
+    observed=verify_root_archive_observation(original,token,runtime_manifest,toolkit_manifest,qualification_request)
+    p,root=_context(target,qualification_request);_closure(p,root,runtime_manifest,toolkit_manifest,qualification_request)
+    return {**observed,'original_profile_sha256':report_sha256(original),'reader_profile_sha256':report_sha256(target)}

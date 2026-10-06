@@ -15,7 +15,7 @@ import sys
 import weakref
 from .artifact import validate_manifest
 from .models import InstallationError,encode_report,report_sha256
-from .profile import parse_profile
+from .profile import parse_profile,assert_reader_profile_extension
 from .protected_copy import DIR_FLAGS,FilesystemAuthority,verify_published,_same
 from .qualification import verify_import_closure,_artifact
 from .host_backend import _assert_kernel_namespace,_protected_bytes,_run_fixed_tool
@@ -167,3 +167,15 @@ def verify_root_artifact_observation(profile,token,qualification_request):
             or session.get('live_helpers')!=[]):_fail('ARTIFACT_COLLECTOR_OBSERVATION_CHANGED')
     return {'scope':'ROOT_FINAL_ARTIFACT_OBSERVATION','artifact':evidence['artifact'],'evidence':evidence,
         'session':session,'service_action_authorized':False}
+
+
+def verify_root_artifact_for_reader_profile(profile,token,qualification_request):
+    if type(token) is not _RootArtifactObservation or token not in _observations:_fail('ARTIFACT_COLLECTOR_ORIGIN_UNQUALIFIED')
+    pin,runtime_manifest,toolkit_manifest=_observations[token]
+    if report_sha256(token)!=pin:_fail('ARTIFACT_COLLECTOR_OBSERVATION_CHANGED')
+    evidence=_json(token.evidence_json.encode());input_value=_json(evidence['input_json'].encode())
+    original,target=assert_reader_profile_extension(parse_profile(input_value['profile']),profile)
+    observed=verify_root_artifact_observation(original,token,qualification_request)
+    p,root=_context(target,qualification_request);_closure(p,root,runtime_manifest,toolkit_manifest,qualification_request)
+    if _artifact(p,observed['artifact'])!='PASS':_fail('ARTIFACT_COLLECTOR_OBSERVATION_CHANGED')
+    return {**observed,'original_profile_sha256':report_sha256(original),'reader_profile_sha256':report_sha256(target)}

@@ -5,6 +5,7 @@ import {createInstalledReaderRunner,createReferenceReaderRunner,qualifyRBridgeRe
 import {createInstalledMcpReadClient,qualifyInstalledReaderRuntime,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from '../installation/rbridge-installation-client.js';
 import {parseRBridgeInstallProfile,type ArtifactManifest} from '../installation/types.js';
 import type {CarrierCapture,ReaderExpectation} from '../installation/rbridge-installation-reader.js';
+import {runArchivedReaderFixture} from '../installation/archivedReaderFixture.js';
 import {acceptRBridgeInstallation,type InstallAcceptanceCase,type InstallAcceptanceReport} from './rbridgeInstallationAccept.js';
 function fail():never{throw new Error('READER_CLI_INPUT_INVALID');}
 function object(v:unknown){if(!v||typeof v!=='object'||Array.isArray(v))fail();return v as Record<string,unknown>;}
@@ -20,9 +21,14 @@ export async function runRBridgeReadResult(input:unknown){
     const row=object(input);if(row.schema!=='RBRIDGE_READER_INPUT_V1')fail();
     if(row.operation==='GITHUB_PARSE'){fields(row,['schema','operation','capture','expected']);return readRBridgeGitHubCarrier(row.capture as CarrierCapture,row.expected as ReaderExpectation);}
     if(row.operation==='MCP_TRANSCRIPT'){fields(row,['schema','operation','transcript','expected']);return await readRBridgeMcpOutput(createTranscriptMcpClient(row.transcript),row.expected as McpReaderScope);}
-    if(!['QUALIFY_REFERENCE','QUALIFY_INSTALLED','MCP_READ_INSTALLED','ACCEPT_READ_INSTALLED'].includes(String(row.operation)))fail();
+    if(!['QUALIFY_REFERENCE','QUALIFY_INSTALLED','QUALIFY_INSTALLED_ARCHIVED_ARTIFACT','MCP_READ_INSTALLED','ACCEPT_READ_INSTALLED'].includes(String(row.operation)))fail();
     let authority:InstalledReaderAuthority|undefined;
     if(row.operation!=='QUALIFY_REFERENCE'){const profile=parseRBridgeInstallProfile(row.profile);authority=await qualifyInstalledReaderRuntime(profile,row.toolkit_manifest as ArtifactManifest);}
+    if(row.operation==='QUALIFY_INSTALLED_ARCHIVED_ARTIFACT'){
+      fields(row,['schema','operation','profile','toolkit_manifest','runtime_manifest','registry','fixtures','isolated_home','artifact_fixture']);
+      if(!authority||typeof row.isolated_home!=='string')fail();
+      return await runArchivedReaderFixture(authority,row.runtime_manifest as ArtifactManifest,row.isolated_home,row.artifact_fixture,row.registry,row.fixtures);
+    }
     if(row.operation==='MCP_READ_INSTALLED'){
       fields(row,['schema','operation','profile','toolkit_manifest','runtime_manifest','era','expected'],['isolated_root']);if(!authority||!['legacy','modern'].includes(String(row.era))||(row.isolated_root!==undefined&&typeof row.isolated_root!=='string'))fail();
       const client=await createInstalledMcpReadClient(authority,row.runtime_manifest as ArtifactManifest,row.era as 'legacy'|'modern',row.isolated_root);closing.push(()=>client.close());return await readRBridgeMcpOutput(client,row.expected as McpReaderScope);
