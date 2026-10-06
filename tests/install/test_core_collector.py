@@ -27,5 +27,24 @@ class CoreCollectorTests(unittest.TestCase):
             with patch('rbridge_installation.core_collector.os.open',side_effect=AssertionError('Caller Root open')):
                 self.assertRaisesRegex(ValueError,'CORE_COLLECTOR_ORIGIN_UNQUALIFIED',self.verify,self.profile,value,{})
 
+    def test_same_profile_and_equal_artifact_bytes_do_not_substitute_another_fixture_origin(self):
+        # Private registration is injected only inside this Source negative
+        # fixture. Matching it still must hit the real Root context refusal.
+        from rbridge_installation import core_collector as collector
+        from rbridge_installation.artifact_collector import _RootArtifactObservation
+        from rbridge_installation.models import report_sha256
+        home=self.profile.binding.home+'/.rbridge-artifact-'+'a'*32
+        original=_RootArtifactObservation(report_sha256(self.profile),'{}','{}',home)
+        substituted=_RootArtifactObservation(report_sha256(self.profile),'{}','{}',home)
+        token=self.Token(report_sha256(self.profile),'{}','{}','{}')
+        collector._observations[token]=(report_sha256(token),None,None,original,self.profile)
+        try:
+            with patch('rbridge_installation.core_collector.os.open',side_effect=AssertionError('Source Root open')):
+                self.assertRaisesRegex(ValueError,'CORE_COLLECTOR_ARTIFACT_ORIGIN_CHANGED',self.verify,
+                    self.profile,token,{},artifact_observation=substituted)
+                self.assertRaisesRegex(ValueError,'CORE_COLLECTOR_ROOT_CONTEXT_UNQUALIFIED',self.verify,
+                    self.profile,token,{},artifact_observation=original)
+        finally:del collector._observations[token]
+
 
 if __name__=='__main__':unittest.main()

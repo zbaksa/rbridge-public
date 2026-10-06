@@ -156,7 +156,7 @@ def _inputs(profile,root,runtime_manifest,toolkit_manifest,registry,fixtures,arc
     core_cases=None
     if core_observation is not None:
         from .core_collector import verify_root_core_observation
-        core_cases=verify_root_core_observation(profile,core_observation,request)['fixtures']
+        core_cases=verify_root_core_observation(profile,core_observation,request,artifact_observation=artifact)['fixtures']
     packet=_prepare_reader_input(profile,registry,fixtures,captures,observed['artifact']['receipts'],artifact.fixture_home,core_cases=core_cases)
     paths={e.path:e for e in toolkit_manifest.entries if e.kind=='FILE'}
     needed={'dist/server/cli/rbridgeReadResult.js','dist/server/installation/archivedReaderFixture.js',

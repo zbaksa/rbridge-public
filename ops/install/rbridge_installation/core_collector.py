@@ -143,10 +143,12 @@ def collect_root_core_cases(profile,runtime_manifest,toolkit_manifest,artifact_o
     finally:home.close()
 
 
-def verify_root_core_observation(profile,token,qualification_request):
+def verify_root_core_observation(profile,token,qualification_request,*,artifact_observation=None):
     if type(token) is not _RootCoreObservation or token not in _observations:_fail('CORE_COLLECTOR_ORIGIN_UNQUALIFIED')
     pin,runtime_manifest,toolkit_manifest,artifact,original=_observations[token]
     if report_sha256(token)!=pin or token.profile_sha256!=report_sha256(original):_fail('CORE_COLLECTOR_OBSERVATION_CHANGED')
+    if artifact_observation is not None and artifact_observation is not artifact:
+        _fail('CORE_COLLECTOR_ARTIFACT_ORIGIN_CHANGED')
     assert_reader_profile_extension(original,profile)
     p,root=_context(original,qualification_request);target,target_root=_context(profile,qualification_request)
     _closure(target,target_root,runtime_manifest,toolkit_manifest,qualification_request)
