@@ -92,5 +92,17 @@ class ReaderCollectorTests(unittest.TestCase):
         with patch('rbridge_installation.archive_collector.os.open',side_effect=AssertionError('Caller Root open')):
             self.assertRaisesRegex(ValueError,'ARCHIVE_COLLECTOR_ORIGIN_UNQUALIFIED',verify_root_archive_for_reader_profile,self.profile,archive,None,None,{})
 
+    def test_pure_core_case_preimages_match_exactly_but_cannot_create_root_origin(self):
+        case={'fixture_id':'source-core-C02','case_id':'C02','provenance':'SOURCE_PRODUCER','transport':'GITHUB',
+            'expected_verdict_sha256':'b'*64,'capture':copy.deepcopy(self.capture),'expected':{}}
+        cases=copy.deepcopy(self.cases)+[case]
+        packet=self.prepare(self.profile,self.registry,{'cases':cases},[self.capture],self.fixture['artifact'],self.home,core_cases=[case])
+        self.assertEqual(packet['fixtures']['cases'][-1],case)
+        changed=copy.deepcopy(case);changed['capture']['issue']['body']='changed-producer-bytes'
+        self.assertRaisesRegex(ValueError,'CORE_CASE_CHANGED',self.prepare,self.profile,self.registry,
+            {'cases':cases},[self.capture],self.fixture['artifact'],self.home,core_cases=[changed])
+        self.assertRaisesRegex(ValueError,'CORE_CASE_INCOMPLETE',self.prepare,self.profile,self.registry,
+            {'cases':self.cases},[self.capture],self.fixture['artifact'],self.home,core_cases=[case])
+
 
 if __name__=='__main__':unittest.main()

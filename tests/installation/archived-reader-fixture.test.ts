@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
-import {prepareArchivedReaderInput} from '../../src/installation/archivedReaderFixture.js';
+import {prepareArchivedReaderInput,runArchivedCoreProducer} from '../../src/installation/archivedReaderFixture.js';
 import {parseRBridgeInstallProfile} from '../../src/installation/types.js';
 
 const source=JSON.parse(readFileSync(new URL('../fixtures/rbridge-artifact-preimages.json',import.meta.url),'utf8'));
@@ -13,6 +13,9 @@ const mcp=(era:'legacy'|'modern')=>({fixture_id:'source-'+era,case_id:'C09',prov
     receipt_sha256:original.receiptSHA256,output_sha256:original.resultSHA256,deadline_ms:15000}});
 
 describe('archived isolated reader fixture Source data',()=>{
+  it('refuses a caller-made installed authority before opening the original owner',async()=>{
+    await expect(runArchivedCoreProducer({profile} as never,{} as never,home,fixture,'c'.repeat(64))).rejects.toThrow('READER_');
+  });
   it('binds both real SDK eras to original known operation receipts and one isolated home',()=>{
     expect(source.scope).toBe('SYNTHETIC_SOURCE_DATA_ONLY');
     const cases=[mcp('legacy'),mcp('modern')],result=prepareArchivedReaderInput(profile,{cases},fixture,home);

@@ -37,10 +37,10 @@ def _home(profile,value):
     return value
 
 
-def _prepare_reader_input(profile,registry,fixtures,archive_captures,artifact_fixture,isolated_home):
+def _prepare_reader_input(profile,registry,fixtures,archive_captures,artifact_fixture,isolated_home,core_cases=None):
     """Pure bounded packet comparison. Caller data never registers Root origin."""
     p=parse_profile(json.loads(encode_report(profile)));_home(p,isolated_home)
-    raw=encode_report({'registry':registry,'fixtures':fixtures,'archives':archive_captures,'artifact':artifact_fixture})
+    raw=encode_report({'registry':registry,'fixtures':fixtures,'archives':archive_captures,'artifact':artifact_fixture,'core_cases':core_cases})
     if len(raw)>p.budget.carrier_bytes:_fail('READER_COLLECTOR_INPUT_LIMIT')
     validate_contract(registry,'ReaderRegistry');_artifact_preimages(p,artifact_fixture)
     if (encode_report(registry['readers'])!=encode_report(p.readers) or not p.readers
@@ -56,6 +56,13 @@ def _prepare_reader_input(profile,registry,fixtures,archive_captures,artifact_fi
     if (type(fixtures) is not dict or set(fixtures)!={'cases'} or type(fixtures['cases']) is not list
             or not 1<=len(fixtures['cases'])<=512 or type(archive_captures) is not list
             or not 1<=len(archive_captures)<=512):_fail('READER_COLLECTOR_CASES_INVALID')
+    core={};core_used=set()
+    if core_cases is not None:
+        if type(core_cases) is not list or not 1<=len(core_cases)<=512:_fail('READER_COLLECTOR_CORE_CASE_INVALID')
+        for case in core_cases:
+            if (type(case) is not dict or type(case.get('fixture_id')) is not str or case['fixture_id'] in core
+                    or case.get('transport')!='GITHUB' or case.get('provenance')!='SOURCE_PRODUCER'):_fail('READER_COLLECTOR_CORE_CASE_INVALID')
+            core[case['fixture_id']]=case
     archives={};used=set();eras=set();ids=set()
     for capture in archive_captures:
         if type(capture) is not dict or type(capture.get('capture_sha256')) is not str:_fail('READER_COLLECTOR_ARCHIVE_INVALID')
@@ -79,12 +86,17 @@ def _prepare_reader_input(profile,registry,fixtures,archive_captures,artifact_fi
                         or any(r.trusted_context_sha256!=capture.get('context_sha256') for r in p.readers if r.transport=='GITHUB')):
                     _fail('READER_COLLECTOR_ARCHIVE_CHANGED')
                 used.add(digest)
+            elif core_cases is not None:
+                if f['fixture_id'] not in core or encode_report(f)!=encode_report(core[f['fixture_id']]):
+                    _fail('READER_COLLECTOR_CORE_CASE_CHANGED')
+                core_used.add(f['fixture_id'])
             elif f.get('provenance')!='SYNTHETIC':_fail('READER_COLLECTOR_CORE_CASE_ORIGIN_UNKNOWN')
         elif f.get('transport')=='MCP':
             if (f.get('case_id')!='C09' or f.get('provenance')!='SYNTHETIC' or f.get('era') not in ('legacy','modern')
                     or f['era'] in eras or 'isolated_root' in f or 'transcript' in f):_fail('READER_COLLECTOR_MCP_CASE_INVALID')
             eras.add(f['era'])
         else:_fail('READER_COLLECTOR_CASES_INVALID')
+    if core_used!=set(core):_fail('READER_COLLECTOR_CORE_CASE_INCOMPLETE')
     if used!=set(archives) or not used or eras!={'legacy','modern'}:_fail('READER_COLLECTOR_CASES_INCOMPLETE')
     # Deep copy through the strict shared encoding before the fixed launch.
     return _json(encode_report({'schema':'RBRIDGE_READER_INPUT_V1','operation':'QUALIFY_INSTALLED_ARCHIVED_ARTIFACT',
@@ -137,11 +149,15 @@ class _RetainedFixtureHome:
         self.handles=[]
 
 
-def _inputs(profile,root,runtime_manifest,toolkit_manifest,registry,fixtures,archives,artifact,request):
+def _inputs(profile,root,runtime_manifest,toolkit_manifest,registry,fixtures,archives,artifact,request,core_observation=None):
     _closure(profile,root,runtime_manifest,toolkit_manifest,request)
     observed=verify_root_artifact_for_reader_profile(profile,artifact,request)
     captures=[verify_root_archive_for_reader_profile(profile,t,runtime_manifest,toolkit_manifest,request)['capture'] for t in archives]
-    packet=_prepare_reader_input(profile,registry,fixtures,captures,observed['artifact']['receipts'],artifact.fixture_home)
+    core_cases=None
+    if core_observation is not None:
+        from .core_collector import verify_root_core_observation
+        core_cases=verify_root_core_observation(profile,core_observation,request)['fixtures']
+    packet=_prepare_reader_input(profile,registry,fixtures,captures,observed['artifact']['receipts'],artifact.fixture_home,core_cases=core_cases)
     paths={e.path:e for e in toolkit_manifest.entries if e.kind=='FILE'}
     needed={'dist/server/cli/rbridgeReadResult.js','dist/server/installation/archivedReaderFixture.js',
         'dist/server/installation/readerQualification.js','dist/server/installation/rbridge-installation-client.js',
@@ -154,10 +170,10 @@ def _inputs(profile,root,runtime_manifest,toolkit_manifest,registry,fixtures,arc
     return packet
 
 
-def collect_root_reader_invocations(profile,runtime_manifest,toolkit_manifest,registry,fixtures,archive_observations,artifact_observation,qualification_request):
+def collect_root_reader_invocations(profile,runtime_manifest,toolkit_manifest,registry,fixtures,archive_observations,artifact_observation,qualification_request,core_observation=None):
     p,root=_context(profile,qualification_request)
     if type(archive_observations) not in (tuple,list) or not 1<=len(archive_observations)<=512:_fail('READER_COLLECTOR_ARCHIVE_INVALID')
-    packet=_inputs(p,root,runtime_manifest,toolkit_manifest,registry,fixtures,archive_observations,artifact_observation,qualification_request)
+    packet=_inputs(p,root,runtime_manifest,toolkit_manifest,registry,fixtures,archive_observations,artifact_observation,qualification_request,core_observation)
     runuser=next(t for t in p.tools if t.role=='runuser')
     if _run_fixed_tool(runuser,('--version',),5000,16384).decode().splitlines()[0]!=runuser.version:
         _fail('READER_COLLECTOR_RUNUSER_UNQUALIFIED')
@@ -191,17 +207,17 @@ def collect_root_reader_invocations(profile,runtime_manifest,toolkit_manifest,re
         token=_RootReaderObservation(report_sha256(p),encode_report(packet).decode(),raw.decode('utf-8',errors='strict'),
             encode_report({'session':session,'ready_json':errors.decode(),'nonce':nonce}).decode())
         if len(encode_report(token))>p.budget.carrier_bytes:_fail('READER_COLLECTOR_EVIDENCE_BYTE_LIMIT')
-        _observations[token]=(report_sha256(token),runtime_manifest,toolkit_manifest,tuple(archive_observations),artifact_observation)
+        _observations[token]=(report_sha256(token),runtime_manifest,toolkit_manifest,tuple(archive_observations),artifact_observation,core_observation)
         return token
     finally:home.close()
 
 
 def verify_root_reader_observation(profile,token,qualification_request):
     if type(token) is not _RootReaderObservation or token not in _observations:_fail('READER_COLLECTOR_ORIGIN_UNQUALIFIED')
-    pin,runtime_manifest,toolkit_manifest,archives,artifact=_observations[token]
+    pin,runtime_manifest,toolkit_manifest,archives,artifact,core=_observations[token]
     if report_sha256(token)!=pin or token.profile_sha256!=report_sha256(profile):_fail('READER_COLLECTOR_OBSERVATION_CHANGED')
     p,root=_context(profile,qualification_request);input_value=_json(token.input_json.encode());output=_json(token.output_json.encode())
-    actual=_inputs(p,root,runtime_manifest,toolkit_manifest,input_value['registry'],input_value['fixtures'],archives,artifact,qualification_request)
+    actual=_inputs(p,root,runtime_manifest,toolkit_manifest,input_value['registry'],input_value['fixtures'],archives,artifact,qualification_request,core)
     if encode_report(actual).decode()!=token.input_json:_fail('READER_COLLECTOR_OBSERVATION_CHANGED')
     proof=_json(token.session_json.encode());session=proof['session'];parse_helper_ready(proof['ready_json'].encode(),proof['nonce'])
     validate_contract(output,'ReaderQualificationReport')
@@ -213,4 +229,6 @@ def verify_root_reader_observation(profile,token,qualification_request):
     if status=='PASS':_readers(p,readers)
     return {'schema':'RBRIDGE_ROOT_READER_OBSERVATION_V1','scope':'ROOT_INSTALLED_READER_INVOCATIONS','status':status,
         'readers':readers,'input':input_value,'session':proof,'adoption_origin':'UNKNOWN',
-        'non_archive_fixture_origin':'SYNTHETIC_SOURCE_DATA_ONLY','may_execute':False,'service_action_authorized':False}
+        'core_case_origin':'ROOT_PROTECTED_CORE_FIXTURE_PRODUCER' if core is not None else 'UNKNOWN',
+        'non_archive_fixture_origin':'MIXED_CORE_PRODUCER_AND_SOURCE_MCP_DATA' if core is not None else 'SYNTHETIC_SOURCE_DATA_ONLY',
+        'may_execute':False,'service_action_authorized':False}
