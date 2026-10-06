@@ -17,6 +17,7 @@ from .models import InstallationError,encode_report,report_sha256,validate_contr
 
 
 class QualificationError(InstallationError):pass
+EVIDENCE_BYTES_LIMIT=67108864
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,9 @@ def _privileged(_profile,value):
 def build_qualification(profile,proofs):
     """Bounded data assessment; collecting physical origin is a separate step."""
     if type(proofs) is not QualificationProofs:_fail('QUALIFICATION_INPUTS_UNQUALIFIED')
+    try:raw=encode_report(proofs)
+    except (ValueError,TypeError,UnicodeError,RecursionError):_fail('QUALIFICATION_EVIDENCE_INVALID')
+    if len(raw)>EVIDENCE_BYTES_LIMIT:_fail('QUALIFICATION_EVIDENCE_BYTE_LIMIT')
     checks={};reasons=[]
     predicates={'source':_source,'artifact':_artifact,'readers':_readers,'privileged':_privileged}
     for name,predicate in predicates.items():
@@ -201,7 +205,6 @@ def build_qualification(profile,proofs):
         checks[name]='UNKNOWN'
         if value is not None:
             try:
-                if len(encode_report(value))>67108864:_fail('QUALIFICATION_EVIDENCE_BYTE_LIMIT')
                 checks[name]=predicate(profile,value)
             except (ValueError,TypeError,KeyError,AttributeError,UnicodeError,RecursionError):checks[name]='FAIL'
         if checks[name]!='PASS':reasons.append('QUALIFICATION_ACTUAL_READERS_UNKNOWN' if name=='readers' else 'QUALIFICATION_'+name.upper()+'_UNKNOWN')
@@ -210,7 +213,7 @@ def build_qualification(profile,proofs):
     for name in ('imports','review','bootstrap'):checks[name]='UNKNOWN';reasons.append('QUALIFICATION_'+name.upper()+'_UNKNOWN')
     reasons.append('QUALIFICATION_PHYSICAL_ORIGIN_UNQUALIFIED')
     return QualificationAssessment('RBRIDGE_INSTALL_QUALIFICATION_ASSESSMENT_V1','BLOCKED',
-        'QUALIFICATION_COMPLETENESS_ONLY',False,report_sha256(profile),MappingProxyType(checks),tuple(reasons),report_sha256(proofs))
+        'QUALIFICATION_COMPLETENESS_ONLY',False,report_sha256(profile),MappingProxyType(checks),tuple(reasons),hashlib.sha256(raw).hexdigest())
 
 
 @dataclass(frozen=True,eq=False)

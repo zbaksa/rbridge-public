@@ -29,6 +29,18 @@ class QualificationTests(unittest.TestCase):
                       {'status':'PASS','profile_sha256':result.profile_sha256}):
             self.assertRaises(ValueError,self.verify,self.profile,value)
 
+    def test_non_json_or_cyclic_whole_proofs_are_rejected_before_assessment(self):
+        cycle={};cycle['cycle']=cycle
+        for value in (object(),cycle,{'number':float('nan')},{'text':'\ud800'}):
+            self.assertRaisesRegex(ValueError,'QUALIFICATION_EVIDENCE_INVALID',self.build,self.profile,self.Proofs(imports=value))
+
+    def test_aggregate_proof_budget_includes_all_seven_sections(self):
+        from rbridge_installation import qualification
+        fragment={'text':'x'*40}
+        with patch.object(qualification,'EVIDENCE_BYTES_LIMIT',160):
+            self.assertRaisesRegex(ValueError,'QUALIFICATION_EVIDENCE_BYTE_LIMIT',self.build,self.profile,
+                self.Proofs(**{name:fragment for name in ('source','artifact','readers','privileged','imports','review','bootstrap')}))
+
     def test_unqualified_bundle_cannot_create_or_reopen_a_root_ledger(self):
         from rbridge_installation.qualification import open_qualified_transaction_ledger,open_qualified_resume_ledger
         values=(self.build(self.profile,self.Proofs()),{'status':'PASS','scope':'QUALIFIED_ROOT_BUNDLE'})
