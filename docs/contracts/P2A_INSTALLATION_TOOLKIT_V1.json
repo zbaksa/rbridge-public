@@ -145,7 +145,8 @@
         "manifest_sha256",
         "python_path",
         "python_version",
-        "python_sha256"
+        "python_sha256",
+        "tree_sha"
       ],
       "properties": {
         "source_sha": {
@@ -168,6 +169,10 @@
         "python_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "tree_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
         }
       }
     },
@@ -750,6 +755,145 @@
             "maxLength": 4096
           },
           "maxItems": 100000
+        }
+      }
+    },
+    "ArtifactEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "kind",
+        "size",
+        "mode",
+        "sha256",
+        "target"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^[^/][^\\x00\\r\\n]*$",
+          "maxLength": 4096
+        },
+        "kind": {
+          "enum": [
+            "FILE",
+            "DIRECTORY",
+            "SYMLINK"
+          ]
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    "ArtifactManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "source_sha",
+        "tree_sha",
+        "node_sha256",
+        "uid_policy",
+        "entries",
+        "sha256"
+      ],
+      "properties": {
+        "schema": {
+          "enum": [
+            "RBRIDGE_INSTALL_ARTIFACT_V1",
+            "RBRIDGE_INSTALL_TOOLKIT_V1"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "RUNTIME",
+            "TOOLKIT"
+          ]
+        },
+        "source_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tree_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "node_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "uid_policy": {
+          "const": "ROOT_IMMUTABLE_RUNTIME_READABLE"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactEntry"
+          },
+          "maxItems": 100000
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ArtifactProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_sha256",
+        "observed_sha256",
+        "source_sha",
+        "node_sha256",
+        "status",
+        "scope"
+      ],
+      "properties": {
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "observed_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "node_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "status": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN",
+            "BLOCKED"
+          ]
+        },
+        "scope": {
+          "const": "BYTES_INVENTORY_ONLY"
         }
       }
     }

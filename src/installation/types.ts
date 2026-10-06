@@ -3,7 +3,7 @@ import {INSTALL_CONTRACT_SCHEMA} from './contractSchema.js';
 export type InstallStatus='PASS'|'BLOCKED'|'UNKNOWN'|'FAIL';
 export interface Binding{uid:number;gid:number;supplementary_gids:readonly number[];account:string;home:string;principal_id:string;target_instance_id:string;repository:string;author:string;mcp_subject:string;github_subject:string;policy_sha256:string;}
 export interface RuntimePins{source_sha:string;tree_sha:string;old_sha:string;node_path:string;node_version:string;node_sha256:string;npm_cli_path:string;npm_sha256:string;lock_sha256:string;manifest_sha256:string;}
-export interface ToolkitPins{source_sha:string;manifest_sha256:string;python_path:string;python_version:string;python_sha256:string;}
+export interface ToolkitPins{source_sha:string;tree_sha:string;manifest_sha256:string;python_path:string;python_version:string;python_sha256:string;}
 export interface ToolPin{role:'systemctl'|'gh'|'runuser';path:string;sha256:string;version:string;}
 export interface InstallPaths{state_root:string;release_parent:string;current_link:string;ledger_parent:string;lock_path:string;binding_env:string;binding_dropin:string;canary_path:string;}
 export interface PathDigest{path:string;sha256:string;}
@@ -19,6 +19,9 @@ export interface GateBundle{schema:'RBRIDGE_INSTALL_GATE_V1';status:InstallStatu
 export interface TransactionResult{status:string;exit_code:number;phase:string;ledger_sha256:string;reason_codes:readonly string[];}
 export interface IssueEvidence{number:number;state:'OPEN'|'CLOSED';title:string;body:string;author:string;url:string;isPullRequest:boolean;updatedAt:string;capture_sha256:string;}
 export interface ProcessObservation{pid:number;start_ticks:string;cgroup:string;settled:boolean;identity_sha256:string;}
+export interface ArtifactEntry{path:string;kind:'FILE'|'DIRECTORY'|'SYMLINK';size:number;mode:number;sha256:string;target:string;}
+export interface ArtifactManifest{schema:'RBRIDGE_INSTALL_ARTIFACT_V1'|'RBRIDGE_INSTALL_TOOLKIT_V1';kind:'RUNTIME'|'TOOLKIT';source_sha:string;tree_sha:string;node_sha256:string;uid_policy:'ROOT_IMMUTABLE_RUNTIME_READABLE';entries:readonly ArtifactEntry[];sha256:string;}
+export interface ArtifactProof{manifest_sha256:string;observed_sha256:string;source_sha:string;node_sha256:string;status:InstallStatus;scope:'BYTES_INVENTORY_ONLY';}
 
 interface Rule{type?:string;$ref?:string;const?:unknown;enum?:readonly unknown[];properties?:Record<string,Rule>;required?:readonly string[];items?:Rule;maxItems?:number;pattern?:string;minLength?:number;maxLength?:number;minimum?:number;maximum?:number;}
 const definitions=INSTALL_CONTRACT_SCHEMA.$defs as unknown as Record<string,Rule>;
