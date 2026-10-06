@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from _loader import toolkit
 from _fixtures import valid_profile
 
@@ -90,3 +91,57 @@ class PauseBackupTests(unittest.TestCase):
         self.host.scope='QUALIFIED_HOST_PAUSE'
         with self.assertRaises(self.error):self.lease()
         self.assertFalse(self.host.stopped)
+
+    def test_backup_manifest_readback_refuses_corruption_before_or_after_publication(self):
+        from rbridge_installation import pause_backup as module
+        for after_publish in (False,True):
+            with self.subTest(after_publish=after_publish):
+                lease=self.lease();snapshot=self.capture(lease)
+                parent=self.root/('backup-'+str(after_publish));parent.mkdir(mode=0o700)
+                fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY)
+                original=module._rename_exclusive if after_publish else module._verify_backup
+                def corrupt(*args):
+                    result=original(*args)
+                    manifest=next(parent.glob('*/manifest.json'));manifest.write_bytes(b'changed manifest')
+                    return result
+                try:
+                    with patch.object(module,'_rename_exclusive' if after_publish else '_verify_backup',side_effect=corrupt):
+                        with self.assertRaises(self.error):self.backup(snapshot,fd)
+                finally:os.close(fd);lease.close()
+                self.assertNotIn('BACKUP_COMPLETE',self.ledger.markers)
+                self.assertTrue(next(parent.glob('*/manifest.json')).exists())
+
+    def test_independent_backup_directory_descriptor_refuses_replacement_during_open(self):
+        from rbridge_installation import pause_backup as module
+        nested=self.state/'nested';nested.mkdir(mode=0o700);(nested/'record').write_text('retained')
+        lease=self.lease();snapshot=self.capture(lease);parent=self.root/'backup';parent.mkdir(mode=0o700)
+        fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:proof=self.backup(snapshot,fd)
+        finally:os.close(fd)
+        tree=parent/proof.directory/'tree';root_fd=os.open(tree,os.O_RDONLY|os.O_DIRECTORY)
+        original=module.os.open;replaced=[]
+        def swap(name,flags,*args,**kwargs):
+            if name=='nested' and kwargs.get('dir_fd')==root_fd and not replaced:
+                (tree/'nested').rename(self.root/'retained-backup-directory')
+                (tree/'nested').mkdir(mode=0o700);(tree/'nested/record').write_text('retained')
+                os.chmod(tree/'nested/record',0o600);replaced.append(True)
+            return original(name,flags,*args,**kwargs)
+        try:
+            with patch.object(module.os,'open',side_effect=swap):
+                with self.assertRaises(self.error):module._verify_backup(root_fd,snapshot)
+        finally:os.close(root_fd)
+        self.assertEqual((self.root/'retained-backup-directory/record').read_text(),'retained')
+
+    def test_published_backup_full_bytes_are_rechecked_before_completion(self):
+        from rbridge_installation import pause_backup as module
+        (self.state/'record').write_text('retained');lease=self.lease();snapshot=self.capture(lease)
+        parent=self.root/'backup';parent.mkdir(mode=0o700);fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY)
+        original=module._rename_exclusive
+        def corrupt(*args):
+            result=original(*args);next(parent.glob('*/tree/record')).write_text('modified');return result
+        try:
+            with patch.object(module,'_rename_exclusive',side_effect=corrupt):
+                with self.assertRaises(self.error):self.backup(snapshot,fd)
+        finally:os.close(fd)
+        self.assertNotIn('BACKUP_COMPLETE',self.ledger.markers)
+        self.assertEqual((self.state/'record').read_text(),'retained')

@@ -51,14 +51,52 @@ def _kernel_bytes(path,limit=65536):
         return bytes(data)
     finally:os.close(fd)
 
+def validate_kernel_namespace_evidence(value):
+    """Pure predicate; only the concrete capture below observes a kernel view."""
+    def fail():raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
+    keys={'pid','self_link','self_status','pid1_status','uid_map','gid_map','namespaces','mountinfo'}
+    if (type(value) is not dict or set(value)!=keys or type(value['pid']) is not int or not 2<=value['pid']<=2147483647
+            or any(type(value[k]) is not str or len(value[k].encode())>1048576 for k in keys-{'pid','namespaces'})
+            or value['self_link']!=str(value['pid'])):fail()
+    for key,pid in (('self_status',value['pid']),('pid1_status',1)):
+        pids=re.findall(r'^Pid:\s*([0-9]+)$',value[key],re.M)
+        namespace_pids=re.findall(r'^NSpid:\s*([0-9 \t]+)$',value[key],re.M)
+        if pids!=[str(pid)] or len(namespace_pids)!=1 or namespace_pids[0].split()!=[str(pid)]:fail()
+    for key in ('uid_map','gid_map'):
+        if [row.split() for row in value[key].splitlines() if row.strip()]!=[['0','0','4294967295']]:fail()
+    kinds=('pid','mnt','user','cgroup');namespaces=value['namespaces']
+    if type(namespaces) is not dict or set(namespaces)!=set(kinds):fail()
+    for kind,links in namespaces.items():
+        if (type(links) is not list or len(links)!=2 or links[0]!=links[1] or type(links[0]) is not str
+                or not re.fullmatch(re.escape(kind)+r':\[[1-9][0-9]{0,19}\]',links[0])):fail()
+    required={'/proc':'proc','/sys/fs/cgroup':'cgroup2'};found={}
+    for row in value['mountinfo'].splitlines():
+        fields=row.split()
+        if len(fields)<10 or fields.count('-')!=1:fail()
+        separator=fields.index('-')
+        if separator<6 or len(fields)-separator!=4:fail()
+        point=fields[4]
+        if point in required:
+            if point in found or fields[3]!='/' or fields[separator+1]!=required[point]:fail()
+            found[point]=fields[separator+1]
+    if found!=required:fail()
+
+
 def _assert_kernel_namespace():
     try:
         # Numeric PID paths must identify this process namespace, never a host view.
         if os.readlink('/proc/self')!=str(os.getpid()):raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
-        raw=_kernel_bytes('/proc/self/status')
-        match=re.search(rb'^Pid:\s+([0-9]+)$',raw,re.M)
-        if not match or int(match[1])!=os.getpid():raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
-    except OSError:raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED') from None
+        def links():return {kind:[os.readlink('/proc/self/ns/'+kind),os.readlink('/proc/1/ns/'+kind)] for kind in ('pid','mnt','user','cgroup')}
+        before=links()
+        value={'pid':os.getpid(),'self_link':os.readlink('/proc/self'),
+            'self_status':_kernel_bytes('/proc/self/status').decode('ascii'),
+            'pid1_status':_kernel_bytes('/proc/1/status').decode('ascii'),
+            'uid_map':_kernel_bytes('/proc/self/uid_map').decode('ascii'),
+            'gid_map':_kernel_bytes('/proc/self/gid_map').decode('ascii'),
+            'namespaces':before,'mountinfo':_kernel_bytes('/proc/self/mountinfo',1048576).decode('utf-8',errors='strict')}
+        validate_kernel_namespace_evidence(value)
+        if before!=links():raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
+    except (OSError,UnicodeError):raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED') from None
 
 def validate_candidate_facts(profile,rows,facts,node_sha256):
     """Pure identity predicate; calling it does not mint an observed host proof."""

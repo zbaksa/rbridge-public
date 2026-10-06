@@ -278,23 +278,24 @@ def backup_snapshot(snapshot:SnapshotManifest,parent_fd:int)->BackupProof:
             os.fsync(handle)
         finally:os.close(handle)
         _verify_backup(targets[''],snapshot)
-        # Verification reads can update access time. Restore only backup times
-        # afterwards, taking one captured value for each original hardlink group.
-        for e in reversed(snapshot.entries):
-            if e.kind=='SOCKET':continue
-            parent,name=e.path.rsplit('/',1) if '/' in e.path else ('',e.path)
-            os.utime(name,ns=(int(e.atime_ns),int(e.mtime_ns)),dir_fd=targets[parent],follow_symlinks=False)
-            if e.kind=='FILE':
-                handle=os.open(name,FILE_FLAGS,dir_fd=targets[parent])
-                try:os.fsync(handle)
-                finally:os.close(handle)
-        os.utime(targets[''],ns=(int(snapshot.root_metadata['atime_ns']),int(snapshot.root_metadata['mtime_ns'])))
-        for fd in targets.values():os.fsync(fd)
+        _verify_backup_manifest(base,raw)
+        _restore_backup_times(snapshot,targets)
         if capture_snapshot(lease).tree_sha256!=snapshot.tree_sha256:raise PauseError('BACKUP_SNAPSHOT_CHANGED')
         os.fsync(base)
         if guard:guard.check()
         _rename_exclusive(parent_fd,temporary,directory);renamed=True;os.fsync(parent_fd)
         if guard:guard.check()
+        # A rename acknowledgement cannot substitute independent named readback.
+        named=os.stat(directory,dir_fd=parent_fd,follow_symlinks=False)
+        held=os.fstat(base)
+        if (named.st_dev,named.st_ino)!=(held.st_dev,held.st_ino) or held.st_uid!=owner or held.st_mode&0o7777!=0o700:
+            raise PauseError('BACKUP_DIRECTORY_CHANGED')
+        tree=os.stat('tree',dir_fd=base,follow_symlinks=False);held_tree=os.fstat(targets[''])
+        if (tree.st_dev,tree.st_ino)!=(held_tree.st_dev,held_tree.st_ino) or set(os.listdir(base))!={'tree','manifest.json'}:
+            raise PauseError('BACKUP_DIRECTORY_CHANGED')
+        _verify_backup(targets[''],snapshot)
+        _restore_backup_times(snapshot,targets)
+        _verify_backup_manifest(base,raw)
         proof=BackupProof('RBRIDGE_INSTALL_BACKUP_V1',snapshot.scope,'PASS',directory,snapshot.tree_sha256,digest)
         lease.ledger.append('BACKUP_COMPLETE',{'backup_sha256':report_sha256(asdict(proof)),'snapshot_sha256':snapshot.tree_sha256,'pause_sha256':snapshot.pause_sha256})
         return proof
@@ -305,10 +306,46 @@ def backup_snapshot(snapshot:SnapshotManifest,parent_fd:int)->BackupProof:
         if guard:guard.close()
         # Retain any protected partial backup as evidence. Never restore/delete state.
 
+def _restore_backup_times(snapshot,targets):
+    # Restore only backup times after every independent verification read,
+    # taking one captured access value for each original hardlink group.
+    for e in reversed(snapshot.entries):
+        if e.kind=='SOCKET':continue
+        parent,name=e.path.rsplit('/',1) if '/' in e.path else ('',e.path)
+        if e.kind=='DIRECTORY':
+            held=os.fstat(targets[e.path]);named=os.stat(name,dir_fd=targets[parent],follow_symlinks=False)
+            if (held.st_dev,held.st_ino)!=(named.st_dev,named.st_ino):raise PauseError('BACKUP_DIRECTORY_CHANGED')
+        os.utime(name,ns=(int(e.atime_ns),int(e.mtime_ns)),dir_fd=targets[parent],follow_symlinks=False)
+        if e.kind=='FILE':
+            handle=os.open(name,FILE_FLAGS,dir_fd=targets[parent])
+            try:os.fsync(handle)
+            finally:os.close(handle)
+    os.utime(targets[''],ns=(int(snapshot.root_metadata['atime_ns']),int(snapshot.root_metadata['mtime_ns'])))
+    for fd in targets.values():os.fsync(fd)
+
+def _verify_backup_manifest(base,expected):
+    if len(expected)>67108864:raise PauseError('BACKUP_MANIFEST_BYTE_LIMIT')
+    handle=os.open('manifest.json',FILE_FLAGS,dir_fd=base)
+    try:
+        before=os.fstat(handle)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.getuid() or before.st_nlink!=1
+                or before.st_mode&0o7777!=0o600 or before.st_size!=len(expected)):
+            raise PauseError('BACKUP_MANIFEST_MISMATCH')
+        actual=bytearray()
+        while len(actual)<=len(expected):
+            part=os.read(handle,min(1048576,len(expected)+1-len(actual)))
+            if not part:break
+            actual.extend(part)
+        if (actual!=expected or _identity(before)!=_identity(os.fstat(handle))
+                or _identity(before)!=_identity(os.stat('manifest.json',dir_fd=base,follow_symlinks=False))):
+            raise PauseError('BACKUP_MANIFEST_MISMATCH')
+    finally:os.close(handle)
+
 def _verify_backup(root_fd,snapshot):
     expected={e.path:e for e in snapshot.entries if e.kind!='SOCKET'};seen=set();groups={}
     def walk(fd,prefix=''):
-        for name in os.listdir(fd):
+        directory_before=os.fstat(fd);names=os.listdir(fd)
+        for name in names:
             snapshot.lease.check();path=prefix+name;e=expected.get(path)
             if e is None or path in seen:raise PauseError('BACKUP_UNEXPECTED_OBJECT')
             seen.add(path);s=os.stat(name,dir_fd=fd,follow_symlinks=False)
@@ -316,7 +353,11 @@ def _verify_backup(root_fd,snapshot):
             if e.kind=='DIRECTORY':
                 if not stat.S_ISDIR(s.st_mode):raise PauseError('BACKUP_METADATA_MISMATCH')
                 child=os.open(name,DIR_FLAGS,dir_fd=fd)
-                try:walk(child,path+'/')
+                try:
+                    if _identity(s)!=_identity(os.fstat(child)):raise PauseError('BACKUP_DIRECTORY_CHANGED')
+                    walk(child,path+'/')
+                    if _identity(s)!=_identity(os.fstat(child)) or _identity(s)!=_identity(os.stat(name,dir_fd=fd,follow_symlinks=False)):
+                        raise PauseError('BACKUP_DIRECTORY_CHANGED')
                 finally:os.close(child)
             elif e.kind=='FILE':
                 if not stat.S_ISREG(s.st_mode) or s.st_size!=e.size or s.st_nlink!=e.nlink:raise PauseError('BACKUP_METADATA_MISMATCH')
@@ -324,6 +365,7 @@ def _verify_backup(root_fd,snapshot):
                 if group in groups and groups[group]!=actual:raise PauseError('BACKUP_HARDLINK_MISMATCH')
                 groups[group]=actual;child=os.open(name,FILE_FLAGS,dir_fd=fd)
                 try:
+                    if _identity(s)!=_identity(os.fstat(child)):raise PauseError('BACKUP_FILE_CHANGED')
                     hasher=hashlib.sha256();count=0
                     while True:
                         snapshot.lease.check();chunk=os.read(child,1048576)
@@ -332,8 +374,12 @@ def _verify_backup(root_fd,snapshot):
                         if count>e.size:raise PauseError('BACKUP_BYTE_MISMATCH')
                         hasher.update(chunk)
                     if count!=e.size or hasher.hexdigest()!=e.sha256:raise PauseError('BACKUP_BYTE_MISMATCH')
+                    if _identity(s)!=_identity(os.fstat(child)) or _identity(s)!=_identity(os.stat(name,dir_fd=fd,follow_symlinks=False)):
+                        raise PauseError('BACKUP_FILE_CHANGED')
                 finally:os.close(child)
             else:raise PauseError('BACKUP_UNSAFE_OBJECT')
+        if sorted(names)!=sorted(os.listdir(fd)) or _identity(directory_before)!=_identity(os.fstat(fd)):
+            raise PauseError('BACKUP_DIRECTORY_CHANGED')
         return
     walk(root_fd)
     if seen!=set(expected):raise PauseError('BACKUP_MISSING_OBJECT')

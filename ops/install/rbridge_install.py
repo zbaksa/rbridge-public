@@ -103,7 +103,7 @@ def _preflight_imports(path,handles,value):
             if fd is not None:os.close(fd)
 
 def import_protected_toolkit(value):
-    if os.getuid()!=0 or os.geteuid()!=0 or not sys.flags.isolated:raise EntryError('ROOT_ISOLATED_INTERPRETER_REQUIRED')
+    if os.getuid()!=0 or os.geteuid()!=0 or not sys.flags.isolated or not sys.flags.no_site:raise EntryError('ROOT_ISOLATED_INTERPRETER_REQUIRED')
     path=Path(os.path.abspath(__file__))
     if not re.fullmatch(r'/usr/local/libexec/rbridge/releases/toolkit-[0-9a-f]{40}/ops/install/rbridge_install\.py',str(path)):raise EntryError('PROTECTED_TOOLKIT_ENTRY_REQUIRED')
     handles=[];flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
@@ -123,7 +123,7 @@ def import_protected_toolkit(value):
         if spec is None or spec.loader is None:raise EntryError('TOOLKIT_IMPORT_UNAVAILABLE')
         module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
         from rbridge_installation.qualification import verify_import_closure
-        verify_import_closure(path.parents[2])
+        verify_import_closure(path.parents[2],value['profile'],value['qualification'])
     finally:
         for fd in reversed(handles):os.close(fd)
 

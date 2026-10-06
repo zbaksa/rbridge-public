@@ -1,0 +1,66 @@
+"""Qualification completeness comparisons; source predicates grant no Root action."""
+import hashlib
+import json
+import importlib.util
+import sys
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+from _loader import toolkit,ROOT
+from _fixtures import valid_profile
+
+
+class QualificationTests(unittest.TestCase):
+    def setUp(self):
+        toolkit()
+        try:
+            from rbridge_installation.qualification import build_qualification,QualificationProofs,verify_qualification_bundle
+        except ImportError:self.fail('Concrete qualification boundary is not implemented')
+        from rbridge_installation.profile import parse_profile
+        self.build,self.Proofs,self.verify=build_qualification,QualificationProofs,verify_qualification_bundle
+        self.profile=parse_profile(valid_profile())
+
+    def test_no_proof_or_pass_labels_never_prepare_a_root_transaction(self):
+        result=self.build(self.profile,self.Proofs())
+        self.assertEqual(result.status,'BLOCKED');self.assertFalse(result.command_ready)
+        self.assertIn('QUALIFICATION_ACTUAL_READERS_UNKNOWN',result.reason_codes)
+        for value in (result,{'status':'READY','scope':'QUALIFIED_ROOT_BUNDLE'},
+                      {'status':'PASS','profile_sha256':result.profile_sha256}):
+            self.assertRaises(ValueError,self.verify,self.profile,value)
+
+    def test_source_ci_is_pinned_to_full_log_commit_tree_and_required_steps(self):
+        log=b'full fixture CI log\n'
+        source={'schema':'RBRIDGE_SOURCE_QUALIFICATION_V1','scope':'SOURCE_QUALIFICATION_ONLY',
+            'commit':self.profile.toolkit.source_sha,'tree':self.profile.toolkit.tree_sha,
+            'run_id':17,'conclusion':'success','node_version':'22.23.3',
+            'steps':{name:'success' for name in ('installation_tests','tests','typecheck','lint','build','public_scrub','tracked_clean')},
+            'log_base64':__import__('base64').b64encode(log).decode(),'log_sha256':hashlib.sha256(log).hexdigest()}
+        result=self.build(self.profile,self.Proofs(source=source))
+        self.assertEqual(result.checks['source'],'PASS');self.assertEqual(result.status,'BLOCKED')
+        for change in ({'commit':'a'*40},{'tree':'b'*40},{'log_sha256':'f'*64},
+                       {'steps':{**source['steps'],'tests':'skipped'}},{'scope':'QUALIFIED_INSTALLED_ARTIFACT'}):
+            self.assertEqual(self.build(self.profile,self.Proofs(source={**source,**change})).checks['source'],'FAIL')
+
+    def test_synthetic_archive_reference_parser_or_ci_runtime_does_not_qualify_readers_or_artifact(self):
+        result=self.build(self.profile,self.Proofs(
+            readers={'status':'PASS','actualAcceptance':'PASS','scope':'REFERENCE_PARSER_ONLY'},
+            artifact={'status':'PASS','runtimeVersion':'22.23.3','uid':1027},
+            privileged={'status':'PASS','scope':'FIXTURE_AUTHORITY_ONLY'}))
+        self.assertEqual(result.status,'BLOCKED');self.assertFalse(result.command_ready)
+        self.assertNotEqual(result.checks['readers'],'PASS');self.assertNotEqual(result.checks['artifact'],'PASS')
+        self.assertNotEqual(result.checks['privileged'],'PASS')
+
+    def test_root_entry_refuses_site_startup_before_any_toolkit_import(self):
+        path=ROOT/'ops/install/rbridge_install.py';spec=importlib.util.spec_from_file_location('entry_source_site_fixture',path)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with patch.object(module.os,'getuid',return_value=0),patch.object(module.os,'geteuid',return_value=0), \
+             patch.object(module.sys,'flags',SimpleNamespace(isolated=True,no_site=False)), \
+             patch.object(module.os,'open',side_effect=AssertionError('site-enabled entry must not open toolkit')):
+            self.assertRaisesRegex(module.EntryError,'ROOT_ISOLATED_INTERPRETER_REQUIRED',module.import_protected_toolkit,{})
+
+    def test_actual_closure_cannot_use_a_source_checkout_or_unpinned_digest(self):
+        from rbridge_installation.qualification import verify_import_closure
+        self.assertRaises(ValueError,verify_import_closure,ROOT,self.profile,{})
+
+
+if __name__=='__main__':unittest.main()
