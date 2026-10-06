@@ -239,56 +239,17 @@ class QualifiedGitHubReadBackend:
             raise LookupError('LOOKUP_TOOL_UNQUALIFIED') from None
 
     def _run(self, args, input_bytes, timeout_ms, limit):
+        from .owned_process import run_owned_process
         self._qualify()
-        child = subprocess.Popen(
-            [self.tool.path, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, cwd='/', start_new_session=True,
-            env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/root',
-                 'LC_ALL': 'C', 'GH_PROMPT_DISABLED': '1'})
-        selector = selectors.DefaultSelector()
-        out, errors = bytearray(), bytearray()
-        pending = memoryview(input_bytes)
-        deadline = time.monotonic() + timeout_ms / 1000
-        try:
-            for stream in (child.stdin, child.stdout, child.stderr):
-                os.set_blocking(stream.fileno(), False)
-            if pending:
-                selector.register(child.stdin, selectors.EVENT_WRITE)
-            else:
-                child.stdin.close()
-            selector.register(child.stdout, selectors.EVENT_READ)
-            selector.register(child.stderr, selectors.EVENT_READ)
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise LookupError('LOOKUP_COMMAND_DEADLINE')
-                for key, _ in selector.select(min(remaining, 0.2)):
-                    if key.fileobj is child.stdin:
-                        pending = pending[os.write(key.fd, pending):]
-                        if not pending:
-                            selector.unregister(child.stdin)
-                            child.stdin.close()
-                        continue
-                    chunk = os.read(key.fd, 65536)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                        continue
-                    (out if key.fileobj is child.stdout else errors).extend(chunk)
-                    if len(out) + len(errors) > limit:
-                        raise LookupError('LOOKUP_COMMAND_OUTPUT_LIMIT')
-            if child.wait(timeout=max(0.001, deadline - time.monotonic())) != 0:
-                raise LookupError('LOOKUP_COMMAND_FAILED')
-            self._qualify()
-            return bytes(out)
-        except (OSError, subprocess.TimeoutExpired):
-            raise LookupError('LOOKUP_COMMAND_UNAVAILABLE') from None
-        finally:
-            selector.close()
-            if child.poll() is None:
-                child.kill()
-                child.wait(timeout=5)
-            for stream in (child.stdin, child.stdout, child.stderr):
-                stream.close()
+        raw,_errors,proof=run_owned_process(self.tool,args,timeout_ms,limit,
+            input_bytes=input_bytes,
+            env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root',
+                 'LC_ALL':'C','GH_PROMPT_DISABLED':'1'},guard=self._qualify)
+        if not hasattr(self,'helper_sessions'):self.helper_sessions=[]
+        self.helper_sessions.append(proof)
+        if proof['status']!='PASS' or proof['exit_code']!=0:
+            raise LookupError('LOOKUP_COMMAND_FAILED')
+        return raw
 
     def read_graphql(self, query, variables, timeout_ms, response_limit):
         numbers = [v for k, v in variables.items() if re.fullmatch(r'n\d+', k)]

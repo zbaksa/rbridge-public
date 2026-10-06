@@ -90,6 +90,7 @@ export interface ReaderInvocation{source_sha256:string;version:string;trusted_co
 export interface RegisteredReaderRunner{invoke(registration:ReaderRegistration,fixture:ReaderFixture):Promise<ReaderInvocation>;}
 const installedRunners=new WeakSet<object>();
 const fixtureInput=(f:ReaderFixture)=>f.transport==='GITHUB'?{capture:f.capture,expected:f.expected,...(f.replayed_at?{replayed_at:f.replayed_at}:{})}:{expected:f.expected,sdk_package_version:f.client.sdk_package_version,negotiated_protocol_version:f.client.negotiated_protocol_version,protocol_era:f.client.protocol_era};
+export const readerFixtureInputJson=(fixture:ReaderFixture):string=>JSON.stringify(fixtureInput(fixture));
 export function createReferenceReaderRunner():RegisteredReaderRunner{return {async invoke(registration,fixture){const verdict=fixture.transport==='GITHUB'?readRBridgeGitHubCarrier(fixture.capture,fixture.expected):await readRBridgeMcpOutput(fixture.client,fixture.expected);return {scope:'REFERENCE_PARSER_ONLY',source_sha256:registration.source_sha256,version:'1',trusted_context_sha256:registration.trusted_context_sha256,verdict,input_sha256:sha(JSON.stringify(fixtureInput(fixture))),output_sha256:sha(JSON.stringify(verdict))};}};}
 export async function createInstalledReaderRunner(authority:InstalledReaderAuthority):Promise<RegisteredReaderRunner>{
   if(!isInstalledReaderAuthority(authority))fail('READER_RUNNER_UNQUALIFIED');await verifyInstalledReaderAuthority(authority);

@@ -191,6 +191,9 @@ def _hold(prepared,backend,reason):
         prepared.lease.check_exclusion()
         try:backend.stop_unit(prepared.profile.service.unit)
         except (InstallationError,OSError):pass
+        if prepared.scope!='FIXTURE_AUTHORITY_ONLY':
+            from .owned_process import assert_owned_helpers_settled
+            assert_owned_helpers_settled()
         # Stop acknowledgement is insufficient. Full concrete observation follows.
         prepared.lease.observe_stopped();snapshot=capture_snapshot(prepared.lease)
         if prepared.evidence:prepared.evidence.write('post-start-hold',{'scope':prepared.scope,'reason_codes':[reason],'pause_sha256':prepared.lease.pause_sha256,'snapshot_sha256':snapshot.tree_sha256,'snapshot_reason_codes':snapshot.reason_codes})

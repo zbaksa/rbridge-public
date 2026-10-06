@@ -1,7 +1,7 @@
 import {pathToFileURL} from 'node:url';
 import {parseRBridgeCarrierJson} from '../installation/carrierJson.js';
 import {readRBridgeGitHubCarrier} from '../installation/githubCarrierReader.js';
-import {createInstalledReaderRunner,createReferenceReaderRunner,qualifyRBridgeReaders,readRBridgeMcpOutput,type ReaderFixture,type ReaderFixtureSet,type ReaderRegistry} from '../installation/readerQualification.js';
+import {createInstalledReaderRunner,createReferenceReaderRunner,qualifyRBridgeReaders,readRBridgeMcpOutput,readerFixtureInputJson,type ReaderFixture,type ReaderFixtureSet,type ReaderRegistry} from '../installation/readerQualification.js';
 import {createInstalledMcpReadClient,qualifyInstalledReaderRuntime,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from '../installation/rbridge-installation-client.js';
 import {parseRBridgeInstallProfile,type ArtifactManifest} from '../installation/types.js';
 import type {CarrierCapture,ReaderExpectation} from '../installation/rbridge-installation-reader.js';
@@ -45,7 +45,8 @@ export async function runRBridgeReadResult(input:unknown){
           for(const registration of registrations){
             const metadata={fixture_id:'installation-'+row.stage+'-'+operation.operation_id,case_id:transport==='GITHUB'?'C02' as const:'C09' as const,provenance:'SOURCE_PRODUCER' as const,expected_verdict_sha256:'0'.repeat(64)};
             const fixture:ReaderFixture=transport==='GITHUB'?{...metadata,transport,capture:c.capture,expected:{...c.expected,receipt_sha256:operation.receipt_sha256,output_sha256:operation.output_sha256,selected_comment_id:operation.comment_id}}:{...metadata,transport,client:c.client,expected:{...c.expected.scope!,runtime_uid:authority.profile.binding.uid,intent_sha256:c.expected.intent_sha256!,policy_sha256:authority.profile.binding.policy_sha256,receipt_sha256:operation.receipt_sha256,output_sha256:operation.output_sha256,deadline_ms:Math.min(authority.profile.budget.lookup_ms,180000)}};
-            invocations.push({reader_id:registration.reader_id,operation_id:operation.operation_id,transport,invocation:await runner.invoke(registration,fixture)});
+            const invocation=await runner.invoke(registration,fixture);
+            invocations.push({reader_id:registration.reader_id,operation_id:operation.operation_id,transport,input_json:readerFixtureInputJson(fixture),verdict_json:JSON.stringify(invocation.verdict),invocation});
           }
         }
       }
@@ -69,7 +70,10 @@ export async function runRBridgeReadResult(input:unknown){
 async function main(){
   const chunks:Buffer[]=[];let size=0;const deadline=setTimeout(()=>{process.stdin.destroy();process.exitCode=2;},15000);
   try{
-    if(process.argv.length!==2)fail();for await(const raw of process.stdin){const bytes=Buffer.from(raw as Uint8Array);size+=bytes.length;if(size>67108864)fail();chunks.push(bytes);}clearTimeout(deadline);
+    if(process.argv.length!==2)fail();
+    const nonce=process.env.RBRIDGE_INSTALL_HELPER_NONCE;
+    if(nonce!==undefined){if(!/^[0-9a-f]{64}$/.test(nonce))fail();process.stderr.write(JSON.stringify({schema:'RBRIDGE_INSTALL_HELPER_READY_V1',pid:process.pid,nonce})+'\n');}
+    for await(const raw of process.stdin){const bytes=Buffer.from(raw as Uint8Array);size+=bytes.length;if(size>67108864)fail();chunks.push(bytes);}clearTimeout(deadline);
     const result=await runRBridgeReadResult(parseRBridgeCarrierJson(Buffer.concat(chunks),67108864));const bytes=Buffer.from(JSON.stringify(result));if(bytes.length>67108864)fail();process.stdout.write(bytes);process.stdout.write('\n');
     process.exitCode='actualAcceptance'in result?result.actualAcceptance==='PASS'?0:result.actualAcceptance==='FAIL'?5:2:'status'in result&&['INVALID','FAIL'].includes(result.status)?5:2;
   }catch{process.stdout.write('{"schema":"RBRIDGE_READER_CLI_ERROR_V1","status":"UNKNOWN","reason_codes":["READER_CLI_INPUT_INVALID"]}\n');process.exitCode=2;}finally{clearTimeout(deadline);}

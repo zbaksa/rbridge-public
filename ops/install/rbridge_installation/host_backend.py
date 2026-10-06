@@ -68,30 +68,10 @@ def validate_candidate_facts(profile,rows,facts,node_sha256):
     except (KeyError,TypeError,ValueError,AttributeError):raise PauseError('HOST_CANDIDATE_IDENTITY_UNQUALIFIED') from None
 
 def _run_fixed_tool(pin,args,timeout_ms,limit=262144,env=None):
-    def qualify():
-        if hashlib.sha256(_protected_bytes(pin.path,16777216)).hexdigest()!=pin.sha256:raise PauseError('HOST_TOOL_BYTES_MISMATCH')
-    qualify();child=subprocess.Popen([pin.path,*args],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env or {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root','LC_ALL':'C'},cwd='/',start_new_session=True)
-    selector=selectors.DefaultSelector();out=bytearray();errors=bytearray();deadline=time.monotonic()+timeout_ms/1000
-    try:
-        for stream in (child.stdout,child.stderr):os.set_blocking(stream.fileno(),False);selector.register(stream,selectors.EVENT_READ)
-        while selector.get_map():
-            remaining=deadline-time.monotonic()
-            if remaining<=0:raise PauseError('HOST_COMMAND_DEADLINE')
-            for key,_event in selector.select(min(remaining,0.2)):
-                chunk=os.read(key.fd,65536)
-                if not chunk:selector.unregister(key.fileobj);continue
-                destination=out if key.fileobj is child.stdout else errors;destination.extend(chunk)
-                if len(out)+len(errors)>limit:raise PauseError('HOST_COMMAND_OUTPUT_LIMIT')
-        if child.wait(timeout=max(0.001,deadline-time.monotonic()))!=0:raise PauseError('HOST_COMMAND_FAILED')
-        qualify();return bytes(out)
-    except (OSError,subprocess.TimeoutExpired):raise PauseError('HOST_COMMAND_UNAVAILABLE') from None
-    finally:
-        selector.close()
-        if child.poll() is None:
-            try:os.killpg(child.pid,signal.SIGKILL)
-            except ProcessLookupError:pass
-            child.wait(timeout=5)
-        child.stdout.close();child.stderr.close()
+    from .owned_process import run_owned_process
+    raw,_errors,proof=run_owned_process(pin,args,timeout_ms,limit,env=env)
+    if proof['status']!='PASS' or proof['exit_code']!=0:raise PauseError('HOST_COMMAND_FAILED')
+    return raw
 
 class QualifiedHostBackend:
     scope='QUALIFIED_HOST_PAUSE'

@@ -272,6 +272,12 @@ def accept_installation(context: AcceptanceContext, backend: AcceptanceBackend):
     except (InstallationError, OSError, ValueError, ImportError, AttributeError, TypeError) as error:
         report.update(status='UNKNOWN', accepted=False,
             reason_codes=[error.reason if isinstance(error, InstallationError) else 'ACCEPTANCE_STEP_UNCERTAIN'])
+    finally:
+        if (type(context) is AcceptanceContext and context.scope=='QUALIFIED_INSTALLED_ACCEPTANCE'
+                and type(backend).__module__=='rbridge_installation.acceptance_transport'):
+            try:backend.close()
+            except (InstallationError,OSError,ValueError):
+                report.update(status='UNKNOWN',accepted=False,reason_codes=['ACCEPTANCE_EVIDENCE_FINALIZATION_UNCERTAIN'])
     report['sha256'] = report_sha256({**report, 'sha256': ''})
     if report['accepted']:
         key = id(report)
