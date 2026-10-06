@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {constants} from 'node:fs';
 import {lstat,open,readdir,readlink} from 'node:fs/promises';
 import {userInfo} from 'node:os';
-import {dirname,join} from 'node:path';
+import {basename,dirname,join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {encodeInstallReport,validateInstallContract,type ArtifactManifest,type InstallProfile,type InstallStatus} from './types.js';
 
@@ -16,8 +16,18 @@ export interface ArtifactQualificationReport{
   sourceSHA:string;toolkitSHA:string;scope:'ISOLATED_FINAL_ARTIFACT_OWNER_IPC_MCP_HELPER';
   ownerBoot:'PASS'|'NOT_PERFORMED';mcpBoot:'PASS'|'NOT_PERFORMED';executedFixture:boolean;fixtureReceiptsSHA256:string;
 }
+export interface ArtifactQualificationEvidence{
+  report:ArtifactQualificationReport;
+  receipts:Awaited<ReturnType<typeof import('./artifactFixture.js').runFinalArtifactFixture>>|null;
+}
 const hash=(value:Uint8Array)=>createHash('sha256').update(value).digest('hex');
 function fail(code:string):never{throw new Error(code);}
+export function validateArtifactIsolationHome(profile:InstallProfile,path:string):string{
+  if(typeof path!=='string'||dirname(path)!==profile.binding.home
+    ||!/^\.rbridge-artifact-[0-9a-f]{32}$/.test(basename(path))
+    ||path!==join(profile.binding.home,basename(path)))fail('ARTIFACT_ISOLATION_INVALID');
+  return path;
+}
 function relative(path:string):string[]{
   const parts=path.split('/');
   if(!path||path.length>4096||/[\x00\r\n]/.test(path)||parts.some(p=>!p||p==='.'||p==='..'))fail('ARTIFACT_PATH_INVALID');
@@ -89,7 +99,11 @@ export async function verifyProtectedArtifact(root:string,manifest:ArtifactManif
   for(const [path,expected]of names){const actual=await readdir(join(root,path));if(actual.length!==expected.length||actual.some(n=>!expected.includes(n)))fail('ARTIFACT_BYTES_MISMATCH');}
 }
 export async function qualifyRBridgeArtifact(input:ArtifactQualificationInput):Promise<ArtifactQualificationReport>{
+  return (await qualifyRBridgeArtifactWithEvidence(input)).report;
+}
+export async function qualifyRBridgeArtifactWithEvidence(input:ArtifactQualificationInput):Promise<ArtifactQualificationEvidence>{
   const p=input.profile;
+  let receipts:ArtifactQualificationEvidence['receipts']=null;
   const report:ArtifactQualificationReport={schema:'RBRIDGE_INSTALL_ARTIFACT_QUALIFICATION_V1',status:'UNKNOWN',reason_codes:[],runtimeVersion:process.versions.node,actualNodeSHA256:'',runtimeManifestSHA256:input.manifestSHA256,toolkitManifestSHA256:input.toolkitManifest?.sha256??'',sourceSHA:p.runtime.source_sha,toolkitSHA:p.toolkit.source_sha,scope:'ISOLATED_FINAL_ARTIFACT_OWNER_IPC_MCP_HELPER',ownerBoot:'NOT_PERFORMED',mcpBoot:'NOT_PERFORMED',executedFixture:false,fixtureReceiptsSHA256:''};
   try{
     // Observe the running executable, never a caller's version label or callback.
@@ -108,14 +122,14 @@ export async function qualifyRBridgeArtifact(input:ArtifactQualificationInput):P
     }
     if(input.manifestSHA256!==input.runtimeManifest.sha256||fileURLToPath(import.meta.url)!==join(input.toolkitRoot,'dist/server/installation/artifactQualification.js'))fail('ARTIFACT_ENTRYPOINT_MISMATCH');
     await verifyProtectedArtifact(input.runtimeRoot,input.runtimeManifest,p);await verifyProtectedArtifact(input.toolkitRoot,input.toolkitManifest,p);
-    if(!input.isolatedHome.startsWith(p.binding.home+'/.rbridge-artifact-'))fail('ARTIFACT_ISOLATION_INVALID');
+    validateArtifactIsolationHome(p,input.isolatedHome);
     const home=await lstat(input.isolatedHome);
     if(!home.isDirectory()||home.uid!==p.binding.uid||(home.mode&0o7777)!==0o700||(await readdir(input.isolatedHome)).length)fail('ARTIFACT_ISOLATION_INVALID');
     report.executedFixture=true;
     const module=await import(pathToFileURL(join(input.toolkitRoot,'dist/server/installation/artifactFixture.js')).href) as typeof import('./artifactFixture.js');
-    const receipts=await module.runFinalArtifactFixture(input);
+    receipts=await module.runFinalArtifactFixture(input);
     await verifyProtectedArtifact(input.runtimeRoot,input.runtimeManifest,p);await verifyProtectedArtifact(input.toolkitRoot,input.toolkitManifest,p);
     report.fixtureReceiptsSHA256=hash(encodeInstallReport(receipts));report.ownerBoot='PASS';report.mcpBoot='PASS';report.status='PASS';
   }catch(error){report.status=report.executedFixture?'FAIL':'BLOCKED';report.reason_codes=[error instanceof Error&&/^ARTIFACT_[A-Z_]+$/.test(error.message)?error.message:'ARTIFACT_QUALIFICATION_UNAVAILABLE'];}
-  return report;
+  return {report,receipts};
 }

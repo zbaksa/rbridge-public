@@ -12,6 +12,7 @@ import type {RBridgeExecutionReceiptV1,RBridgeOperationSubmissionV1,RBridgeTrans
 import {parseRBridgeCoreResultPage} from '../domain/rbridgeCoreValidation.js';
 import {encodeInstallReport} from './types.js';
 import type {ArtifactQualificationInput} from './artifactQualification.js';
+import {captureArtifactOperation} from './artifactEvidence.js';
 
 const hash=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex');
 const object=(value:unknown)=>value as Record<string,unknown>|undefined;
@@ -40,7 +41,7 @@ export async function runFinalArtifactFixture(input:ArtifactQualificationInput){
     client=new Client({name:'rbridge-artifact-qualification',version:'1'},{versionNegotiation:{mode:{pin:'2026-07-28'}}});
     const signal=AbortSignal.timeout(Math.min(p.budget.acceptance_ms,60000));
     await client.connect(transport);
-    const receipts:Array<{operationId:string;receiptSHA256:string;resultSHA256:string}>=[];
+    const receipts:Array<ReturnType<typeof captureArtifactOperation>>=[];
     for(const [id,operation]of [['artifact-health',{kind:'HEALTH',action:'STATUS'}],['artifact-read',{kind:'FILE',action:'READ',target:'/mnt/data/source.txt',args:{}}]] as const){
       if(signal.aborted)fail();
       const submission:RBridgeOperationSubmissionV1={schema:'RBRIDGE_OPERATION_SUBMISSION_V1',operationId:id,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId,operation};
@@ -56,17 +57,17 @@ export async function runFinalArtifactFixture(input:ArtifactQualificationInput){
       if(!receipt||receipt.outcome!=='PASS')fail();
       const status=object((await client.callTool({name:'rbridge_status',arguments:{operationId:id}})).structuredContent)?.result as {receipt?:unknown}|undefined;
       if(hash(encodeInstallReport(status?.receipt))!==hash(encodeInstallReport(receipt)))fail();
-      let cursor=0,digest='';const chunks:Buffer[]=[];
+      let cursor=0,digest='';const chunks:Buffer[]=[],resultPages:unknown[]=[];
       for(let pages=0;pages<512;pages++){
         const value=object((await client.callTool({name:'rbridge_result',arguments:{operationId:id,cursor,maxBytes:32768}})).structuredContent)?.result;
         const page=parseRBridgeCoreResultPage(value,submission,cursor,32768);
         if(page.status!=='RESULT'||(digest&&digest!==page.resultSha256)||page.nextCursor<=cursor&&!page.eof)fail();
-        digest=page.resultSha256;chunks.push(Buffer.from(page.dataBase64,'base64'));cursor=page.nextCursor;
+        digest=page.resultSha256;resultPages.push(page);chunks.push(Buffer.from(page.dataBase64,'base64'));cursor=page.nextCursor;
         if(page.eof)break;if(pages===511||signal.aborted)fail();
       }
       const bytes=Buffer.concat(chunks);if(hash(bytes)!==digest)fail();
       if(id==='artifact-read'&&(JSON.parse(bytes.toString('utf8')) as {text?:unknown}).text!=='artifact read é\n')fail();
-      receipts.push({operationId:id,receiptSHA256:hash(encodeInstallReport(receipt)),resultSHA256:digest});
+      receipts.push(captureArtifactOperation({submission,context,receipt,pages:resultPages,output:bytes,policy_sha256:p.binding.policy_sha256}));
     }
     if(healthCalls!==1)fail();
     return {schema:'RBRIDGE_FINAL_ARTIFACT_FIXTURE_V1',bindingSHA256:hash(encodeInstallReport(binding)),receipts,healthCalls,fixture:'OWNER_IPC_MCP_HELPER_STDIO',productionEntrypointAcceptance:'NOT_PERFORMED'};

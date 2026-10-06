@@ -86,7 +86,71 @@ def _artifact(profile,value):
             or report['sourceSHA']!=profile.runtime.source_sha or report['toolkitSHA']!=profile.toolkit.source_sha
             or report['ownerBoot']!='PASS' or report['mcpBoot']!='PASS' or report['executedFixture'] is not True
             or report_sha256(value['receipts'])!=report['fixtureReceiptsSHA256']):_fail('QUALIFICATION_ARTIFACT_INVALID')
+    _artifact_preimages(profile,value['receipts'])
     return 'PASS'
+
+
+def _artifact_preimages(profile,value):
+    from .ledger import _strict_json
+    fields={'schema','bindingSHA256','receipts','healthCalls','fixture','productionEntrypointAcceptance'}
+    binding={'runtimeUid':profile.binding.uid,'principalId':profile.binding.principal_id,'targetInstanceId':profile.binding.target_instance_id}
+    if (type(value) is not dict or set(value)!=fields or value['schema']!='RBRIDGE_FINAL_ARTIFACT_FIXTURE_V1'
+            or value['bindingSHA256']!=report_sha256(binding) or type(value['healthCalls']) is not int or value['healthCalls']!=1
+            or value['fixture']!='OWNER_IPC_MCP_HELPER_STDIO' or value['productionEntrypointAcceptance']!='NOT_PERFORMED'
+            or type(value['receipts']) is not list or len(value['receipts'])!=2):_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INCOMPLETE')
+    names=('artifact-health','artifact-read')
+    def parsed(raw,limit=131072):
+        if type(raw) is not str or len(raw.encode('utf-8',errors='strict'))>limit:_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        result=_strict_json(raw)
+        if encode_report(result).decode()!=raw:_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        return result
+    for name,row in zip(names,value['receipts']):
+        if (type(row) is not dict or set(row)!={'scope','operationId','submissionJSON','contextJSON','receiptJSON','receiptSHA256',
+                'pagesJSON','resultJSON','resultBase64','resultBytes','resultSHA256'}
+                or row['scope']!='FINAL_ARTIFACT_OPERATION_BYTES_ONLY' or row['operationId']!=name):
+            _fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        operation={'kind':'HEALTH','action':'STATUS'} if name=='artifact-health' else {'kind':'FILE','action':'READ','target':'/mnt/data/source.txt','args':{}}
+        submission={'schema':'RBRIDGE_OPERATION_SUBMISSION_V1','operationId':name,
+            'principalId':binding['principalId'],'targetInstanceId':binding['targetInstanceId'],'operation':operation}
+        context={'schema':'RBRIDGE_TRANSPORT_CONTEXT_V1','transport':'MCP','authenticatedSubject':profile.binding.mcp_subject,'principalId':binding['principalId']}
+        if parsed(row['submissionJSON'])!=submission or parsed(row['contextJSON'])!=context:_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        receipt=parsed(row['receiptJSON']);required={'schema','operationId','intentSha256','principalId','targetInstanceId','policy','phase',
+            'outcome','resultSha256','cancellation','sideEffects','transitions','postconditions'}
+        if (type(receipt) is not dict or not required<=set(receipt) or set(receipt)-required-{'reason'}
+                or receipt['schema']!='RBRIDGE_EXECUTION_RECEIPT_V1' or receipt['operationId']!=name
+                or receipt['principalId']!=binding['principalId'] or receipt['targetInstanceId']!=binding['targetInstanceId']
+                or receipt['intentSha256']!=report_sha256({k:v for k,v in submission.items() if k!='operationId'})
+                or receipt['phase']!='TERMINAL' or receipt['outcome']!='PASS'
+                or type(receipt['policy']) is not dict or receipt['policy'].get('policySha256')!=profile.binding.policy_sha256
+                or receipt['policy'].get('decision')!='ALLOW' or type(receipt['transitions']) is not list
+                or not 3<=len(receipt['transitions'])<=5 or receipt['transitions'][0].get('phase')!='CLAIMED'
+                or receipt['transitions'][-1].get('phase')!='TERMINAL'
+                or hashlib.sha256(row['receiptJSON'].encode()).hexdigest()!=row['receiptSHA256']):
+            _fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        output=_base64(row['resultBase64'],8388608)
+        if (type(row['resultBytes']) is not int or row['resultBytes']!=len(output) or not output
+                or type(row['resultJSON']) is not str or output.decode('utf-8',errors='strict')!=row['resultJSON']
+                or not _hash(row['resultSHA256']) or hashlib.sha256(output).hexdigest()!=row['resultSHA256']
+                or receipt['resultSha256']!=row['resultSHA256']):_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        # The fixed Node fixture checked canonical producer JSON and operation
+        # semantics. Preserve its full raw output here rather than reinterpret
+        # JSON number formatting in a different language.
+        result=_strict_json(row['resultJSON'])
+        if (type(result) is not dict or name=='artifact-health' and (result.get('status')!='PASS' or result.get('releaseSha')!=profile.runtime.source_sha)
+                or name=='artifact-read' and result.get('text')!='artifact read é\n'):_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        if type(row['pagesJSON']) is not list or not 1<=len(row['pagesJSON'])<=512:_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+        cursor=0;parts=[]
+        for i,raw in enumerate(row['pagesJSON']):
+            page=parsed(raw)
+            if (type(page) is not dict or set(page)!={'status','receipt','resultSha256','cursor','nextCursor','eof','dataBase64'}
+                    or page['status']!='RESULT' or page['receipt']!=receipt or page['resultSha256']!=row['resultSHA256']
+                    or type(page['cursor']) is not int or page['cursor']!=cursor or type(page['nextCursor']) is not int
+                    or page['eof'] is not (i==len(row['pagesJSON'])-1)):_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+            part=_base64(page['dataBase64'],32768);parts.append(part)
+            if page['nextCursor']!=cursor+len(part) or page['nextCursor']>len(output) or not part and not page['eof']:
+                _fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
+            cursor=page['nextCursor']
+        if cursor!=len(output) or b''.join(parts)!=output:_fail('QUALIFICATION_ARTIFACT_PREIMAGES_INVALID')
 
 
 def _readers(profile,value):

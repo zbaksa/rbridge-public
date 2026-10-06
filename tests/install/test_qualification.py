@@ -1,5 +1,6 @@
 """Qualification completeness comparisons; source predicates grant no Root action."""
 import hashlib
+import copy
 import json
 import importlib.util
 import sys
@@ -57,6 +58,45 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(result.status,'BLOCKED');self.assertFalse(result.command_ready)
         self.assertNotEqual(result.checks['readers'],'PASS');self.assertNotEqual(result.checks['artifact'],'PASS')
         self.assertNotEqual(result.checks['privileged'],'PASS')
+
+    def test_rehashed_artifact_summary_without_full_operation_preimages_is_incomplete(self):
+        from rbridge_installation.models import report_sha256
+        p=self.profile;receipts={'only_summary_hash':'f'*64}
+        report={'schema':'RBRIDGE_INSTALL_ARTIFACT_QUALIFICATION_V1','status':'PASS','reason_codes':[],
+            'runtimeVersion':p.runtime.node_version,'actualNodeSHA256':p.runtime.node_sha256,
+            'runtimeManifestSHA256':p.runtime.manifest_sha256,'toolkitManifestSHA256':p.toolkit.manifest_sha256,
+            'sourceSHA':p.runtime.source_sha,'toolkitSHA':p.toolkit.source_sha,
+            'scope':'ISOLATED_FINAL_ARTIFACT_OWNER_IPC_MCP_HELPER','ownerBoot':'PASS','mcpBoot':'PASS',
+            'executedFixture':True,'fixtureReceiptsSHA256':report_sha256(receipts)}
+        result=self.build(p,self.Proofs(artifact={'report':report,'receipts':receipts}))
+        self.assertEqual(result.checks['artifact'],'FAIL');self.assertFalse(result.command_ready)
+
+    def test_source_preimage_fixture_is_complete_data_but_never_physical_authority(self):
+        from rbridge_installation.models import report_sha256
+        from rbridge_installation.profile import parse_profile
+        fixture=json.loads((ROOT/'tests/fixtures/rbridge-artifact-preimages.json').read_text())
+        self.assertEqual(fixture['scope'],'SYNTHETIC_SOURCE_DATA_ONLY')
+        p=parse_profile(fixture['profile'])
+        def assess(receipts):
+            report={'schema':'RBRIDGE_INSTALL_ARTIFACT_QUALIFICATION_V1','status':'PASS','reason_codes':[],
+                'runtimeVersion':p.runtime.node_version,'actualNodeSHA256':p.runtime.node_sha256,
+                'runtimeManifestSHA256':p.runtime.manifest_sha256,'toolkitManifestSHA256':p.toolkit.manifest_sha256,
+                'sourceSHA':p.runtime.source_sha,'toolkitSHA':p.toolkit.source_sha,
+                'scope':'ISOLATED_FINAL_ARTIFACT_OWNER_IPC_MCP_HELPER','ownerBoot':'PASS','mcpBoot':'PASS',
+                'executedFixture':True,'fixtureReceiptsSHA256':report_sha256(receipts)}
+            return self.build(p,self.Proofs(artifact={'report':report,'receipts':receipts}))
+        result=assess(fixture['artifact'])
+        self.assertEqual(result.checks['artifact'],'PASS');self.assertFalse(result.command_ready)
+        self.assertEqual(result.scope,'QUALIFICATION_COMPLETENESS_ONLY')
+        for mutation in ('missing','page','receipt','bytes','intent'):
+            value=copy.deepcopy(fixture['artifact']);row=value['receipts'][0]
+            if mutation=='missing':row.pop('receiptJSON')
+            elif mutation=='page':row['pagesJSON']=[]
+            elif mutation=='bytes':row['resultBase64']='Y2hhbmdlZA=='
+            else:
+                receipt=json.loads(row['receiptJSON']);receipt['principalId' if mutation=='receipt' else 'intentSha256']='attacker' if mutation=='receipt' else 'f'*64
+                row['receiptJSON']=json.dumps(receipt,ensure_ascii=False,sort_keys=True,separators=(',',':'));row['receiptSHA256']=hashlib.sha256(row['receiptJSON'].encode()).hexdigest()
+            self.assertEqual(assess(value).checks['artifact'],'FAIL')
 
     def test_root_entry_refuses_site_startup_before_any_toolkit_import(self):
         path=ROOT/'ops/install/rbridge_install.py';spec=importlib.util.spec_from_file_location('entry_source_site_fixture',path)

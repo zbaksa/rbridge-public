@@ -1,0 +1,152 @@
+{
+  "scope": "SYNTHETIC_SOURCE_DATA_ONLY",
+  "profile": {
+    "schema": "RBRIDGE_P2A_INSTALL_PROFILE_V1",
+    "binding": {
+      "uid": 1027,
+      "gid": 1027,
+      "supplementary_gids": [],
+      "account": "rbridge",
+      "home": "/home/rbridge",
+      "principal_id": "fixture-operator",
+      "target_instance_id": "fixture-host",
+      "repository": "zbaksa/rbridge-public",
+      "author": "zbaksa",
+      "mcp_subject": "uid:1027",
+      "github_subject": "zbaksa/rbridge-public:zbaksa",
+      "policy_sha256": "7df4f27a7235123e7c0091e957a485fb001076d189ca759a4313c9a238d1e7fb"
+    },
+    "runtime": {
+      "source_sha": "b5881fd8367b4249e82683f1f884f2392cb696d4",
+      "tree_sha": "8eeabd5628c8226bd42c00d79e2f3c37ad252ba8",
+      "old_sha": "008885e07394f20746f034cbd7fe52c6b520533d",
+      "node_path": "/usr/bin/node",
+      "node_version": "22.23.2",
+      "node_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "npm_cli_path": "/usr/share/nodejs/npm/bin/npm-cli.js",
+      "npm_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "lock_sha256": "53c56e80378408dae8e920118d3731de78c22e8e8be7a89cf4a1717f30369c15",
+      "manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "toolkit": {
+      "source_sha": "2222222222222222222222222222222222222222",
+      "manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "python_path": "/usr/bin/python3",
+      "python_version": "3.11.2",
+      "python_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "tree_sha": "3333333333333333333333333333333333333333"
+    },
+    "tools": [
+      {
+        "role": "systemctl",
+        "path": "/usr/bin/systemctl",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "version": "fixture-1"
+      },
+      {
+        "role": "gh",
+        "path": "/usr/bin/gh",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "version": "fixture-1"
+      },
+      {
+        "role": "runuser",
+        "path": "/usr/sbin/runuser",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "version": "fixture-1"
+      }
+    ],
+    "paths": {
+      "state_root": "/home/rbridge/.local/state/rbridge",
+      "release_parent": "/usr/local/libexec/rbridge/releases",
+      "current_link": "/usr/local/libexec/rbridge/current",
+      "ledger_parent": "/var/lib/rbridge-maintenance",
+      "lock_path": "/run/rbridge-installation.lock",
+      "binding_env": "/etc/rbridge/p2a-binding.env",
+      "binding_dropin": "/etc/systemd/system/rbridge.service.d/60-p2a-binding.conf",
+      "canary_path": "/mnt/data/fixture-canary.txt"
+    },
+    "service": {
+      "unit": "rbridge.service",
+      "alternate_units": [],
+      "identity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "environment_files": [
+        {
+          "path": "/etc/rbridge/runtime.env",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        {
+          "path": "/etc/rbridge/flowpilot.env",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "dropins_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "canary_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "budget": {
+      "state_entries": 40000,
+      "state_depth": 64,
+      "state_bytes": 68719476736,
+      "artifact_entries": 100000,
+      "artifact_depth": 128,
+      "artifact_bytes": 1073741824,
+      "record_bytes": 2097152,
+      "process_log_bytes": 67108864,
+      "process_frames": 1048576,
+      "carrier_bytes": 67108864,
+      "carrier_comments": 4096,
+      "comment_bytes": 65536,
+      "carrier_object_bytes": 8519680,
+      "scan_ms": 600000,
+      "lookup_ms": 15000,
+      "lookup_batch": 25,
+      "lookup_response_bytes": 2097152,
+      "lookup_overall_ms": 600000,
+      "stop_ms": 30000,
+      "acceptance_ms": 180000,
+      "canary_ttl_ms": 120000,
+      "poll_ms": 1000,
+      "maintenance_ms": 1200000
+    },
+    "readers": []
+  },
+  "artifact": {
+    "schema": "RBRIDGE_FINAL_ARTIFACT_FIXTURE_V1",
+    "bindingSHA256": "f29b0bd3871f6474d2997f88648ad6f64ec7bf6d2d069657ee2497e1ef28d860",
+    "receipts": [
+      {
+        "scope": "FINAL_ARTIFACT_OPERATION_BYTES_ONLY",
+        "operationId": "artifact-health",
+        "submissionJSON": "{\"operation\":{\"action\":\"STATUS\",\"kind\":\"HEALTH\"},\"operationId\":\"artifact-health\",\"principalId\":\"fixture-operator\",\"schema\":\"RBRIDGE_OPERATION_SUBMISSION_V1\",\"targetInstanceId\":\"fixture-host\"}",
+        "contextJSON": "{\"authenticatedSubject\":\"uid:1027\",\"principalId\":\"fixture-operator\",\"schema\":\"RBRIDGE_TRANSPORT_CONTEXT_V1\",\"transport\":\"MCP\"}",
+        "receiptJSON": "{\"cancellation\":{\"state\":\"NONE\"},\"intentSha256\":\"e2f857e439b365dd866130e2d90b524ad45129d1f9358ba6fe70bd5e8c1e2363\",\"operationId\":\"artifact-health\",\"outcome\":\"PASS\",\"phase\":\"TERMINAL\",\"policy\":{\"decision\":\"ALLOW\",\"mode\":\"SAFE\",\"policySha256\":\"7df4f27a7235123e7c0091e957a485fb001076d189ca759a4313c9a238d1e7fb\",\"policyVersion\":\"safe-core-p2a-v1\",\"schema\":\"RBRIDGE_POLICY_SNAPSHOT_V1\"},\"postconditions\":[],\"principalId\":\"fixture-operator\",\"resultSha256\":\"bf0ff0a5f074ddb575fd0c3f20cb113be719142bca1c7094773548736898daf4\",\"schema\":\"RBRIDGE_EXECUTION_RECEIPT_V1\",\"sideEffects\":{\"state\":\"NONE_PROVEN\"},\"targetInstanceId\":\"fixture-host\",\"transitions\":[{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"CLAIMED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"AUTHORIZED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"STARTING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"RUNNING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"TERMINAL\"}]}",
+        "receiptSHA256": "fadac3d5867ff57ef3492a682746e5111fb9f4d43d701cf92778582164d58709",
+        "pagesJSON": [
+          "{\"cursor\":0,\"dataBase64\":\"eyJsYXN0R2l0SHViUG9sbEF0IjpudWxsLCJxdWV1ZUNvdW50IjowLCJyZWxlYXNlU2hhIjoiYjU4ODFmZDgzNjdiNDI0OWU4MjY4M2YxZjg4NGYyMzkyY2I2OTZkNCIsInNjaGVtYSI6IkNPQ1dJTl9SRU1PVEVfQlJJREdFX0hFQUxUSF9WMiIsInNlc3Npb25Db3VudCI6MCwic3RhdHVzIjoiUEFTUyIsInRyYW5zZmVyQ291bnQiOjAsInVwdGltZU1zIjoxfQ==\",\"eof\":true,\"nextCursor\":202,\"receipt\":{\"cancellation\":{\"state\":\"NONE\"},\"intentSha256\":\"e2f857e439b365dd866130e2d90b524ad45129d1f9358ba6fe70bd5e8c1e2363\",\"operationId\":\"artifact-health\",\"outcome\":\"PASS\",\"phase\":\"TERMINAL\",\"policy\":{\"decision\":\"ALLOW\",\"mode\":\"SAFE\",\"policySha256\":\"7df4f27a7235123e7c0091e957a485fb001076d189ca759a4313c9a238d1e7fb\",\"policyVersion\":\"safe-core-p2a-v1\",\"schema\":\"RBRIDGE_POLICY_SNAPSHOT_V1\"},\"postconditions\":[],\"principalId\":\"fixture-operator\",\"resultSha256\":\"bf0ff0a5f074ddb575fd0c3f20cb113be719142bca1c7094773548736898daf4\",\"schema\":\"RBRIDGE_EXECUTION_RECEIPT_V1\",\"sideEffects\":{\"state\":\"NONE_PROVEN\"},\"targetInstanceId\":\"fixture-host\",\"transitions\":[{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"CLAIMED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"AUTHORIZED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"STARTING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"RUNNING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"TERMINAL\"}]},\"resultSha256\":\"bf0ff0a5f074ddb575fd0c3f20cb113be719142bca1c7094773548736898daf4\",\"status\":\"RESULT\"}"
+        ],
+        "resultJSON": "{\"lastGitHubPollAt\":null,\"queueCount\":0,\"releaseSha\":\"b5881fd8367b4249e82683f1f884f2392cb696d4\",\"schema\":\"COCWIN_REMOTE_BRIDGE_HEALTH_V2\",\"sessionCount\":0,\"status\":\"PASS\",\"transferCount\":0,\"uptimeMs\":1}",
+        "resultBase64": "eyJsYXN0R2l0SHViUG9sbEF0IjpudWxsLCJxdWV1ZUNvdW50IjowLCJyZWxlYXNlU2hhIjoiYjU4ODFmZDgzNjdiNDI0OWU4MjY4M2YxZjg4NGYyMzkyY2I2OTZkNCIsInNjaGVtYSI6IkNPQ1dJTl9SRU1PVEVfQlJJREdFX0hFQUxUSF9WMiIsInNlc3Npb25Db3VudCI6MCwic3RhdHVzIjoiUEFTUyIsInRyYW5zZmVyQ291bnQiOjAsInVwdGltZU1zIjoxfQ==",
+        "resultBytes": 202,
+        "resultSHA256": "bf0ff0a5f074ddb575fd0c3f20cb113be719142bca1c7094773548736898daf4"
+      },
+      {
+        "scope": "FINAL_ARTIFACT_OPERATION_BYTES_ONLY",
+        "operationId": "artifact-read",
+        "submissionJSON": "{\"operation\":{\"action\":\"READ\",\"args\":{},\"kind\":\"FILE\",\"target\":\"/mnt/data/source.txt\"},\"operationId\":\"artifact-read\",\"principalId\":\"fixture-operator\",\"schema\":\"RBRIDGE_OPERATION_SUBMISSION_V1\",\"targetInstanceId\":\"fixture-host\"}",
+        "contextJSON": "{\"authenticatedSubject\":\"uid:1027\",\"principalId\":\"fixture-operator\",\"schema\":\"RBRIDGE_TRANSPORT_CONTEXT_V1\",\"transport\":\"MCP\"}",
+        "receiptJSON": "{\"cancellation\":{\"state\":\"NONE\"},\"intentSha256\":\"c8e0f325c3a6757ab6eb45880bebf31082b70b4ee8b71ff6eb93c76b36c7b9bc\",\"operationId\":\"artifact-read\",\"outcome\":\"PASS\",\"phase\":\"TERMINAL\",\"policy\":{\"decision\":\"ALLOW\",\"mode\":\"SAFE\",\"policySha256\":\"7df4f27a7235123e7c0091e957a485fb001076d189ca759a4313c9a238d1e7fb\",\"policyVersion\":\"safe-core-p2a-v1\",\"schema\":\"RBRIDGE_POLICY_SNAPSHOT_V1\"},\"postconditions\":[],\"principalId\":\"fixture-operator\",\"resultSha256\":\"726687a186f4e00f62ddd4cd47f54cc01429f17f889f1847450f672dae8ecb11\",\"schema\":\"RBRIDGE_EXECUTION_RECEIPT_V1\",\"sideEffects\":{\"state\":\"NONE_PROVEN\"},\"targetInstanceId\":\"fixture-host\",\"transitions\":[{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"CLAIMED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"AUTHORIZED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"STARTING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"RUNNING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"TERMINAL\"}]}",
+        "receiptSHA256": "f4c412ad71e7e56279f562cd81a1431ddad78f1516b9e6c9a243026ba947a823",
+        "pagesJSON": [
+          "{\"cursor\":0,\"dataBase64\":\"eyJwYXRoIjoiL21udC9kYXRhL3NvdXJjZS50eHQiLCJ0ZXh0IjoiYXJ0aWZhY3QgcmVhZCDDqVxuIn0=\",\"eof\":true,\"nextCursor\":59,\"receipt\":{\"cancellation\":{\"state\":\"NONE\"},\"intentSha256\":\"c8e0f325c3a6757ab6eb45880bebf31082b70b4ee8b71ff6eb93c76b36c7b9bc\",\"operationId\":\"artifact-read\",\"outcome\":\"PASS\",\"phase\":\"TERMINAL\",\"policy\":{\"decision\":\"ALLOW\",\"mode\":\"SAFE\",\"policySha256\":\"7df4f27a7235123e7c0091e957a485fb001076d189ca759a4313c9a238d1e7fb\",\"policyVersion\":\"safe-core-p2a-v1\",\"schema\":\"RBRIDGE_POLICY_SNAPSHOT_V1\"},\"postconditions\":[],\"principalId\":\"fixture-operator\",\"resultSha256\":\"726687a186f4e00f62ddd4cd47f54cc01429f17f889f1847450f672dae8ecb11\",\"schema\":\"RBRIDGE_EXECUTION_RECEIPT_V1\",\"sideEffects\":{\"state\":\"NONE_PROVEN\"},\"targetInstanceId\":\"fixture-host\",\"transitions\":[{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"CLAIMED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"AUTHORIZED\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"STARTING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"RUNNING\"},{\"at\":\"2026-10-05T10:01:00.000Z\",\"phase\":\"TERMINAL\"}]},\"resultSha256\":\"726687a186f4e00f62ddd4cd47f54cc01429f17f889f1847450f672dae8ecb11\",\"status\":\"RESULT\"}"
+        ],
+        "resultJSON": "{\"path\":\"/mnt/data/source.txt\",\"text\":\"artifact read é\\n\"}",
+        "resultBase64": "eyJwYXRoIjoiL21udC9kYXRhL3NvdXJjZS50eHQiLCJ0ZXh0IjoiYXJ0aWZhY3QgcmVhZCDDqVxuIn0=",
+        "resultBytes": 59,
+        "resultSHA256": "726687a186f4e00f62ddd4cd47f54cc01429f17f889f1847450f672dae8ecb11"
+      }
+    ],
+    "healthCalls": 1,
+    "fixture": "OWNER_IPC_MCP_HELPER_STDIO",
+    "productionEntrypointAcceptance": "NOT_PERFORMED"
+  }
+}
