@@ -10,6 +10,7 @@ from types import MappingProxyType
 import ctypes
 import hashlib
 import os
+import re
 import secrets
 import shlex
 import stat
@@ -131,9 +132,15 @@ def _write_new(guard,path,data,mode):
     os.fsync(guard.fd);guard.check()
 
 class _OwnedConfiguration:
-    def __init__(self,profile,lease,ledger,backend,scope):
+    def __init__(self,profile,lease,ledger,backend,scope,resuming=False):
         self.profile=profile;self.lease=lease;self.ledger=ledger;self.backend=backend;self.scope=scope;self.created={};self.removed=set();self.loading=False;self.committed=False;self.restoring=False;self.closed=False
-        self.before=MappingProxyType(backend._show(profile.service.unit));self.originals=[]
+        rows=backend._show(profile.service.unit)
+        if resuming:
+            paths=shlex.split(rows['DropInPaths']);env=' '.join(e.path+' (ignore_errors=no)' for e in profile.service.environment_files)
+            if paths.count(profile.paths.binding_dropin)!=1 or rows['EnvironmentFiles']!=env+' '+profile.paths.binding_env+' (ignore_errors=no)':raise ConfigError('CONFIG_RESUME_OVERLAY_UNQUALIFIED')
+            rows={**rows,'DropInPaths':' '.join(shlex.quote(p) for p in paths if p!=profile.paths.binding_dropin),'EnvironmentFiles':env}
+            if scope=='QUALIFIED_HOST_PAUSE' and report_sha256(backend._config(rows))!=profile.service.identity_sha256:raise ConfigError('CONFIG_RESUME_BASELINE_CHANGED')
+        self.before=MappingProxyType(rows);self.originals=[]
         from .host_backend import PROPERTIES
         if set(self.before)!=set(PROPERTIES) or len(profile.service.environment_files)!=2:raise ConfigError('CONFIG_SERVICE_FIELDS_UNCLASSIFIED')
         if any(v.split('=',1)[0] in _binding_keys for v in shlex.split(self.before.get('UnsetEnvironment',''))):raise ConfigError('CONFIG_BINDING_UNSET')
@@ -156,7 +163,8 @@ class _OwnedConfiguration:
             for p,g in self.guards.items():
                 try:os.stat(Path(p).name,dir_fd=g.fd,follow_symlinks=False)
                 except FileNotFoundError:pass
-                else:raise ConfigError('CONFIG_UNOWNED_PATH_EXISTS')
+                else:
+                    if not resuming:raise ConfigError('CONFIG_UNOWNED_PATH_EXISTS')
         except BaseException:
             self.close();raise
         principal=profile.binding.principal_id;target=profile.binding.target_instance_id;source=profile.runtime.source_sha
@@ -243,6 +251,59 @@ class _OwnedPointer:
     def check(self):
         self.guard.check()
         if self not in _pointers or self.after is None or self.restored or _pointer(self.guard.fd,self.name,os.getuid())!=self.after or _pointer(self.guard.fd,self.backup,os.getuid())!=self.held_before:raise ConfigError('POINTER_CAS_DRIFT')
+
+def resume_owned_changes(profile,lease,ledger,backend,witness):
+    """Reconstruct only acknowledged, descriptor-verified objects; never infer intent completion."""
+    config=None;pointer=None
+    try:
+        scope=_qualified(profile,lease,ledger,backend);lease.check_exclusion();entries=ledger.read().entries
+        if type(witness) is not dict or set(witness)!={'schema','profile_sha256','transaction_id','configuration','pointer'} or witness['schema']!='RBRIDGE_INSTALL_OWNED_EVIDENCE_V1' or witness['profile_sha256']!=report_sha256(profile) or witness['transaction_id']!=ledger.transaction_id:raise ConfigError('CONFIG_RESUME_WITNESS_UNQUALIFIED')
+        cfg=witness['configuration'];ptr=witness['pointer'];installed=next((e for e in entries if e.marker=='CONFIG_INSTALLED'),None);intent=next((e for e in entries if e.marker=='CONFIG_INTENT'),None)
+        if not installed or not intent or type(cfg) is not dict or set(cfg)!={'before_sha256','after_sha256','before_pointer_sha256','owned_additions_sha256','files'}:raise ConfigError('CONFIG_RESUME_ACKNOWLEDGEMENT_MISSING')
+        config=_OwnedConfiguration(profile,lease,ledger,backend,scope,resuming=True)
+        if config.before_sha256!=cfg['before_sha256'] or config.before_sha256!=intent.evidence.get('before_config_sha256') or config.owned_additions_sha256!=cfg['owned_additions_sha256'] or config.owned_additions_sha256!=installed.evidence.get('owned_additions_sha256') or cfg['before_pointer_sha256']!=intent.evidence.get('before_pointer_sha256'):raise ConfigError('CONFIG_RESUME_BASELINE_CHANGED')
+        if type(cfg['files']) is not list or len(cfg['files'])!=2:raise ConfigError('CONFIG_RESUME_WITNESS_UNQUALIFIED')
+        for path,data in config.payloads.items():
+            pin=_read_pin(path,scope,config.modes[path]);encoded=vars(pin).copy();encoded['identity']=list(encoded['identity'])
+            if pin.sha256!=hashlib.sha256(data).hexdigest() or encoded!=cfg['files'][len(config.created)]:raise ConfigError('CONFIG_RESUME_OWNED_INODE_CHANGED')
+            config.created[path]=pin
+        config.committed=True;backend.owned_configuration=config
+        after=config.observed()
+        if after!=cfg['after_sha256'] or after!=installed.evidence.get('after_config_sha256'):raise ConfigError('CONFIG_RESUME_OVERLAY_CHANGED')
+        change=OwnedConfigChange(scope,config.before_sha256,after,cfg['before_pointer_sha256'],config.owned_additions_sha256,tuple(config.created.values()),config)
+        switched=next((e for e in entries if e.marker=='POINTER_SWITCHED'),None)
+        if switched:
+            required={'before_sha256','after_sha256','before_target','after_target','held_before','backup_name','before_identity','after_identity'}
+            if type(ptr) is not dict or set(ptr)!=required or not re.fullmatch(r'\.rbridge-pointer-'+ledger.transaction_id+r'-[0-9a-f]{16}',ptr['backup_name']):raise ConfigError('POINTER_RESUME_WITNESS_UNQUALIFIED')
+            pointer=object.__new__(_OwnedPointer);pointer.profile=profile;pointer.lease=lease;pointer.ledger=ledger;pointer.scope=scope;pointer.guard=_guard(profile.paths.current_link,scope);pointer.name=Path(profile.paths.current_link).name;pointer.backup=ptr['backup_name'];pointer.restored=False
+            def identity(value):
+                if type(value) is not list or len(value)!=9 or any(type(v) is not str or not re.fullmatch('0|[1-9][0-9]{0,31}',v) for v in value):raise ConfigError('POINTER_RESUME_WITNESS_UNQUALIFIED')
+                return tuple(int(v) for v in value)
+            pointer.before=(ptr['before_target'],identity(ptr['before_identity']),ptr['before_sha256'])
+            pointer.after=(ptr['after_target'],identity(ptr['after_identity']),ptr['after_sha256'])
+            held=ptr['held_before']
+            if type(held) is not list or len(held)!=3:raise ConfigError('POINTER_RESUME_WITNESS_UNQUALIFIED')
+            pointer.held_before=(held[0],identity(held[1]),held[2])
+            for value in (pointer.before,pointer.after,pointer.held_before):
+                if value[2]!=report_sha256({'target':value[0],'identity':list(map(str,value[1]))}):raise ConfigError('POINTER_RESUME_WITNESS_UNQUALIFIED')
+            expected=Path(profile.paths.release_parent)/profile.runtime.old_sha
+            if pointer.before[0] not in (str(expected),os.path.relpath(expected,Path(profile.paths.current_link).parent)) or pointer.after[0]!=str(Path(profile.paths.release_parent)/profile.runtime.source_sha) or not _same_exchanged(pointer.held_before,pointer.before) or pointer.before[2]!=next(e for e in entries if e.marker=='POINTER_INTENT').evidence.get('before_pointer_sha256') or pointer.after[2]!=switched.evidence.get('after_pointer_sha256'):raise ConfigError('POINTER_RESUME_WITNESS_UNQUALIFIED')
+            _pointers.add(pointer);pointer.check();backend.owned_pointer=pointer
+            pointer_change=OwnedPointerChange(scope,pointer.before[2],pointer.after[2],pointer.before[0],pointer.after[0],pointer)
+        else:
+            if ptr is not None or any(e.marker=='POINTER_INTENT' for e in entries):raise ConfigError('POINTER_RESUME_ACKNOWLEDGEMENT_MISSING')
+            guard=_guard(profile.paths.current_link,scope)
+            try:
+                if _pointer(guard.fd,Path(profile.paths.current_link).name,os.getuid())[2]!=cfg['before_pointer_sha256']:raise ConfigError('POINTER_CAS_DRIFT')
+            finally:guard.close()
+            pointer_change=None
+        lease.check_exclusion();return OwnedChanges(change,pointer_change)
+    except BaseException:
+        if getattr(backend,'owned_configuration',None) is config:del backend.owned_configuration
+        if getattr(backend,'owned_pointer',None) is pointer:del backend.owned_pointer
+        if config is not None:config.close()
+        if pointer is not None and hasattr(pointer,'guard'):pointer.guard.close()
+        raise
 
 def switch_pointer(profile,artifact,lease,ledger):
     session=None

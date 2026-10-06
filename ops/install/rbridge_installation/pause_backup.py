@@ -78,55 +78,73 @@ def capture_service(profile,backend):
     return MappingProxyType(value)
 
 class PauseLease:
-    def __init__(self,profile,backend,ledger,lock_fd,lock_identity,observation):
+    def __init__(self,profile,backend,ledger,lock_fd,lock_identity,observation,lock_guard=None):
         self.profile=profile;self.backend=backend;self.ledger=ledger;self.lock_fd=lock_fd;self.lock_identity=lock_identity
-        self.observation=observation;self.pause_sha256=report_sha256(observation);self.scope=observation['scope'];self.closed=False
+        self.observation=observation;self.pause_sha256=report_sha256(observation);self.scope=observation['scope'] if observation else backend.scope;self.closed=False;self.lock_guard=lock_guard
         self.deadline=time.monotonic()+profile.budget.maintenance_ms/1000
-        self.stopped_sockets=tuple(observation['stopped_sockets'])
+        self.stopped_sockets=tuple(observation['stopped_sockets']) if observation else ()
     def check(self):
+        self.check_exclusion()
+        current=_observation(self.backend.observe_pause(self.profile),self.profile)
+        if report_sha256(current)!=self.pause_sha256:raise PauseError('PAUSE_OBSERVATION_CHANGED')
+    def check_exclusion(self):
+        """Retain maintenance ownership while the authorized candidate is active.
+
+        This is a lock/lease proof, never a stopped-service or writer proof.
+        """
         if self.closed or time.monotonic()>=self.deadline:raise PauseError('PAUSE_LEASE_EXPIRED')
         try:
+            if self.lock_guard:self.lock_guard.check()
             before=os.fstat(self.lock_fd);named=os.stat(self.profile.paths.lock_path,follow_symlinks=False)
             if _identity(before)!=self.lock_identity or _identity(named)!=self.lock_identity:raise PauseError('PAUSE_LOCK_CHANGED')
             fcntl.flock(self.lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            current=_observation(self.backend.observe_pause(self.profile),self.profile)
-            if report_sha256(current)!=self.pause_sha256:raise PauseError('PAUSE_OBSERVATION_CHANGED')
         except OSError:raise PauseError('PAUSE_LOCK_OR_OBSERVATION_UNAVAILABLE') from None
+    def observe_stopped(self):
+        """Mint a fresh stop observation; a dead predecessor's flock is not evidence."""
+        self.check_exclusion()
+        first=_observation(self.backend.observe_pause(self.profile),self.profile)
+        second=_observation(self.backend.observe_pause(self.profile),self.profile)
+        if first['scope']!=self.scope or first!=second:raise PauseError('PAUSE_OBSERVATION_CHANGED')
+        self.observation=first;self.pause_sha256=report_sha256(first);self.stopped_sockets=tuple(first['stopped_sockets']);self.check()
     def close(self):
-        if not self.closed:self.closed=True;os.close(self.lock_fd)
+        if not self.closed:
+            self.closed=True;os.close(self.lock_fd)
+            if self.lock_guard:self.lock_guard.close()
+
+def reacquire_exclusion(profile,backend,ledger):
+    """Acquire a new foreground lock, without asserting the service is stopped."""
+    scope=getattr(backend,'scope',None)
+    if scope=='QUALIFIED_HOST_PAUSE':
+        from .host_backend import QualifiedHostBackend
+        if type(backend) is not QualifiedHostBackend or os.getuid()!=0 or os.geteuid()!=0:raise PauseError('PAUSE_BACKEND_UNQUALIFIED')
+    elif scope!='FIXTURE_AUTHORITY_ONLY':raise PauseError('PAUSE_BACKEND_UNQUALIFIED')
+    path=Path(profile.paths.lock_path);guard=ProtectedParent(FilesystemAuthority(os.getuid(),1027,path.parent,'RUNTIME',scope=='QUALIFIED_HOST_PAUSE'));fd=None
+    try:
+        guard.check()
+        try:fd=os.open(path.name,os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=guard.fd);os.fsync(fd);os.fsync(guard.fd)
+        except FileExistsError:fd=os.open(path.name,os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=guard.fd)
+        row=os.fstat(fd)
+        if not stat.S_ISREG(row.st_mode) or row.st_uid!=os.getuid() or row.st_nlink!=1 or row.st_mode&0o7777!=0o600:raise PauseError('PAUSE_LOCK_UNPROTECTED')
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lease=PauseLease(profile,backend,ledger,fd,_identity(row),None,guard);lease.check_exclusion();return lease
+    except BaseException:
+        if fd is not None:os.close(fd)
+        guard.close();raise
 
 def maintain_pause(profile,backend,ledger):
-    lock_fd=None
+    lease=None;completed=False
     try:
-        scope=getattr(backend,'scope',None)
-        if scope not in ('FIXTURE_AUTHORITY_ONLY','QUALIFIED_HOST_PAUSE'):raise PauseError('PAUSE_BACKEND_UNQUALIFIED')
-        if scope=='QUALIFIED_HOST_PAUSE':
-            # The production backend is concrete qualified code, never a callback.
-            from .host_backend import QualifiedHostBackend
-            if not isinstance(backend,QualifiedHostBackend) or os.getuid()!=0 or os.geteuid()!=0:raise PauseError('PAUSE_BACKEND_UNQUALIFIED')
-        path=Path(profile.paths.lock_path)
-        parent=open_artifact_root(path.parent)
-        try:
-            owner=os.getuid();s=os.fstat(parent)
-            if s.st_uid!=owner or s.st_mode&0o6022:raise PauseError('PAUSE_LOCK_PARENT_UNPROTECTED')
-            try:lock_fd=os.open(path.name,os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=parent);os.fsync(lock_fd);os.fsync(parent)
-            except FileExistsError:lock_fd=os.open(path.name,os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent)
-        finally:os.close(parent)
-        row=os.fstat(lock_fd)
-        if not stat.S_ISREG(row.st_mode) or row.st_uid!=owner or row.st_nlink!=1 or row.st_mode&0o7777!=0o600:raise PauseError('PAUSE_LOCK_UNPROTECTED')
-        fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        lease=reacquire_exclusion(profile,backend,ledger);backend.pending_pause=lease;scope=lease.scope
         before=capture_service(profile,backend)
         if before['scope']!=scope:raise PauseError('PAUSE_BACKEND_UNQUALIFIED')
         ledger.append('PAUSE_INTENT',{'service_identity_sha256':before['identity_sha256'],'config_sha256':before['config_sha256'],'invocation_sha256':before['invocation_sha256']})
         backend.stop_unit(profile.service.unit)
-        observation=_observation(backend.observe_pause(profile),profile)
-        if observation['scope']!=scope:raise PauseError('PAUSE_BACKEND_UNQUALIFIED')
-        lease=PauseLease(profile,backend,ledger,lock_fd,_identity(row),observation);lease.check()
+        lease.observe_stopped()
         ledger.append('PAUSED',{'pause_sha256':lease.pause_sha256,'service_identity_sha256':before['identity_sha256']})
-        lock_fd=None;return lease
+        completed=True;del backend.pending_pause;return lease
     except OSError:raise PauseError('PAUSE_HOST_OR_LOCK_UNAVAILABLE') from None
     finally:
-        if lock_fd is not None:os.close(lock_fd)
+        # The transaction owns a failed attempt too; no EXIT cleanup releases it.
+        if lease is not None and not completed:backend.pending_pause=lease
 
 def _inventory(root,uid,gid,budget,stopped_sockets):
     fd=open_artifact_root(root);entries=[];total=0;reasons=set();access_times={};deadline=time.monotonic()+budget.scan_ms/1000

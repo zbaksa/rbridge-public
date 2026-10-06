@@ -60,6 +60,13 @@ def _assert_kernel_namespace():
         if not match or int(match[1])!=os.getpid():raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
     except OSError:raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED') from None
 
+def validate_candidate_facts(profile,rows,facts,node_sha256):
+    """Pure identity predicate; calling it does not mint an observed host proof."""
+    p=profile;argv=(p.runtime.node_path,p.paths.current_link+'/dist/server/server/remoteBridgeMain.js')
+    try:
+        if (rows['ActiveState']!='active' or rows['SubState']!='running' or not re.fullmatch('[0-9a-f]{32}',rows['InvocationID']) or not re.fullmatch('[1-9][0-9]*',rows['MainPID']) or int(rows['MainPID'])<2 or rows['ControlGroup']!='/system.slice/rbridge.service' or facts['identity']['pid']!=int(rows['MainPID']) or facts['Uid']!=(p.binding.uid,)*4 or facts['Gid']!=(p.binding.gid,)*4 or tuple(sorted(set(facts['Groups'])-{p.binding.gid}))!=p.binding.supplementary_gids or 0 in facts['Groups'] or facts['PPid']!=(1,) or facts['identity']['exe']!=p.runtime.node_path or facts['identity']['cmdlineSha256']!=hashlib.sha256(('\0'.join(argv)+'\0').encode()).hexdigest() or facts['cgroup_sha256']!=hashlib.sha256(('0::'+rows['ControlGroup']+'\n').encode()).hexdigest() or node_sha256!=p.runtime.node_sha256):raise PauseError('HOST_CANDIDATE_IDENTITY_UNQUALIFIED')
+    except (KeyError,TypeError,ValueError,AttributeError):raise PauseError('HOST_CANDIDATE_IDENTITY_UNQUALIFIED') from None
+
 def _run_fixed_tool(pin,args,timeout_ms,limit=262144,env=None):
     def qualify():
         if hashlib.sha256(_protected_bytes(pin.path,16777216)).hexdigest()!=pin.sha256:raise PauseError('HOST_TOOL_BYTES_MISMATCH')
@@ -115,6 +122,7 @@ class QualifiedHostBackend:
         cgroup=result['ControlGroup']
         if cgroup:
             if not cgroup.startswith('/') or cgroup=='/' or any(p in ('','.','..') for p in cgroup[1:].split('/')):raise PauseError('HOST_CGROUP_UNCLASSIFIED')
+            if unit in self.cgroups and self.cgroups[unit]!=cgroup:raise PauseError('HOST_CGROUP_CHANGED')
             self.cgroups[unit]=cgroup
         return result
     def _config(self,rows):
@@ -150,6 +158,47 @@ class QualifiedHostBackend:
         self._run(('stop','rbridge.service'),self.profile.budget.stop_ms,65536)
     def reload_configuration(self):
         self._run(('daemon-reload',),self.profile.budget.stop_ms,65536)
+    def start_candidate(self,prepared):
+        from .transaction import _validate,_authorization
+        _assert_kernel_namespace();_validate(prepared,self);_authorization(prepared,prepared.authorization)
+        if getattr(self,'current_installation',None) is not prepared or prepared.ledger.read().entries[-1].marker!='START_ATTEMPTED' or prepared.profile_sha256!=report_sha256(self.profile):raise PauseError('HOST_CANDIDATE_START_UNQUALIFIED')
+        prepared.lease.check();prepared.pointer.session.check()
+        if prepared.config.session.observed()!=prepared.config.after_sha256:raise PauseError('HOST_CANDIDATE_CONFIG_CHANGED')
+        self._run(('start','rbridge.service'),self.profile.budget.stop_ms,65536)
+    def observe_candidate(self,prepared):
+        from .transaction import _validate
+        from .readonly_helper import _facts
+        _assert_kernel_namespace();_validate(prepared,self);prepared.lease.check_exclusion();prepared.pointer.session.check()
+        if prepared.profile_sha256!=report_sha256(self.profile) or prepared.config.session.observed()!=prepared.config.after_sha256:raise PauseError('HOST_CANDIDATE_CONFIG_CHANGED')
+        rows=self._show('rbridge.service');config=self._config(rows)
+        if report_sha256(config)!=self.profile.service.identity_sha256 or not re.fullmatch('[1-9][0-9]*',rows['MainPID']):raise PauseError('HOST_CANDIDATE_CONFIG_CHANGED')
+        pid=int(rows['MainPID']);pidfd=None
+        try:
+            pidfd=os.pidfd_open(pid);facts=_facts(pid)
+            fd=os.open('/proc/'+str(pid)+'/exe',os.O_RDONLY|os.O_CLOEXEC)
+            try:
+                before=os.fstat(fd);sha=hashlib.sha256();total=0
+                if not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or before.st_mode&0o6022 or before.st_nlink!=1 or before.st_size>268435456:raise PauseError('HOST_CANDIDATE_NODE_UNQUALIFIED')
+                while True:
+                    chunk=os.read(fd,1048576)
+                    if not chunk:break
+                    sha.update(chunk);total+=len(chunk)
+                    if total>before.st_size:raise PauseError('HOST_CANDIDATE_NODE_CHANGED')
+                if total!=before.st_size or _identity(before)!=_identity(os.fstat(fd)):raise PauseError('HOST_CANDIDATE_NODE_CHANGED')
+            finally:os.close(fd)
+            if sha.hexdigest()!=hashlib.sha256(_protected_bytes(self.profile.runtime.node_path,268435456)).hexdigest():raise PauseError('HOST_CANDIDATE_NODE_CHANGED')
+            validate_candidate_facts(self.profile,rows,facts,sha.hexdigest())
+            if _facts(pid)!=facts or self._show('rbridge.service')!=rows:raise PauseError('HOST_CANDIDATE_INVOCATION_CHANGED')
+            selector=selectors.DefaultSelector()
+            try:
+                selector.register(pidfd,selectors.EVENT_READ)
+                if selector.select(0):raise PauseError('HOST_CANDIDATE_PROCESS_EXITED')
+            finally:selector.close()
+            _validate(prepared,self);prepared.lease.check_exclusion();prepared.pointer.session.check()
+            return {'scope':'QUALIFIED_INSTALLED_INVOCATION','status':'PASS','profile_sha256':prepared.profile_sha256,'runtime_manifest_sha256':prepared.runtime_manifest.sha256,'config_sha256':prepared.config.after_sha256,'pointer_sha256':prepared.pointer.after_sha256,'invocation_sha256':report_sha256({'process':facts,'node_sha256':sha.hexdigest(),'invocation_id':rows['InvocationID'],'effective_config_sha256':prepared.config.after_sha256}),'process':facts,'node_sha256':sha.hexdigest(),'invocation_id':rows['InvocationID']}
+        except (OSError,AttributeError):raise PauseError('HOST_CANDIDATE_OBSERVATION_UNKNOWN') from None
+        finally:
+            if pidfd is not None:os.close(pidfd)
     def probe_process(self,pid):
         from .process_observation import probe_kernel_process
         return probe_kernel_process(pid)
