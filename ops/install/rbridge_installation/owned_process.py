@@ -123,11 +123,23 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
         if hashlib.sha256(_protected_bytes(pin.path,268435456)).hexdigest()!=pin.sha256:
             _fail('OWNED_HELPER_EXECUTABLE_CHANGED')
     qualify()
-    child = subprocess.Popen([pin.path,*args],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,cwd='/',start_new_session=True,
-        env=env if env is not None else {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root','LC_ALL':'C'})
+    from .helper_journal import begin_root_helper
+    selector=selectors.DefaultSelector();journal=None
+    try:
+        journal=begin_root_helper(pin,args,input_bytes,child_specs)
+        # A full guard may itself use fixed observations. It ran before our
+        # durable INTENT; do not nest a launch while our identity is uncertain.
+        if hashlib.sha256(_protected_bytes(pin.path,268435456)).hexdigest()!=pin.sha256:
+            _fail('OWNED_HELPER_EXECUTABLE_CHANGED')
+        child = subprocess.Popen([pin.path,*args],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,cwd='/',start_new_session=True,
+            env=env if env is not None else {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root','LC_ALL':'C'})
+    except BaseException:
+        selector.close()
+        if journal:journal.close()
+        raise
     _pending_sessions[child.pid]={'argv':[pin.path,*args],'executable_sha256':pin.sha256}
-    selector=selectors.DefaultSelector(); handles={}; observed={}; out=bytearray(); errors=bytearray()
+    handles={}; observed={}; out=bytearray(); errors=bytearray()
     deadline=time.monotonic()+timeout_ms/1000; parent=None; released=ready is None; pending=memoryview(input_bytes)
     proof={'schema':'RBRIDGE_OWNED_HELPER_SESSION_V1','scope':'ROOT_FIXED_PROCESS_OBSERVATION',
         'status':'UNKNOWN','pid':child.pid,'argv':[pin.path,*args],
@@ -157,12 +169,21 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
                         raise
                     handles[pid]=handle; observed[pid]=row
         return rows
+    def journal_observation():
+        if census():return
+        if census() or not handles:_fail('OWNED_HELPER_FAMILY_UNSETTLED')
+        settled=selectors.DefaultSelector()
+        try:
+            for handle in handles.values():settled.register(handle,selectors.EVENT_READ)
+            if len(settled.select(0))!=len(handles):_fail('OWNED_HELPER_FAMILY_UNSETTLED')
+        finally:settled.close()
     try:
         # Retain a pidfd even for a very short command which is already a zombie.
         handles[child.pid]=os.pidfd_open(child.pid)
         token=_stat(child.pid)
         if token['session']!=child.pid or token['ppid']!=os.getpid(): _fail('OWNED_HELPER_PARENT_UNQUALIFIED')
         proof['start_ticks']=token['start_ticks']
+        journal._running({k:token[k] for k in ('pid','ppid','session','start_ticks')},journal_observation)
         if started is not None:
             # The immutable launcher receives our actual child only after its
             # executable, ancestry and complete current family were examined.
@@ -204,14 +225,14 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
         return bytes(out),bytes(errors),proof
     except (OSError,subprocess.TimeoutExpired): _fail('OWNED_HELPER_COMMAND_UNCERTAIN')
     finally:
-        selector.close()
-        # Signal only processes whose exact identities this launch retained.
-        for handle in reversed(list(handles.values())):
-            try: signal.pidfd_send_signal(handle,signal.SIGKILL)
-            except ProcessLookupError: pass
-        try: child.wait(timeout=5)
-        except subprocess.TimeoutExpired: _fail('OWNED_HELPER_FAMILY_UNSETTLED')
-        finally:
+        try:
+            selector.close()
+            # Signal only processes whose exact identities this launch retained.
+            for handle in reversed(list(handles.values())):
+                try: signal.pidfd_send_signal(handle,signal.SIGKILL)
+                except ProcessLookupError: pass
+            try: child.wait(timeout=5)
+            except subprocess.TimeoutExpired: _fail('OWNED_HELPER_FAMILY_UNSETTLED')
             settled=selectors.DefaultSelector();settlement_deadline=time.monotonic()+5
             try:
                 for handle in handles.values():settled.register(handle,selectors.EVENT_READ)
@@ -221,10 +242,19 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
                     for key,_ in settled.select(min(remaining,0.1)):settled.unregister(key.fileobj)
             finally:
                 settled.close()
-                for handle in handles.values():os.close(handle)
-                for stream in (child.stdin,child.stdout,child.stderr):stream.close()
-        # No successful result can survive a live/unclassified descendant.
-        settled_deadline=time.monotonic()+5
-        if _session_rows(child.pid,settled_deadline) or _session_rows(child.pid,settled_deadline):
-            _fail('OWNED_HELPER_FAMILY_UNSETTLED')
-        _pending_sessions.pop(child.pid,None)
+            # No successful result can survive a live/unclassified descendant.
+            settled_deadline=time.monotonic()+5
+            if _session_rows(child.pid,settled_deadline) or _session_rows(child.pid,settled_deadline):
+                _fail('OWNED_HELPER_FAMILY_UNSETTLED')
+            members={pid:{'pid':pid,'start_ticks':row['start_ticks']} for pid,row in observed.items()}
+            members.setdefault(child.pid,{'pid':child.pid,'start_ticks':proof.get('start_ticks','0')})
+            # Cleanup after an unclassified observation cannot close its
+            # durable history. A failed helper exit may be settled, but only
+            # when the complete original launch/IO/identity proof completed.
+            if proof['status']=='PASS':
+                journal._settled([members[pid] for pid in sorted(members)],handles)
+                _pending_sessions.pop(child.pid,None)
+        finally:
+            for handle in handles.values():os.close(handle)
+            for stream in (child.stdin,child.stdout,child.stderr):stream.close()
+            journal.close()

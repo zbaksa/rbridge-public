@@ -104,6 +104,8 @@ At or after `START_ATTEMPTED`, do not return to the old pointer, restore an old 
 
 A lock is held by the current foreground process only; it does not survive process death. A new process must freshly acquire exclusion and inspect the complete private maintenance registry. An unfinished predecessor, active peer lock, corrupt ledger, partial backup or unknown helper object blocks a new transaction. Resume uses the exact existing transaction ledger and full private evidence; a missing ledger or lock is never initialized as recovery.
 
+Each fixed Root helper also records a create-only private `helper-<32hex>` journal before launch, including helpers used during qualification before any transaction exists. Its intent, observed process identity and settlement records form a digest chain. A missing record, active journal lock or interrupted write blocks the next cold launch and is preserved for investigation. Complete records still require fresh kernel absence. Only the same foreground producer can nest fixed observations after re-examining its retained process family; this exception does not survive its death. These journals authorize no service action and are never automatically repaired or removed.
+
 | Transaction exit | Meaning |
 | --- | --- |
 | `0` / `ACCEPTED` | Fresh final invocation and complete installed acceptance were recorded |

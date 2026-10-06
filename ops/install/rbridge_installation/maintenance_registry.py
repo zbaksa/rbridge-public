@@ -96,7 +96,7 @@ def assert_no_unfinished_transactions(parent_fd,current=None,production=True):
                 finally:os.close(child)
             else:private(row,hardlinks=True)
         if names!=sorted(os.listdir(fd)) or _identity(before)!=_identity(os.fstat(fd)):_fail('MAINTENANCE_REGISTRY_CHANGED')
-    transactions={};proofs=[]
+    transactions={};proofs=[];helpers=[]
     try:
         if production:guard=ProtectedParent(FilesystemAuthority(0,1027,Path('/var/lib/rbridge-maintenance'),'RUNTIME'),parent_fd)
         before=os.fstat(parent_fd);private(before,True);names=sorted(os.listdir(parent_fd))
@@ -123,6 +123,12 @@ def assert_no_unfinished_transactions(parent_fd,current=None,production=True):
                 finally:
                     if lock is not None:os.close(lock)
                     os.close(fd)
+            elif re.fullmatch('helper-[0-9a-f]{32}',name):
+                from .helper_journal import inspect_helper_journal
+                helper=inspect_helper_journal(parent_fd,name,production)
+                total+=helper['record_bytes']
+                if total>536870912:_fail('MAINTENANCE_REGISTRY_BYTE_LIMIT')
+                helpers.append(helper);proofs.append(helper)
             elif re.fullmatch('evidence-[0-9a-f]{32}',name):
                 # Correlation is checked after every ledger has been captured.
                 proofs.append({'name':name,'rows':evidence(name)})
@@ -155,6 +161,8 @@ def assert_no_unfinished_transactions(parent_fd,current=None,production=True):
             if proof['name'].startswith(('evidence-','backup-')) and proof['name'].split('-',1)[1] not in transactions:
                 _fail('MAINTENANCE_REGISTRY_ORPHANED_EVIDENCE')
         if production:
+            from .helper_journal import assert_helper_kernel_absence
+            assert_helper_kernel_absence(helpers)
             for transaction,record in transactions.items():
                 if current is not None and current.transaction_id==transaction:continue
                 rows=next((p['rows'] for p in proofs if p['name']=='evidence-'+transaction),None)
