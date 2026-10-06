@@ -53,6 +53,14 @@ class BootstrapTests(unittest.TestCase):
             self.assertRaises(ValueError,self.module.verify_bootstrap_artifact,self.payload,self.manifest,
                 {**self.capture,'body':body},self.binding)
 
+    def test_manifest_numeric_type_aliases_cannot_pass_exact_reviewed_pin_comparison(self):
+        for payload,numeric in ((self.payload,float(len(self.payload))),(b'x',True)):
+            manifest={**self.manifest,'payload_bytes':len(payload),'payload_sha256':hashlib.sha256(payload).hexdigest()}
+            body=json.dumps({'schema':'RBRIDGE_ROOT_INSTALL_BOOTSTRAP_ARTIFACT_V1',
+                'manifest':{**manifest,'payload_bytes':numeric},'payload_base64':base64.b64encode(payload).decode()})
+            self.assertRaises(ValueError,self.module.verify_bootstrap_artifact,payload,manifest,
+                {**self.capture,'body':body},self.binding)
+
     def test_wrapper_preserves_child_exit_and_interactive_parent(self):
         for code in (0,2,3,4,5):
             script=self.module.source_exit_wrapper(['/bin/sh','-c','exit '+str(code)])

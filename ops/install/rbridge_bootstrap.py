@@ -69,7 +69,8 @@ def verify_bootstrap_artifact(payload,manifest,authenticated_capture,binding):
             or type(capture['body']) is not str):_fail('BOOTSTRAP_CAPTURE_IDENTITY_INVALID')
     body=_json(capture['body'].encode('utf-8',errors='strict'))
     if (type(body) is not dict or set(body)!={'schema','manifest','payload_base64'}
-            or body['schema']!='RBRIDGE_ROOT_INSTALL_BOOTSTRAP_ARTIFACT_V1' or body['manifest']!=manifest
+            or body['schema']!='RBRIDGE_ROOT_INSTALL_BOOTSTRAP_ARTIFACT_V1'
+            or json.dumps(body['manifest'],sort_keys=True,separators=(',',':'))!=json.dumps(manifest,sort_keys=True,separators=(',',':'))
             or type(body['payload_base64']) is not str):_fail('BOOTSTRAP_ARTIFACT_INVALID')
     try:decoded=base64.b64decode(body['payload_base64'],validate=True)
     except (ValueError,TypeError):_fail('BOOTSTRAP_ARTIFACT_INVALID')

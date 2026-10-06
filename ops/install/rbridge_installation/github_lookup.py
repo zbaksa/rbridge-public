@@ -1,5 +1,6 @@
 """Fresh bounded issue reads. Query structure and executable are fixed here."""
 from dataclasses import dataclass
+import base64
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -220,9 +221,11 @@ def lookup_issues(profile, numbers, backend: GitHubReadBackend):
 class QualifiedGitHubReadBackend:
     scope = 'QUALIFIED_GITHUB_READ'
 
-    def __init__(self, profile):
+    def __init__(self, profile, retain_queries=False):
         if os.getuid() != 0 or os.geteuid() != 0:
             raise LookupError('LOOKUP_ROOT_REQUIRED')
+        if type(retain_queries) is not bool:raise LookupError('LOOKUP_EVIDENCE_MODE_INVALID')
+        self.retain_queries=retain_queries;self.query_evidence=[];self.query_evidence_bytes=0
         self.profile = parse_profile(json.loads(encode_report(profile)))
         self.tool = next(t for t in self.profile.tools if t.role == 'gh')
         self._qualify()
@@ -241,7 +244,7 @@ class QualifiedGitHubReadBackend:
     def _run(self, args, input_bytes, timeout_ms, limit):
         from .owned_process import run_owned_process
         self._qualify()
-        raw,_errors,proof=run_owned_process(self.tool,args,timeout_ms,limit,
+        raw,errors,proof=run_owned_process(self.tool,args,timeout_ms,limit,
             input_bytes=input_bytes,
             env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root',
                  'LC_ALL':'C','GH_PROMPT_DISABLED':'1'},guard=self._qualify)
@@ -249,6 +252,14 @@ class QualifiedGitHubReadBackend:
         self.helper_sessions.append(proof)
         if proof['status']!='PASS' or proof['exit_code']!=0:
             raise LookupError('LOOKUP_COMMAND_FAILED')
+        if self.retain_queries:
+            evidence={'argv':[self.tool.path,*args],
+                'input_base64':base64.b64encode(input_bytes).decode(),
+                'output_base64':base64.b64encode(raw).decode(),'stderr_base64':base64.b64encode(errors).decode(),
+                'session':proof}
+            size=len(encode_report(evidence))
+            if self.query_evidence_bytes+size>self.profile.budget.carrier_bytes:raise LookupError('LOOKUP_EVIDENCE_BYTE_LIMIT')
+            self.query_evidence.append(evidence);self.query_evidence_bytes+=size
         return raw
 
     def read_graphql(self, query, variables, timeout_ms, response_limit):
