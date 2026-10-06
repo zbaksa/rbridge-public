@@ -5,6 +5,7 @@ import {createInstalledReaderRunner,createReferenceReaderRunner,qualifyRBridgeRe
 import {createInstalledMcpReadClient,qualifyInstalledReaderRuntime,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from '../installation/rbridge-installation-client.js';
 import {parseRBridgeInstallProfile,type ArtifactManifest} from '../installation/types.js';
 import type {CarrierCapture,ReaderExpectation} from '../installation/rbridge-installation-reader.js';
+import {acceptRBridgeInstallation,type InstallAcceptanceCase,type InstallAcceptanceReport} from './rbridgeInstallationAccept.js';
 function fail():never{throw new Error('READER_CLI_INPUT_INVALID');}
 function object(v:unknown){if(!v||typeof v!=='object'||Array.isArray(v))fail();return v as Record<string,unknown>;}
 function fields(v:Record<string,unknown>,required:readonly string[],optional:readonly string[]=[]){if(required.some(k=>!Object.hasOwn(v,k))||Object.keys(v).some(k=>![...required,...optional].includes(k)))fail();}
@@ -19,12 +20,36 @@ export async function runRBridgeReadResult(input:unknown){
     const row=object(input);if(row.schema!=='RBRIDGE_READER_INPUT_V1')fail();
     if(row.operation==='GITHUB_PARSE'){fields(row,['schema','operation','capture','expected']);return readRBridgeGitHubCarrier(row.capture as CarrierCapture,row.expected as ReaderExpectation);}
     if(row.operation==='MCP_TRANSCRIPT'){fields(row,['schema','operation','transcript','expected']);return await readRBridgeMcpOutput(createTranscriptMcpClient(row.transcript),row.expected as McpReaderScope);}
-    if(!['QUALIFY_REFERENCE','QUALIFY_INSTALLED','MCP_READ_INSTALLED'].includes(String(row.operation)))fail();
+    if(!['QUALIFY_REFERENCE','QUALIFY_INSTALLED','MCP_READ_INSTALLED','ACCEPT_READ_INSTALLED'].includes(String(row.operation)))fail();
     let authority:InstalledReaderAuthority|undefined;
     if(row.operation!=='QUALIFY_REFERENCE'){const profile=parseRBridgeInstallProfile(row.profile);authority=await qualifyInstalledReaderRuntime(profile,row.toolkit_manifest as ArtifactManifest);}
     if(row.operation==='MCP_READ_INSTALLED'){
       fields(row,['schema','operation','profile','toolkit_manifest','runtime_manifest','era','expected'],['isolated_root']);if(!authority||!['legacy','modern'].includes(String(row.era))||(row.isolated_root!==undefined&&typeof row.isolated_root!=='string'))fail();
       const client=await createInstalledMcpReadClient(authority,row.runtime_manifest as ArtifactManifest,row.era as 'legacy'|'modern',row.isolated_root);closing.push(()=>client.close());return await readRBridgeMcpOutput(client,row.expected as McpReaderScope);
+    }
+    if(row.operation==='ACCEPT_READ_INSTALLED'){
+      fields(row,['schema','operation','profile','toolkit_manifest','runtime_manifest','stage','captured_at','canary_base64','cases'],['original']);
+      if(!authority||!['ORIGINAL','REPLAY'].includes(String(row.stage))||typeof row.captured_at!=='string'||typeof row.canary_base64!=='string'||!Array.isArray(row.cases)||row.cases.length!==2)fail();
+      const runner=await createInstalledReaderRunner(authority),cases:InstallAcceptanceCase[]=[];
+      for(const raw of row.cases){
+        const c=object(raw);fields(c,['kind','capture','expected','era']);if(!['HEALTH','FILE'].includes(String(c.kind))||!['legacy','modern'].includes(String(c.era)))fail();
+        const client=await createInstalledMcpReadClient(authority,row.runtime_manifest as ArtifactManifest,c.era as 'legacy'|'modern');closing.push(()=>client.close());
+        cases.push({kind:c.kind as 'HEALTH'|'FILE',capture:c.capture as CarrierCapture,expected:c.expected as ReaderExpectation,client});
+      }
+      const report=await acceptRBridgeInstallation({profile:authority.profile,stage:row.stage as 'ORIGINAL'|'REPLAY',captured_at:row.captured_at,canary_base64:row.canary_base64,cases,...(row.original!==undefined?{original:row.original as InstallAcceptanceReport}:{})});
+      const invocations=[];
+      if(report.status==='PASS')for(let index=0;index<cases.length;index++){
+        const c=cases[index]!,operation=report.operations[index]!;
+        for(const transport of ['GITHUB','MCP'] as const){
+          const registrations=authority.profile.readers.filter(r=>r.transport===transport);if(!registrations.length)fail();
+          for(const registration of registrations){
+            const metadata={fixture_id:'installation-'+row.stage+'-'+operation.operation_id,case_id:transport==='GITHUB'?'C02' as const:'C09' as const,provenance:'SOURCE_PRODUCER' as const,expected_verdict_sha256:'0'.repeat(64)};
+            const fixture:ReaderFixture=transport==='GITHUB'?{...metadata,transport,capture:c.capture,expected:{...c.expected,receipt_sha256:operation.receipt_sha256,output_sha256:operation.output_sha256,selected_comment_id:operation.comment_id}}:{...metadata,transport,client:c.client,expected:{...c.expected.scope!,runtime_uid:authority.profile.binding.uid,intent_sha256:c.expected.intent_sha256!,policy_sha256:authority.profile.binding.policy_sha256,receipt_sha256:operation.receipt_sha256,output_sha256:operation.output_sha256,deadline_ms:Math.min(authority.profile.budget.lookup_ms,180000)}};
+            invocations.push({reader_id:registration.reader_id,operation_id:operation.operation_id,transport,invocation:await runner.invoke(registration,fixture)});
+          }
+        }
+      }
+      return {schema:'RBRIDGE_INSTALL_NAMED_READERS_V1',report,invocations};
     }
     fields(row,['schema','operation','registry','fixtures'],row.operation==='QUALIFY_INSTALLED'?['profile','toolkit_manifest','runtime_manifest']:[]);
     const cases=object(row.fixtures).cases;if(!Array.isArray(cases)||cases.length>512)fail();const fixtures:ReaderFixtureSet={cases:[]};

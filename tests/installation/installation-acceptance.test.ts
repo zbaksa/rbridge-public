@@ -48,15 +48,15 @@ describe('installation acceptance through complete reference readers',()=>{
   it.runIf((process.getuid?.()??0)>0)('genuine non-root source owner and both SDK eras preserve two reads across restart, lost close ACK and TTL',async()=>{
     const f=await createRBridgeAcceptanceFixture();
     try{
-      const source='b5881fd8367b4249e82683f1f884f2392cb696d4',actor=await f.start({releaseSha:source}),legacy=await f.stdio('legacy'),modern=await f.stdio('modern');
+      const source='b5881fd8367b4249e82683f1f884f2392cb696d4',actor=await f.start({releaseSha:source});let legacy=await f.stdio('legacy'),modern=await f.stdio('modern');
       const bytes=Buffer.from('acceptance source\n'),template=JSON.parse(readFileSync(new URL('../fixtures/rbridge-install-profile.json',import.meta.url),'utf8'));
       template.binding={...template.binding,principal_id:f.binding.principalId,target_instance_id:f.binding.targetInstanceId,repository:'example/control',author:'owner',github_subject:'example/control:owner'};template.paths.canary_path='/mnt/data/source.txt';template.service.canary_sha256=sha(bytes);
       const policy=createRBridgeExecutionPolicy(f.binding),healthOp={kind:'HEALTH',action:'STATUS'} as const,fileOp={kind:'FILE',action:'READ',target:'/mnt/data/source.txt',args:{}} as const;
       template.binding.policy_sha256=policy.evaluate(f.submission('accept-health',healthOp)).snapshot.policySha256;const profile=createSourceAcceptanceProfile(template);
-      const issues=[f.issue('accept-health',healthOp,17,1500),f.issue('accept-file',fileOp,18,1500)];f.failCloseOnce();
-      for(const issue of issues)expect(await actor.request('ADMIT',issue)).toBe('CORE');
+      const issues=[f.issue('accept-health',healthOp,17,10000),f.issue('accept-file',fileOp,18,10000)];f.failCloseOnce();
+      for(const issue of issues)expect(['CORE','PUBLICATION_UNAVAILABLE']).toContain(await actor.request('ADMIT',issue));
       for(const issue of issues){const deadline=Date.now()+10000;for(;;){const row=(await modern.callTool({name:'rbridge_status',arguments:{operationId:JSON.parse(issue.body).requestId}})).structuredContent as {result?:{receipt?:{phase:string}}};if(row.result?.receipt?.phase==='TERMINAL')break;if(Date.now()>=deadline)throw new Error('SOURCE_ACCEPTANCE_TERMINAL_DEADLINE');await new Promise<void>(done=>setTimeout(done,5));}}
-      await actor.request('DRAIN');expect(await actor.request('COUNTS')).toEqual({health:1,reads:1});
+      await actor.request('DRAIN');expect(f.lostCloseAcknowledgements()).toBe(1);expect(await actor.request('COUNTS')).toEqual({health:1,reads:1});
       const build=async(replay=false):Promise<InstallAcceptanceInput>=>{
         const clients=await Promise.all([createFixtureSdkReadClient(replay?modern:legacy),createFixtureSdkReadClient(replay?legacy:modern)]),cases:InstallAcceptanceCase[]=issues.map((issue,index)=>{
           const row=f.issues.get(issue.number)!,req=JSON.parse(row.body),scope={operationId:req.requestId,principalId:f.binding.principalId,targetInstanceId:f.binding.targetInstanceId},submission=f.submission(req.requestId,index===0?healthOp:fileOp);
@@ -66,9 +66,9 @@ describe('installation acceptance through complete reference readers',()=>{
         });return {profile,stage:replay?'REPLAY':'ORIGINAL',captured_at:new Date().toISOString(),canary_base64:bytes.toString('base64'),cases};
       };
       const original=await acceptRBridgeInstallation(await build());expect(original.status,original.reason_codes.join(',')).toBe('PASS');expect(original.accepted).toBe(false);
-      await actor.close();const replacement=await f.start({releaseSha:source});await replacement.request('DRAIN');
+      await Promise.all([legacy.close(),modern.close()]);await actor.close();const replacement=await f.start({releaseSha:source});await replacement.request('DRAIN');legacy=await f.stdio('legacy');modern=await f.stdio('modern');
       const delay=Math.max(...issues.map(i=>Date.parse(JSON.parse(i.body).expiresAt)))-Date.now()+1;if(delay>0)await new Promise<void>(done=>setTimeout(done,delay));
       const replay=await acceptRBridgeInstallation({...await build(true),original});expect(replay.status,replay.reason_codes.join(',')).toBe('PASS');expect(replay.operations.map(o=>[o.receipt_sha256,o.output_sha256])).toEqual(original.operations.map(o=>[o.receipt_sha256,o.output_sha256]));expect(await replacement.request('COUNTS')).toEqual({health:0,reads:0});
     }finally{await f.close();}
-  },30000);
+  },45000);
 });

@@ -65,6 +65,19 @@ class TransactionTests(unittest.TestCase):
     def test_accepted_fixture_has_every_marker_and_guarded_start(self):
         result=self.apply(self.prepared,self.auth,self.host)
         self.assertEqual(result.status,'ACCEPTED');self.assertEqual(result.exit_code,0);self.assertEqual(self.ledger.read().entries[-1].marker,'ACCEPTED');self.assertTrue(self.host.start_intent_preceded_new_start);self.assertFalse(self.host.old_start_called)
+    def test_controlled_acceptance_restart_commits_fresh_final_invocation(self):
+        from rbridge_installation.models import report_sha256
+        first=self.host.observe_candidate(self.prepared)
+        final={**first,'invocation_sha256':'d'*64}
+        def acceptance(prepared):
+            self.host.observe_candidate=lambda prepared:dict(final)
+            return {'schema':'RBRIDGE_INSTALL_ACCEPTANCE_V1','scope':'FIXTURE_AUTHORITY_ONLY','status':'PASS','accepted':False,'final_invocation':dict(final)}
+        self.host.accept_candidate=acceptance
+        result=self.apply(self.prepared,self.auth,self.host)
+        self.assertEqual(result.status,'ACCEPTED');self.assertFalse(self.host.old_start_called)
+        evidence=self.ledger.read().entries[-1].evidence
+        self.assertEqual(evidence['invocation_sha256'],report_sha256(final))
+        self.assertNotEqual(evidence['invocation_sha256'],report_sha256(first))
     def test_plan_approval_or_digest_drift_never_authorizes_switch(self):
         for auth in (replace(self.auth,purpose='NATIVE_IMPLEMENTATION_PLAN'),replace(self.auth,profile_sha256='0'*64),replace(self.auth,owner_present=False),replace(self.auth,expires_at='2020-01-01T00:00:00.000Z')):
             result=self.apply(self.prepared,auth,self.host);self.assertEqual(result.exit_code,2);self.assertEqual(self.ledger.read().entries,());self.assertFalse(self.host.running)

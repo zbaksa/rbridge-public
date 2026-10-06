@@ -14,7 +14,7 @@ import type {GitHubBridgeIssue,RBridgeGitHubComment} from '../../src/adapters/gi
 import type {RBridgeDeploymentBinding} from '../../src/domain/rbridgeCoreProtocol.js';
 import type {RBridgeOperationSubmissionV1,RBridgeTransportContextV1} from '../../src/domain/rbridgeExecutionContract.js';
 export interface RBridgeAcceptanceActor {child:ChildProcess;request(command:string,value?:unknown):Promise<unknown>;event(name:string,count?:number):Promise<void>;kill():Promise<void>;close():Promise<void>;}
-export interface RBridgeAcceptanceFixture {home:string;root:string;sourceRoot:string;binding:RBridgeDeploymentBinding;context:RBridgeTransportContextV1;issues:Map<number,GitHubBridgeIssue&{state:'open'|'closed'}>;comments:Map<number,RBridgeGitHubComment[]>;submission(id?:string,operation?:RBridgeOperationSubmissionV1['operation']):RBridgeOperationSubmissionV1;issue(id?:string,operation?:RBridgeOperationSubmissionV1['operation'],number?:number,ttl_ms?:number):GitHubBridgeIssue;start(options?:{holdRead?:boolean;holdHealth?:boolean;holdClaim?:boolean;fullResult?:boolean;target?:string;releaseSha?:string}):Promise<RBridgeAcceptanceActor>;stdio(era:'legacy'|'modern'):Promise<Client>;failCloseOnce():void;close():Promise<void>;}
+export interface RBridgeAcceptanceFixture {home:string;root:string;sourceRoot:string;binding:RBridgeDeploymentBinding;context:RBridgeTransportContextV1;issues:Map<number,GitHubBridgeIssue&{state:'open'|'closed'}>;comments:Map<number,RBridgeGitHubComment[]>;submission(id?:string,operation?:RBridgeOperationSubmissionV1['operation']):RBridgeOperationSubmissionV1;issue(id?:string,operation?:RBridgeOperationSubmissionV1['operation'],number?:number,ttl_ms?:number):GitHubBridgeIssue;start(options?:{holdRead?:boolean;holdHealth?:boolean;holdClaim?:boolean;fullResult?:boolean;target?:string;releaseSha?:string}):Promise<RBridgeAcceptanceActor>;stdio(era:'legacy'|'modern'):Promise<Client>;failCloseOnce():void;lostCloseAcknowledgements():number;close():Promise<void>;}
 type Message={type:string;id?:number;command?:string;value?:unknown;method?:string;args?:unknown[];name?:string;error?:string};
 function exited(child:ChildProcess){return child.exitCode!==null||child.signalCode!==null?Promise.resolve():new Promise<void>(done=>child.once('exit',()=>done()));}
 export async function createRBridgeAcceptanceFixture():Promise<RBridgeAcceptanceFixture>{
@@ -23,7 +23,7 @@ export async function createRBridgeAcceptanceFixture():Promise<RBridgeAcceptance
  for(const path of [join(home,'.local'),join(home,'.local','state'),parent,sourceRoot])await files.ensureDirectory(path,uid);
  await fs.writeFile(join(sourceRoot,'source.txt'),'acceptance source\n',{mode:0o600});
  const binding={runtimeUid:uid,principalId:'operator-test',targetInstanceId:'target-test'},context:RBridgeTransportContextV1={schema:'RBRIDGE_TRANSPORT_CONTEXT_V1',transport:'MCP',authenticatedSubject:`uid:${uid}`,principalId:binding.principalId};
- const issues=new Map<number,GitHubBridgeIssue&{state:'open'|'closed'}>(),comments=new Map<number,RBridgeGitHubComment[]>(),actors:RBridgeAcceptanceActor[]=[],clients:Client[]=[];let commentId=1,closeFault=false;
+ const issues=new Map<number,GitHubBridgeIssue&{state:'open'|'closed'}>(),comments=new Map<number,RBridgeGitHubComment[]>(),actors:RBridgeAcceptanceActor[]=[],clients:Client[]=[];let commentId=1,closeFault=false,lostCloseAcks=0;
  const submission=(id='shared-acceptance',operation:RBridgeOperationSubmissionV1['operation']={kind:'FILE',action:'READ',target:'/mnt/data/source.txt',args:{}}):RBridgeOperationSubmissionV1=>({schema:'RBRIDGE_OPERATION_SUBMISSION_V1',operationId:id,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId,operation});
  function issue(id='shared-acceptance',operation=submission(id).operation,number=17,ttl_ms=600000){const now=new Date(),row={number,title:'[COCWIN BRIDGE REQUEST] '+id,authorLogin:'owner',url:'https://github.com/example/control/issues/'+number,body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V2',requestId:id,createdAt:now.toISOString(),expiresAt:new Date(now.getTime()+ttl_ms).toISOString(),operation}),state:'open' as const};issues.set(row.number,row);comments.set(row.number,[]);return row;}
  async function external(method:string,args:unknown[]):Promise<unknown>{
@@ -31,7 +31,7 @@ export async function createRBridgeAcceptanceFixture():Promise<RBridgeAcceptance
   if(method==='readIssue'){const row=issues.get(number);if(!row)throw new Error('FIXTURE_ISSUE_MISSING');return structuredClone(row);}
   if(method==='readCommentPage'){const page=args[1] as number;return structuredClone((comments.get(number)??[]).slice((page-1)*20,page*20));}
   if(method==='postComment'){const id=commentId++,row={id,body:args[1] as string,authorLogin:'owner',url:`https://github.com/example/control/issues/${number}#issuecomment-${id}`};comments.set(number,[...(comments.get(number)??[]),row]);return row;}
-  if(method==='closeIssue'){issues.get(number)!.state='closed';if(closeFault){closeFault=false;throw new Error('FIXTURE_CLOSE_ACK_LOST');}return null;}
+  if(method==='closeIssue'){issues.get(number)!.state='closed';if(closeFault){closeFault=false;lostCloseAcks++;throw new Error('FIXTURE_CLOSE_ACK_LOST');}return null;}
   throw new Error('FIXTURE_METHOD_INVALID');
  }
  async function start(options:Parameters<RBridgeAcceptanceFixture['start']>[0]={}):Promise<RBridgeAcceptanceActor>{
@@ -57,7 +57,7 @@ export async function createRBridgeAcceptanceFixture():Promise<RBridgeAcceptance
   const transport=new StdioClientTransport({command:process.execPath,args:['--import','tsx',resolve('tests/fixtures/rbridge-stdio-owner.ts'),'--client',root],env:{PATH:process.env.PATH??''},stderr:'pipe'}),client=new Client({name:'acceptance-untrusted-name',version:'test'},{versionNegotiation:{mode:era==='legacy'?'legacy':{pin:'2026-07-28'}}});
   clients.push(client);await client.connect(transport);return client;
  }
- return {home,root,sourceRoot,binding,context,issues,comments,submission,issue,start,stdio,failCloseOnce(){closeFault=true;},async close(){for(const client of clients)await client.close();for(const actor of actors)try{await actor.close();}catch{await actor.kill();}await fs.rm(home,{recursive:true,force:true});}};
+ return {home,root,sourceRoot,binding,context,issues,comments,submission,issue,start,stdio,failCloseOnce(){closeFault=true;},lostCloseAcknowledgements(){return lostCloseAcks;},async close(){for(const client of clients)await client.close();for(const actor of actors)try{await actor.close();}catch{await actor.kill();}await fs.rm(home,{recursive:true,force:true});}};
 }
 async function runOwner(){
  const [home,sourceRoot,rawOptions]=process.argv.slice(3);if(!home||!sourceRoot)throw new Error('FIXTURE_ARGUMENT_INVALID');

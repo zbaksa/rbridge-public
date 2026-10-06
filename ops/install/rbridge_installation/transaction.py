@@ -256,13 +256,19 @@ def apply_installation(prepared,authorization,backend):
         else:
             from .acceptance import accept_installation,make_acceptance_context
             acceptance=accept_installation(make_acceptance_context(prepared,invocation),backend)
-        acceptance_sha=prepared.evidence.write('acceptance',acceptance)
+        acceptance_sha=prepared.evidence.write('acceptance',dict(acceptance))
         if acceptance.get('schema')!='RBRIDGE_INSTALL_ACCEPTANCE_V1' or acceptance.get('status')!='PASS':raise TransactionError('INSTALLED_ACCEPTANCE_NOT_PASS')
         prepared.lease.check_exclusion();_validate(prepared,backend)
         # Fresh actual invocation observation, not a stale acknowledgement.
         final=backend.observe_candidate(prepared)
-        if report_sha256(final)!=report_sha256(invocation):raise TransactionError('CANDIDATE_INVOCATION_CHANGED')
-        ledger.append('ACCEPTED',{'invocation_sha256':invocation_sha,'readers_sha256':acceptance_sha,'runtime_manifest_sha256':prepared.runtime_manifest.sha256})
+        if prepared.scope=='FIXTURE_AUTHORITY_ONLY':
+            expected_final=acceptance.get('final_invocation',invocation)
+        else:
+            from .acceptance import validated_acceptance_invocation
+            expected_final=validated_acceptance_invocation(prepared,acceptance)
+        if report_sha256(final)!=report_sha256(expected_final):raise TransactionError('CANDIDATE_INVOCATION_CHANGED')
+        final_invocation_sha=prepared.evidence.write('accepted-invocation',final)
+        ledger.append('ACCEPTED',{'invocation_sha256':final_invocation_sha,'readers_sha256':acceptance_sha,'runtime_manifest_sha256':prepared.runtime_manifest.sha256})
         prepared.lease.close();return _result(prepared,'ACCEPTED',0,'ACCEPTED')
     except (InstallationError,OSError,ValueError,ImportError,AttributeError) as error:
         reason=error.reason if isinstance(error,InstallationError) else 'TRANSACTION_STEP_UNCERTAIN'
