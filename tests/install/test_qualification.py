@@ -28,6 +28,14 @@ class QualificationTests(unittest.TestCase):
                       {'status':'PASS','profile_sha256':result.profile_sha256}):
             self.assertRaises(ValueError,self.verify,self.profile,value)
 
+    def test_unqualified_bundle_cannot_create_or_reopen_a_root_ledger(self):
+        from rbridge_installation.qualification import open_qualified_transaction_ledger,open_qualified_resume_ledger
+        values=(self.build(self.profile,self.Proofs()),{'status':'PASS','scope':'QUALIFIED_ROOT_BUNDLE'})
+        with patch('rbridge_installation.ledger.os.open',side_effect=AssertionError('Unqualified ledger filesystem access')):
+            for value in values:
+                self.assertRaises(ValueError,open_qualified_transaction_ledger,value,object())
+                self.assertRaises(ValueError,open_qualified_resume_ledger,value,'a'*32)
+
     def test_source_ci_is_pinned_to_full_log_commit_tree_and_required_steps(self):
         log=b'full fixture CI log\n'
         source={'schema':'RBRIDGE_SOURCE_QUALIFICATION_V1','scope':'SOURCE_QUALIFICATION_ONLY',

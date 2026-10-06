@@ -74,6 +74,24 @@ os.kill(os.getpid(),9)
     def test_terminal_ledger_cannot_reenter_qualification(self):
         self.ledger.append('QUALIFIED',EVIDENCE);self.ledger.append('ROLLBACK_BLOCKED',EVIDENCE)
         with self.assertRaises(self.error):self.ledger.append('QUALIFIED',EVIDENCE)
+
+    def test_existing_only_resume_never_creates_a_missing_transaction_or_lock(self):
+        missing='b'*32
+        self.assertRaises(self.error,self.open,self.fd,missing,mode='existing_only')
+        self.assertFalse((self.parent/missing).exists())
+        self.ledger.append('QUALIFIED',EVIDENCE);self.ledger.close()
+        raw=(self.parent/self.tx/'ledger.json').read_bytes()
+        lock=self.parent/self.tx/'ledger.lock';lock.unlink()
+        self.assertRaises(self.error,self.open,self.fd,self.tx,mode='existing_only')
+        self.assertFalse(lock.exists());self.assertEqual((self.parent/self.tx/'ledger.json').read_bytes(),raw)
+
+    def test_create_only_preserves_a_collision_and_existing_only_reads_the_same_chain(self):
+        self.ledger.append('QUALIFIED',EVIDENCE);self.ledger.close()
+        raw=(self.parent/self.tx/'ledger.json').read_bytes()
+        self.assertRaises(self.error,self.open,self.fd,self.tx,mode='create_only')
+        self.assertEqual((self.parent/self.tx/'ledger.json').read_bytes(),raw)
+        self.ledger=self.open(self.fd,self.tx,mode='existing_only')
+        self.assertEqual(self.ledger.read().entries[-1].marker,'QUALIFIED')
     def test_forged_snapshot_cannot_restore(self):
         self.fill(MARKERS[:-1]);self.assertTrue(self.decide(self.ledger.read(),self.observed()).may_start_old)
         from dataclasses import replace

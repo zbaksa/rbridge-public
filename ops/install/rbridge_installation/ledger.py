@@ -116,16 +116,23 @@ def _write_exclusive(fd,name,raw,uid):
     finally:os.close(handle)
 
 class Ledger:
-    def __init__(self,parent_fd,transaction_id,uid,guard=None):
+    def __init__(self,parent_fd,transaction_id,uid,guard=None,mode='open_or_create'):
         self.parent_fd=os.dup(parent_fd);self.transaction_id=transaction_id;self.uid=uid;self.guard=guard
         self.fd=None;self.lock_fd=None;self.closed=False;self.poisoned=False;self.head_identity=None;self.head_digest=None
         if type(transaction_id)!=str or not re.fullmatch('[0-9a-f]{32}',transaction_id):self.close();raise LedgerError('LEDGER_TRANSACTION_INVALID')
+        if mode not in ('open_or_create','create_only','existing_only'):self.close();raise LedgerError('LEDGER_OPEN_MODE_INVALID')
         try:
             _private(os.fstat(self.parent_fd),uid,True)
-            created=False
-            try:os.mkdir(transaction_id,0o700,dir_fd=self.parent_fd);created=True;os.fsync(self.parent_fd)
-            except FileExistsError:pass
+            created=False;existing=None
+            if mode=='existing_only':
+                existing=os.stat(transaction_id,dir_fd=self.parent_fd,follow_symlinks=False)
+                _private(existing,uid,True)
+            else:
+                try:os.mkdir(transaction_id,0o700,dir_fd=self.parent_fd);created=True;os.fsync(self.parent_fd)
+                except FileExistsError:
+                    if mode=='create_only':raise
             self.fd=os.open(transaction_id,DIR_FLAGS,dir_fd=self.parent_fd);self.directory_identity=os.fstat(self.fd);_private(self.directory_identity,uid,True)
+            if existing is not None and _identity(existing)!=_identity(self.directory_identity):raise LedgerError('LEDGER_DIRECTORY_CHANGED')
             flags=os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC
             if created:
                 self.lock_fd=os.open('ledger.lock',flags|os.O_CREAT|os.O_EXCL,0o600,dir_fd=self.fd);os.fsync(self.lock_fd);os.fsync(self.fd)
@@ -198,16 +205,18 @@ class Ledger:
             if fd is not None:os.close(fd)
         if self.guard:self.guard.close()
 
-def open_ledger(parent_fd:int,transaction_id:str)->Ledger:
+def open_ledger(parent_fd:int,transaction_id:str,mode='open_or_create')->Ledger:
     if os.getuid()!=0 or os.geteuid()!=0:raise LedgerError('LEDGER_ROOT_REQUIRED')
+    from .host_backend import _assert_kernel_namespace
+    _assert_kernel_namespace()
     try:
         guard=ProtectedParent(FilesystemAuthority(0,1027,Path('/var/lib/rbridge-maintenance'),'RUNTIME'),parent_fd)
-        return Ledger(parent_fd,transaction_id,0,guard)
+        return Ledger(parent_fd,transaction_id,0,guard,mode)
     except (OSError,InstallationError):raise LedgerError('LEDGER_PARENT_UNPROTECTED') from None
 
-def _open_fixture_ledger(parent_fd:int,transaction_id:str)->Ledger:
+def _open_fixture_ledger(parent_fd:int,transaction_id:str,mode='open_or_create')->Ledger:
     """Explicit test authority; does not qualify a root deployment ledger."""
-    return Ledger(parent_fd,transaction_id,os.getuid())
+    return Ledger(parent_fd,transaction_id,os.getuid(),mode=mode)
 
 def recovery_decision(ledger:LedgerSnapshot,observed:ObservedTransactionState)->RecoveryDecision:
     # The caller supplies fresh qualified observations; actions still require CAS.

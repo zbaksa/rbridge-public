@@ -191,6 +191,98 @@ def qualified_owner_command(bundle):
     _fail('QUALIFICATION_REVIEWED_BOOTSTRAP_COMMAND_MISSING')
 
 
+def _bundle_authorization(bundle,authorization):
+    from datetime import datetime,timezone
+    from .transaction import SwitchAuthorization
+    p=bundle.profile
+    if (type(authorization) is not SwitchAuthorization or authorization.purpose!='OWNER_PRESENT_PRODUCTION_SWITCH'
+            or authorization.owner_present is not True or type(authorization.transaction_id) is not str
+            or not re.fullmatch('[0-9a-f]{32}',authorization.transaction_id)):
+        _fail('QUALIFICATION_SWITCH_AUTHORIZATION_MISSING')
+    expected={'profile_sha256':report_sha256(p),'runtime_manifest_sha256':bundle.runtime_manifest.sha256,
+        'toolkit_manifest_sha256':bundle.toolkit_manifest.sha256,'readers_sha256':bundle.readers_sha256,
+        'helper_sha256':bundle.helper_sha256}
+    if any(getattr(authorization,key)!=value for key,value in expected.items()):_fail('QUALIFICATION_SWITCH_AUTHORIZATION_DRIFT')
+    try:
+        expires=datetime.fromisoformat(authorization.expires_at.replace('Z','+00:00'));now=datetime.now(timezone.utc)
+        if expires.tzinfo is None or not 0<(expires-now).total_seconds()<=p.budget.maintenance_ms/1000:raise ValueError()
+    except (ValueError,TypeError,AttributeError):_fail('QUALIFICATION_SWITCH_AUTHORIZATION_EXPIRED')
+
+
+def open_qualified_transaction_ledger(bundle,authorization):
+    """Create an authorized new ledger while holding the shared foreground lock.
+
+    This short lock protects inventory plus creation. The subsequent pause must
+    reacquire it and recheck the entire registry before any service action. Death
+    between these steps leaves an unfinished ledger which blocks another install.
+    """
+    verify_qualification_bundle(getattr(bundle,'profile',None),bundle)
+    _bundle_authorization(bundle,authorization)
+    import fcntl
+    import os
+    import stat
+    from .artifact import _identity
+    from .ledger import open_ledger
+    from .protected_copy import ProtectedParent,FilesystemAuthority
+    from .maintenance_registry import assert_no_unfinished_transactions
+    p=bundle.profile
+    if p.paths.ledger_parent!='/var/lib/rbridge-maintenance' or p.paths.lock_path!='/run/rbridge-installation.lock':
+        _fail('QUALIFICATION_MAINTENANCE_PATHS_UNQUALIFIED')
+    parent=ProtectedParent(FilesystemAuthority(0,p.binding.uid,Path(p.paths.ledger_parent),'RUNTIME'))
+    lock_parent=None;handle=None;ledger=None;complete=False
+    try:
+        path=Path(p.paths.lock_path)
+        lock_parent=ProtectedParent(FilesystemAuthority(0,p.binding.uid,path.parent,'RUNTIME'))
+        flags=os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK
+        try:
+            handle=os.open(path.name,flags|os.O_CREAT|os.O_EXCL,0o600,dir_fd=lock_parent.fd)
+            os.fsync(handle);os.fsync(lock_parent.fd)
+        except FileExistsError:handle=os.open(path.name,flags,dir_fd=lock_parent.fd)
+        row=os.fstat(handle)
+        if not stat.S_ISREG(row.st_mode) or row.st_uid!=0 or row.st_mode&0o7777!=0o600 or row.st_nlink!=1:
+            _fail('QUALIFICATION_MAINTENANCE_LOCK_UNPROTECTED')
+        fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        def check():
+            parent.check();lock_parent.check()
+            if (_identity(row)!=_identity(os.fstat(handle))
+                    or _identity(row)!=_identity(os.stat(path.name,dir_fd=lock_parent.fd,follow_symlinks=False))):
+                _fail('QUALIFICATION_MAINTENANCE_LOCK_CHANGED')
+        check();assert_no_unfinished_transactions(parent.fd)
+        _bundle_authorization(bundle,authorization);check()
+        ledger=open_ledger(parent.fd,authorization.transaction_id,mode='create_only')
+        if ledger.read().entries:_fail('QUALIFICATION_NEW_LEDGER_NOT_EMPTY')
+        assert_no_unfinished_transactions(parent.fd,ledger);check()
+        complete=True;return ledger
+    except OSError:_fail('QUALIFICATION_MAINTENANCE_OWNERSHIP_UNCERTAIN')
+    finally:
+        if ledger is not None and not complete:ledger.close()
+        if handle is not None:os.close(handle)
+        if lock_parent is not None:lock_parent.close()
+        parent.close()
+
+
+def open_qualified_resume_ledger(bundle,transaction_id):
+    """Open the exact existing private chain; never create missing recovery state."""
+    verify_qualification_bundle(getattr(bundle,'profile',None),bundle)
+    if type(transaction_id) is not str or not re.fullmatch('[0-9a-f]{32}',transaction_id):_fail('QUALIFICATION_RESUME_ID_INVALID')
+    from .ledger import open_ledger
+    from .protected_copy import ProtectedParent,FilesystemAuthority
+    p=bundle.profile
+    if p.paths.ledger_parent!='/var/lib/rbridge-maintenance':_fail('QUALIFICATION_MAINTENANCE_PATHS_UNQUALIFIED')
+    parent=ProtectedParent(FilesystemAuthority(0,p.binding.uid,Path(p.paths.ledger_parent),'RUNTIME'))
+    ledger=None;complete=False
+    try:
+        ledger=open_ledger(parent.fd,transaction_id,mode='existing_only');snapshot=ledger.read()
+        expected={'profile_sha256':report_sha256(p),'runtime_manifest_sha256':bundle.runtime_manifest.sha256,
+            'toolkit_manifest_sha256':bundle.toolkit_manifest.sha256,'readers_sha256':bundle.readers_sha256}
+        if (not snapshot.entries or snapshot.entries[0].marker!='QUALIFIED'
+                or dict(snapshot.entries[0].evidence)!=expected):_fail('QUALIFICATION_RESUME_PINS_CHANGED')
+        parent.check();complete=True;return ledger
+    finally:
+        if ledger is not None and not complete:ledger.close()
+        parent.close()
+
+
 def verify_import_closure(toolkit_root,profile,qualification_request):
     """Observe the running isolated interpreter and every allowed import byte.
 
