@@ -4,6 +4,19 @@ from _loader import toolkit
 from _fixtures import profile_with, valid_profile
 
 class ProfileTests(unittest.TestCase):
+    def test_shared_helper_wire_golden_and_boolean_identity_rejection(self):
+        toolkit()
+        from rbridge_installation.models import validate_contract, encode_report, CONTRACT
+        ready={'schema':'RBRIDGE_INSTALL_HELPER_READY_V1','pid':31337,'nonce':'a'*64}
+        validate_contract(ready,'HelperReady')
+        self.assertEqual(encode_report(ready),b'{"nonce":"'+b'a'*64+b'","pid":31337,"schema":"RBRIDGE_INSTALL_HELPER_READY_V1"}')
+        for bad in ({**ready,'pid':True},{**ready,'pid':1},{**ready,'nonce':'wrong'},{**ready,'extra':True}):
+            with self.assertRaises(ValueError):validate_contract(bad,'HelperReady')
+        issue={'number':17,'state':'CLOSED','title':'fixture','body':'retained','author':'fixture-owner','url':'https://github.com/fixture-owner/fixture/issues/17','isPullRequest':False,'updatedAt':'2026-10-06T00:00:00.000Z','capture_sha256':'b'*64}
+        validate_contract(issue,'IssueEvidence')
+        for bad in ({**issue,'isPullRequest':0},{**issue,'number':2147483648},{**issue,'extra':True}):
+            with self.assertRaises(ValueError):validate_contract(bad,'IssueEvidence')
+        for name in ('LookupCapture','DiscoveryInput','AuditInput','DiscoveryResult','ProcessProbeTarget','AuditError'):self.assertIn(name,CONTRACT['$defs'])
     def setUp(self):
         try:
             toolkit()

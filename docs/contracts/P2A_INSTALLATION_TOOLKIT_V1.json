@@ -985,6 +985,312 @@
           "pattern": "^[0-9a-f]{64}$"
         }
       }
+    },
+    "IssueEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "state",
+        "title",
+        "body",
+        "author",
+        "url",
+        "isPullRequest",
+        "updatedAt",
+        "capture_sha256"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "state": {
+          "enum": [
+            "OPEN",
+            "CLOSED"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "author": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "isPullRequest": {
+          "enum": [
+            true,
+            false
+          ]
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "capture_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "LookupCapture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "status",
+        "viewer",
+        "repository",
+        "profile_sha256",
+        "snapshot_sha256",
+        "capture_sha256"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "FIXTURE_AUTHORITY_ONLY",
+            "QUALIFIED_GITHUB_READ"
+          ]
+        },
+        "status": {
+          "enum": [
+            "PASS",
+            "BLOCKED",
+            "UNKNOWN",
+            "FAIL"
+          ]
+        },
+        "viewer": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "repository": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "profile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capture_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "HelperReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "pid",
+        "nonce"
+      ],
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_INSTALL_HELPER_READY_V1"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 2147483647
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ProcessProbeTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "pid",
+        "start_ticks",
+        "identity_sha256"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "start_ticks": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,31})$"
+        },
+        "identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "DiscoveryInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "profile",
+        "token"
+      ],
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_INSTALL_DISCOVERY_INPUT_V1"
+        },
+        "profile": {
+          "$ref": "#/$defs/Profile"
+        },
+        "token": {
+          "$ref": "#/$defs/SnapshotToken"
+        }
+      }
+    },
+    "AuditInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "profile",
+        "token",
+        "issues",
+        "lookup",
+        "observations"
+      ],
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_INSTALL_AUDIT_INPUT_V1"
+        },
+        "profile": {
+          "$ref": "#/$defs/Profile"
+        },
+        "token": {
+          "$ref": "#/$defs/SnapshotToken"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IssueEvidence"
+          },
+          "maxItems": 40000
+        },
+        "lookup": {
+          "$ref": "#/$defs/LookupCapture"
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProcessObservation"
+          },
+          "maxItems": 40000
+        }
+      }
+    },
+    "DiscoveryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "scope",
+        "status",
+        "reason_codes",
+        "profile_sha256",
+        "snapshot_sha256",
+        "core_absence_sha256",
+        "issue_numbers",
+        "process_targets"
+      ],
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_INSTALL_DISCOVERY_RESULT_V1"
+        },
+        "scope": {
+          "const": "READONLY_PROBE_TARGETS_ONLY"
+        },
+        "status": {
+          "const": "PASS"
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "maxItems": 0
+        },
+        "profile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "core_absence_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "issue_numbers": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "maxItems": 40000
+        },
+        "process_targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProcessProbeTarget"
+          },
+          "maxItems": 40000
+        }
+      }
+    },
+    "AuditError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "status",
+        "reason_codes"
+      ],
+      "properties": {
+        "schema": {
+          "const": "RBRIDGE_INSTALL_AUDIT_ERROR_V1"
+        },
+        "status": {
+          "const": "UNKNOWN"
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "maxItems": 100000
+        }
+      }
     }
   }
 }

@@ -60,12 +60,16 @@ def _hash(value):
 def parse_helper_ready(raw, nonce):
     if not _hash(nonce) or type(raw) is not bytes or not raw.endswith(b'\n') or b'\n' in raw[:-1]:_fail('HELPER_READY_INVALID')
     row=_fields(_json(raw,4096),('schema','pid','nonce'))
+    try:validate_contract(row,'HelperReady')
+    except (ValueError,TypeError,KeyError):_fail('HELPER_READY_INVALID')
     if row['schema']!='RBRIDGE_INSTALL_HELPER_READY_V1' or row['nonce']!=nonce or type(row['pid']) is not int or not 2<=row['pid']<=2147483647:_fail('HELPER_READY_INVALID')
     return row['pid']
 
 
 def validate_discovery(value, profile, token):
     row=_fields(value,('schema','scope','status','reason_codes','profile_sha256','snapshot_sha256','core_absence_sha256','issue_numbers','process_targets'))
+    try:validate_contract(row,'DiscoveryResult')
+    except (ValueError,TypeError,KeyError):_fail('HELPER_DISCOVERY_IDENTITY_INVALID')
     if (row['schema']!='RBRIDGE_INSTALL_DISCOVERY_RESULT_V1' or row['scope']!='READONLY_PROBE_TARGETS_ONLY' or row['status']!='PASS' or row['reason_codes']!=[] or row['profile_sha256']!=report_sha256(profile) or row['snapshot_sha256']!=report_sha256(token) or not _hash(row['core_absence_sha256'])):_fail('HELPER_DISCOVERY_IDENTITY_INVALID')
     numbers=row['issue_numbers'];targets=row['process_targets'];ids=set()
     if type(numbers) is not list or len(numbers)>profile.budget.state_entries or any(type(n) is not int or not 1<=n<=2147483647 for n in numbers) or numbers!=sorted(set(numbers)):_fail('HELPER_DISCOVERY_NUMBERS_INVALID')

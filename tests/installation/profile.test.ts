@@ -1,10 +1,20 @@
 import {readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
-import {encodeInstallReport,parseRBridgeInstallProfile} from '../../src/installation/types.js';
+import {encodeInstallReport,parseRBridgeInstallProfile,validateInstallContract} from '../../src/installation/types.js';
 import {INSTALL_CONTRACT_SCHEMA} from '../../src/installation/contractSchema.js';
 
 const profile=()=>JSON.parse(readFileSync(new URL('../fixtures/rbridge-install-profile.json',import.meta.url),'utf8')) as Record<string,unknown>;
 describe('strict installation profile',()=>{
+  it('shares readiness, discovery and complete audit wire contracts with Python',()=>{
+    const ready={schema:'RBRIDGE_INSTALL_HELPER_READY_V1',pid:31337,nonce:'a'.repeat(64)};
+    expect(()=>validateInstallContract(ready,'HelperReady')).not.toThrow();
+    for(const bad of [{...ready,pid:true},{...ready,pid:1},{...ready,nonce:'wrong'},{...ready,extra:true}])expect(()=>validateInstallContract(bad,'HelperReady')).toThrow();
+    const issue={number:17,state:'CLOSED',title:'fixture',body:'retained',author:'fixture-owner',url:'https://github.com/fixture-owner/fixture/issues/17',isPullRequest:false,updatedAt:'2026-10-06T00:00:00.000Z',capture_sha256:'b'.repeat(64)};
+    expect(()=>validateInstallContract(issue,'IssueEvidence')).not.toThrow();
+    for(const bad of [{...issue,isPullRequest:0},{...issue,number:2147483648},{...issue,extra:true}])expect(()=>validateInstallContract(bad,'IssueEvidence')).toThrow();
+    expect(Buffer.from(encodeInstallReport(ready)).toString()).toBe('{"nonce":"'+ 'a'.repeat(64)+'","pid":31337,"schema":"RBRIDGE_INSTALL_HELPER_READY_V1"}');
+    for(const name of ['LookupCapture','DiscoveryInput','AuditInput','DiscoveryResult','ProcessProbeTarget','AuditError'])expect(Object.hasOwn(INSTALL_CONTRACT_SCHEMA.$defs,name)).toBe(true);
+  });
   it('ships exactly the shared contract used by Python',()=>{
     expect(INSTALL_CONTRACT_SCHEMA).toEqual(JSON.parse(readFileSync(new URL('../../docs/contracts/P2A_INSTALLATION_TOOLKIT_V1.json',import.meta.url),'utf8')));
   });

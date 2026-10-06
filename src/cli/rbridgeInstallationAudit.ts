@@ -14,6 +14,7 @@ export async function runInstallationDiscovery(input:unknown){
   try{
     if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('AUDIT_INPUT_INVALID');
     const raw=input as Record<string,unknown>;
+    validateInstallContract(raw,'DiscoveryInput');
     if(Object.keys(raw).sort().join(',')!=='profile,schema,token'||raw.schema!=='RBRIDGE_INSTALL_DISCOVERY_INPUT_V1')throw new Error('AUDIT_INPUT_INVALID');
     const profile=parseRBridgeInstallProfile(raw.profile);validateInstallContract(raw.token,'SnapshotToken');
     const token=raw.token as SnapshotToken;snapshot=await openReadonlySnapshot(profile,token);
@@ -30,6 +31,7 @@ export async function runInstallationAudit(input:unknown){
   try{
     if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('AUDIT_INPUT_INVALID');
     const raw=input as Record<string,unknown>;
+    validateInstallContract(raw,'AuditInput');
     if(Object.keys(raw).sort().join(',')!=='issues,lookup,observations,profile,schema,token'||raw.schema!=='RBRIDGE_INSTALL_AUDIT_INPUT_V1')throw new Error('AUDIT_INPUT_INVALID');
     const profile=parseRBridgeInstallProfile(raw.profile);validateInstallContract(raw.token,'SnapshotToken');
     if(!Array.isArray(raw.issues)||raw.issues.length>profile.budget.state_entries||!Array.isArray(raw.observations)||raw.observations.length>profile.budget.state_entries||!raw.lookup||typeof raw.lookup!=='object'||Array.isArray(raw.lookup))throw new Error('AUDIT_INPUT_INVALID');
