@@ -18,7 +18,7 @@ export interface GateReport{gate:Gate;status:InstallStatus;snapshot_sha256:strin
 export interface GateBundle{schema:'RBRIDGE_INSTALL_GATE_V1';status:InstallStatus;reason_codes:readonly string[];token:SnapshotToken;reports:readonly GateReport[];}
 export interface TransactionResult{status:string;exit_code:number;phase:string;ledger_sha256:string;reason_codes:readonly string[];}
 export interface IssueEvidence{number:number;state:'OPEN'|'CLOSED';title:string;body:string;author:string;url:string;isPullRequest:boolean;updatedAt:string;capture_sha256:string;}
-export interface ProcessObservation{pid:number;start_ticks:string;cgroup:string;settled:boolean;identity_sha256:string;}
+export interface ProcessObservation{scope:'FIXTURE_AUTHORITY_ONLY'|'QUALIFIED_HOST_PROCESS';session_id:string;pid:number;start_ticks:string;cgroup:string;cgroup_settled:boolean;settled:boolean;process_state:'ABSENT'|'MATCHING'|'REUSED'|'UNCLASSIFIED';identity_sha256:string;observed_identity_sha256:string;unit_sha256:string;snapshot_sha256:string;profile_sha256:string;observed_at:string;}
 export interface ArtifactEntry{path:string;kind:'FILE'|'DIRECTORY'|'SYMLINK';size:number;mode:number;sha256:string;target:string;}
 export interface ArtifactManifest{schema:'RBRIDGE_INSTALL_ARTIFACT_V1'|'RBRIDGE_INSTALL_TOOLKIT_V1';kind:'RUNTIME'|'TOOLKIT';source_sha:string;tree_sha:string;node_sha256:string;uid_policy:'ROOT_IMMUTABLE_RUNTIME_READABLE';entries:readonly ArtifactEntry[];sha256:string;}
 export interface ArtifactProof{manifest_sha256:string;observed_sha256:string;source_sha:string;node_sha256:string;status:InstallStatus;scope:'BYTES_INVENTORY_ONLY';}

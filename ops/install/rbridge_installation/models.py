@@ -26,7 +26,7 @@ def validate_contract(value, name):
         if depth > 64: raise ValueError('CONTRACT_DEPTH')
         if '$ref' in rule: return check(v, CONTRACT['$defs'][rule['$ref'].split('/')[-1]], depth+1)
         if 'const' in rule and (type(v) != type(rule['const']) or v != rule['const']): raise ValueError('CONTRACT_CONST')
-        if 'enum' in rule and v not in rule['enum']: raise ValueError('CONTRACT_ENUM')
+        if 'enum' in rule and not any(type(v) is type(item) and v == item for item in rule['enum']): raise ValueError('CONTRACT_ENUM')
         kind = rule.get('type')
         if kind == 'object':
             if type(v) != dict or set(v) - set(rule['properties']) or not set(rule['required']) <= set(v): raise ValueError('CONTRACT_FIELDS')

@@ -5,6 +5,7 @@ import os
 import pwd
 import re
 import selectors
+import signal
 import shlex
 import stat
 import subprocess
@@ -50,40 +51,58 @@ def _kernel_bytes(path,limit=65536):
         return bytes(data)
     finally:os.close(fd)
 
+def _assert_kernel_namespace():
+    try:
+        # Numeric PID paths must identify this process namespace, never a host view.
+        if os.readlink('/proc/self')!=str(os.getpid()):raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
+        raw=_kernel_bytes('/proc/self/status')
+        match=re.search(rb'^Pid:\s+([0-9]+)$',raw,re.M)
+        if not match or int(match[1])!=os.getpid():raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED')
+    except OSError:raise PauseError('HOST_KERNEL_NAMESPACE_UNQUALIFIED') from None
+
+def _run_fixed_tool(pin,args,timeout_ms,limit=262144,env=None):
+    def qualify():
+        if hashlib.sha256(_protected_bytes(pin.path,16777216)).hexdigest()!=pin.sha256:raise PauseError('HOST_TOOL_BYTES_MISMATCH')
+    qualify();child=subprocess.Popen([pin.path,*args],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env or {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root','LC_ALL':'C'},cwd='/',start_new_session=True)
+    selector=selectors.DefaultSelector();out=bytearray();errors=bytearray();deadline=time.monotonic()+timeout_ms/1000
+    try:
+        for stream in (child.stdout,child.stderr):os.set_blocking(stream.fileno(),False);selector.register(stream,selectors.EVENT_READ)
+        while selector.get_map():
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise PauseError('HOST_COMMAND_DEADLINE')
+            for key,_event in selector.select(min(remaining,0.2)):
+                chunk=os.read(key.fd,65536)
+                if not chunk:selector.unregister(key.fileobj);continue
+                destination=out if key.fileobj is child.stdout else errors;destination.extend(chunk)
+                if len(out)+len(errors)>limit:raise PauseError('HOST_COMMAND_OUTPUT_LIMIT')
+        if child.wait(timeout=max(0.001,deadline-time.monotonic()))!=0:raise PauseError('HOST_COMMAND_FAILED')
+        qualify();return bytes(out)
+    except (OSError,subprocess.TimeoutExpired):raise PauseError('HOST_COMMAND_UNAVAILABLE') from None
+    finally:
+        selector.close()
+        if child.poll() is None:
+            try:os.killpg(child.pid,signal.SIGKILL)
+            except ProcessLookupError:pass
+            child.wait(timeout=5)
+        child.stdout.close();child.stderr.close()
+
 class QualifiedHostBackend:
     scope='QUALIFIED_HOST_PAUSE'
     def __init__(self,profile):
         if os.getuid()!=0 or os.geteuid()!=0:raise PauseError('HOST_ROOT_REQUIRED')
+        _assert_kernel_namespace()
         self.profile=parse_profile(__import__('json').loads(encode_report(profile)))
         if self.profile.service.unit!='rbridge.service':raise PauseError('HOST_UNIT_NOT_APPROVED')
         try:identity=pwd.getpwnam(self.profile.binding.account)
         except KeyError:raise PauseError('HOST_RUNTIME_IDENTITY_UNAVAILABLE') from None
         if (identity.pw_uid,identity.pw_gid,identity.pw_dir)!=(1027,1027,'/home/rbridge'):raise PauseError('HOST_RUNTIME_IDENTITY_MISMATCH')
         self.tool=next(t for t in self.profile.tools if t.role=='systemctl')
-        self._qualify_tool();self.cgroups={}
+        self._qualify_tool();self.cgroups={};self.process_unit_evidence={}
         if self._run(('--version',),5000,16384).decode('utf-8').splitlines()[0]!=self.tool.version:raise PauseError('HOST_TOOL_VERSION_MISMATCH')
     def _qualify_tool(self):
         if hashlib.sha256(_protected_bytes(self.tool.path,16777216)).hexdigest()!=self.tool.sha256:raise PauseError('HOST_TOOL_BYTES_MISMATCH')
     def _run(self,args,timeout_ms,limit=262144):
-        self._qualify_tool();child=subprocess.Popen([self.tool.path,*args],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root','LC_ALL':'C'},cwd='/',start_new_session=True)
-        selector=selectors.DefaultSelector();out=bytearray();errors=bytearray();deadline=time.monotonic()+timeout_ms/1000
-        try:
-            for stream in (child.stdout,child.stderr):os.set_blocking(stream.fileno(),False);selector.register(stream,selectors.EVENT_READ)
-            while selector.get_map():
-                remaining=deadline-time.monotonic()
-                if remaining<=0:raise PauseError('HOST_COMMAND_DEADLINE')
-                for key,_event in selector.select(min(remaining,0.2)):
-                    chunk=os.read(key.fd,65536)
-                    if not chunk:selector.unregister(key.fileobj);continue
-                    destination=out if key.fileobj is child.stdout else errors;destination.extend(chunk)
-                    if len(out)+len(errors)>limit:raise PauseError('HOST_COMMAND_OUTPUT_LIMIT')
-            if child.wait(timeout=max(0.001,deadline-time.monotonic()))!=0:raise PauseError('HOST_COMMAND_FAILED')
-            self._qualify_tool();return bytes(out)
-        except (OSError,subprocess.TimeoutExpired):raise PauseError('HOST_COMMAND_UNAVAILABLE') from None
-        finally:
-            selector.close()
-            if child.poll() is None:child.kill();child.wait(timeout=5)
-            child.stdout.close();child.stderr.close()
+        return _run_fixed_tool(self.tool,args,timeout_ms,limit)
     def _show(self,unit):
         if unit not in (self.profile.service.unit,*self.profile.service.alternate_units):raise PauseError('HOST_UNIT_NOT_APPROVED')
         raw=self._run(('show',unit,'--no-pager','--property='+','.join(PROPERTIES)),min(self.profile.budget.stop_ms,15000)).decode('utf-8',errors='strict')
@@ -127,23 +146,80 @@ class QualifiedHostBackend:
     def stop_unit(self,unit):
         if unit!='rbridge.service' or unit!=self.profile.service.unit:raise PauseError('HOST_UNIT_NOT_APPROVED')
         self._run(('stop','rbridge.service'),self.profile.budget.stop_ms,65536)
+    def probe_process(self,pid):
+        from .process_observation import probe_kernel_process
+        return probe_kernel_process(pid)
+    def observe_process_unit(self,profile,session_id):
+        _assert_kernel_namespace()
+        if report_sha256(profile)!=report_sha256(self.profile) or not re.fullmatch('[0-9a-f]{32}',session_id):raise PauseError('HOST_PROCESS_TARGET_INVALID')
+        runuser=next(t for t in self.profile.tools if t.role=='runuser')
+        if _run_fixed_tool(runuser,('--version',),5000,16384).decode('utf-8').splitlines()[0]!=runuser.version:raise PauseError('HOST_TOOL_VERSION_MISMATCH')
+        self._qualify_tool()
+        unit='cocwin-remote-bridge-process-'+session_id+'.service'
+        properties=('LoadState','ActiveState','SubState','MainPID','ControlGroup','InvocationID')
+        environment={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':profile.binding.home,'USER':profile.binding.account,'LOGNAME':profile.binding.account,'LC_ALL':'C','XDG_RUNTIME_DIR':'/run/user/1027','DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/user/1027/bus'}
+        def show():
+            raw=_run_fixed_tool(runuser,('--user','rbridge','--',self.tool.path,'--user','show',unit,'--no-pager','--property='+','.join(properties)),15000,65536,environment).decode('utf-8',errors='strict')
+            rows={}
+            for line in raw.splitlines():
+                key,sep,value=line.partition('=')
+                if not sep or key in rows:raise PauseError('HOST_PROCESS_UNIT_UNKNOWN')
+                rows[key]=value
+            if set(rows)!=set(properties) or not re.fullmatch('0|[1-9][0-9]*',rows['MainPID']):raise PauseError('HOST_PROCESS_UNIT_UNKNOWN')
+            return rows
+        before=show();cgroup=before['ControlGroup'];pids=[]
+        if cgroup:
+            prefix='/user.slice/user-1027.slice/user@1027.service/'
+            if not cgroup.startswith(prefix) or not cgroup.endswith('/'+unit) or any(p in ('','.','..') for p in cgroup[1:].split('/')):raise PauseError('HOST_PROCESS_CGROUP_UNKNOWN')
+            pids=self._subtree_pids('/sys/fs/cgroup'+cgroup)
+        after=show();self._qualify_tool()
+        if before!=after:raise PauseError('HOST_PROCESS_UNIT_CHANGED')
+        settled=before['LoadState'] in ('loaded','not-found') and before['ActiveState']=='inactive' and before['SubState']=='dead' and before['MainPID']=='0' and not pids
+        # The enclosing lease also proves no unclassified same-UID process before/after.
+        evidence={'unit':unit,'properties':before,'cgroup_pids':pids}
+        if not hasattr(self,'process_unit_evidence'):self.process_unit_evidence={}
+        self.process_unit_evidence[session_id]=evidence
+        return {'unit':unit,'cgroup':cgroup,'settled':settled,'invocation_sha256':report_sha256(evidence)}
+    def _subtree_pids(self,path):
+        deadline=time.monotonic()+self.profile.budget.stop_ms/1000;count=0;pids=set()
+        try:root=open_artifact_root(path)
+        except FileNotFoundError:return []
+        def walk(fd,depth):
+            nonlocal count
+            if depth>self.profile.budget.state_depth or time.monotonic()>=deadline:raise PauseError('HOST_CGROUP_OBSERVATION_LIMIT')
+            count+=1
+            if count>self.profile.budget.state_entries:raise PauseError('HOST_CGROUP_OBSERVATION_LIMIT')
+            names=sorted(os.listdir(fd));before=os.fstat(fd)
+            handle=os.open('cgroup.procs',FILE_FLAGS,dir_fd=fd)
+            try:
+                data=bytearray()
+                while len(data)<=65536:
+                    chunk=os.read(handle,min(65536,65537-len(data)))
+                    if not chunk:break
+                    data.extend(chunk)
+                raw=bytes(data)
+            finally:os.close(handle)
+            if len(raw)>65536 or (raw and not re.fullmatch(rb'(?:[1-9][0-9]*\n)+',raw)):raise PauseError('HOST_CGROUP_OBSERVATION_INVALID')
+            pids.update(int(n) for n in raw.splitlines())
+            for name in names:
+                entry=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                if stat.S_ISLNK(entry.st_mode):raise PauseError('HOST_CGROUP_OBSERVATION_INVALID')
+                if stat.S_ISDIR(entry.st_mode):
+                    child=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd)
+                    try:
+                        if _identity(entry)!=_identity(os.fstat(child)):raise PauseError('HOST_CGROUP_CHANGED')
+                        walk(child,depth+1)
+                    finally:os.close(child)
+            if names!=sorted(os.listdir(fd)) or _identity(before)!=_identity(os.fstat(fd)):raise PauseError('HOST_CGROUP_CHANGED')
+        try:walk(root,0);return sorted(pids)
+        except OSError:raise PauseError('HOST_CGROUP_OBSERVATION_UNAVAILABLE') from None
+        finally:os.close(root)
     def _cgroup_pids(self,unit):
         cgroup=self.cgroups.get(unit)
         if cgroup is None:raise PauseError('HOST_CGROUP_IDENTITY_MISSING')
-        root=Path('/sys/fs/cgroup'+cgroup)
-        try:
-            parent=open_artifact_root(root)
-            try:
-                fd=os.open('cgroup.procs',FILE_FLAGS,dir_fd=parent)
-                try:
-                    raw=os.read(fd,65537)
-                    if len(raw)>65536:raise PauseError('HOST_CGROUP_OBSERVATION_LIMIT')
-                finally:os.close(fd)
-            finally:os.close(parent)
-        except FileNotFoundError:return []
-        if raw and not re.fullmatch(rb'(?:[1-9][0-9]*\n)+',raw):raise PauseError('HOST_CGROUP_OBSERVATION_INVALID')
-        return [int(n) for n in raw.splitlines()]
+        return self._subtree_pids('/sys/fs/cgroup'+cgroup)
     def observe_pause(self,profile):
+        _assert_kernel_namespace()
         capture=self.capture_service(profile);rows=self._show(profile.service.unit);alternates=[];cgroup=self._cgroup_pids(profile.service.unit)
         for unit in profile.service.alternate_units:
             alternate=self._show(unit)
