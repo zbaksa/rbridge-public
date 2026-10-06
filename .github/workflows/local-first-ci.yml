@@ -52,6 +52,12 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
 
+      - name: Installation Python version
+        run: python3 -I -B -c "import sys; assert sys.version_info >= (3, 11)"
+
+      - name: Installation tests
+        run: npm run verify:installation
+
       - name: Test
         run: npm test
 

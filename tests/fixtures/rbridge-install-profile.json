@@ -1,0 +1,109 @@
+{
+  "schema": "RBRIDGE_P2A_INSTALL_PROFILE_V1",
+  "binding": {
+    "uid": 1027,
+    "gid": 1027,
+    "supplementary_gids": [],
+    "account": "rbridge",
+    "home": "/home/rbridge",
+    "principal_id": "fixture-owner",
+    "target_instance_id": "fixture-host",
+    "repository": "zbaksa/rbridge-public",
+    "author": "zbaksa",
+    "mcp_subject": "uid:1027",
+    "github_subject": "zbaksa/rbridge-public:zbaksa",
+    "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "runtime": {
+    "source_sha": "b5881fd8367b4249e82683f1f884f2392cb696d4",
+    "tree_sha": "8eeabd5628c8226bd42c00d79e2f3c37ad252ba8",
+    "old_sha": "008885e07394f20746f034cbd7fe52c6b520533d",
+    "node_path": "/usr/bin/node",
+    "node_version": "22.23.2",
+    "node_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "npm_cli_path": "/usr/share/nodejs/npm/bin/npm-cli.js",
+    "npm_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "lock_sha256": "53c56e80378408dae8e920118d3731de78c22e8e8be7a89cf4a1717f30369c15",
+    "manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "toolkit": {
+    "source_sha": "2222222222222222222222222222222222222222",
+    "manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "python_path": "/usr/bin/python3",
+    "python_version": "3.11.2",
+    "python_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "tools": [
+    {
+      "role": "systemctl",
+      "path": "/usr/bin/systemctl",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "version": "fixture-1"
+    },
+    {
+      "role": "gh",
+      "path": "/usr/bin/gh",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "version": "fixture-1"
+    },
+    {
+      "role": "runuser",
+      "path": "/usr/sbin/runuser",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "version": "fixture-1"
+    }
+  ],
+  "paths": {
+    "state_root": "/home/rbridge/.local/state/rbridge",
+    "release_parent": "/usr/local/libexec/rbridge/releases",
+    "current_link": "/usr/local/libexec/rbridge/current",
+    "ledger_parent": "/var/lib/rbridge-maintenance",
+    "lock_path": "/run/rbridge-installation.lock",
+    "binding_env": "/etc/rbridge/p2a-binding.env",
+    "binding_dropin": "/etc/systemd/system/rbridge.service.d/60-p2a-binding.conf",
+    "canary_path": "/home/rbridge/fixture-canary.txt"
+  },
+  "service": {
+    "unit": "rbridge.service",
+    "alternate_units": [],
+    "identity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "environment_files": [
+      {
+        "path": "/etc/rbridge/runtime.env",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "path": "/etc/rbridge/flowpilot.env",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ],
+    "dropins_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "canary_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "budget": {
+    "state_entries": 40000,
+    "state_depth": 64,
+    "state_bytes": 68719476736,
+    "artifact_entries": 100000,
+    "artifact_depth": 128,
+    "artifact_bytes": 1073741824,
+    "record_bytes": 2097152,
+    "process_log_bytes": 67108864,
+    "process_frames": 1048576,
+    "carrier_bytes": 67108864,
+    "carrier_comments": 4096,
+    "comment_bytes": 65536,
+    "carrier_object_bytes": 8519680,
+    "scan_ms": 600000,
+    "lookup_ms": 15000,
+    "lookup_batch": 25,
+    "lookup_response_bytes": 2097152,
+    "lookup_overall_ms": 600000,
+    "stop_ms": 30000,
+    "acceptance_ms": 180000,
+    "canary_ttl_ms": 120000,
+    "poll_ms": 1000,
+    "maintenance_ms": 1200000
+  },
+  "readers": []
+}
