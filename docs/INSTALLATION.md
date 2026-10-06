@@ -181,6 +181,8 @@ Treat each gate as separate evidence:
 
 The Native installation branch remains under development. Its qualification assessment always reports `BLOCKED` and cannot render an owner command. The physical collector, reviewed command dispatch and complete host qualification are still required. A source test, artifact hash, scope label or caller-supplied PASS cannot grant Root readiness.
 
+The archive collector's Source implementation preserves the original request body, fixed authenticated query preimages and two complete comment inventories, including an explicit empty final page. Changes to content, identity, timestamps or comment count block the capture. It does not qualify result semantics or actual workflow adoption: those still require the named installed reader, and the physical Root capture remains a separate qualification step.
+
 Once a complete reviewed bundle exists, preparation remains separate from explicit switch authorization. Before changing configuration or the pointer, the transaction records intent, maintains exclusion, independently verifies its protected backup and checks the stopped durable state. Original environment files, drop-ins, unrelated settings and the original pointer are preserved by ownership and compare-and-swap checks.
 
 After `START_ATTEMPTED`, an acceptance failure requires stopping and preserving the candidate's durable state and evidence. Automatically returning to the old pointer or restoring the old backup is unavailable. Before any start attempt, restoration of only the transaction's exact owned configuration/pointer additions still requires fresh compatible gates and observed ownership. See the recovery and exit meanings in [Operations](OPERATIONS.md).
