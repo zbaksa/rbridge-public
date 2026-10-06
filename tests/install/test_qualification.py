@@ -71,6 +71,44 @@ class QualificationTests(unittest.TestCase):
         self.assertNotEqual(result.checks['readers'],'PASS');self.assertNotEqual(result.checks['artifact'],'PASS')
         self.assertNotEqual(result.checks['privileged'],'PASS')
 
+    def test_reader_adoption_must_match_each_registered_identity_and_complete_case_roster(self):
+        from rbridge_installation.models import report_sha256
+        from rbridge_installation.profile import parse_profile
+        registrations=[];adoptions=[];invocations=[]
+        for transport,cases in (('GITHUB',['C0'+str(n) for n in range(1,9)]),('MCP',['C09'])):
+            ident='fixture-'+transport.lower();entrypoint='/protected/'+ident+'.js'
+            # Synthetic metadata/preimages exercise completeness only, never
+            # authenticated case semantics or physical reader/workflow origin.
+            rows=[{'reader_id':ident,'fixture_id':'fixture-'+case,'case_id':case,'input_json':'{}','verdict_json':'{}',
+                'input_sha256':hashlib.sha256(b'{}').hexdigest(),'output_sha256':hashlib.sha256(b'{}').hexdigest(),
+                'scope':'QUALIFIED_INSTALLED_READER'} for case in cases]
+            adoption={'schema':'RBRIDGE_READER_ADOPTION_V1','reader_id':ident,'owner':'fixture-owner',
+                'workflow':'fixture-readonly-workflow','entrypoint':entrypoint,'source_sha256':'a'*64,'version':'1',
+                'trusted_context_sha256':'b'*64,'fixture_set_sha256':'c'*64,'adopted_at':'2026-10-06T00:00:00.000Z'}
+            registrations.append({'reader_id':ident,'source_sha256':'a'*64,'entrypoint':entrypoint,'version':'1',
+                'transport':transport,'trusted_context_sha256':'b'*64,'qualification_sha256':report_sha256(rows),
+                'adoption_sha256':report_sha256(adoption)})
+            adoptions.append(adoption);invocations.extend(rows)
+        raw_profile=valid_profile();raw_profile['readers']=registrations;p=parse_profile(raw_profile)
+        value={'registry':{'readers':registrations,'adoptions':adoptions},'report':{
+            'schema':'RBRIDGE_READER_QUALIFICATION_V1','referenceAcceptance':'PASS','actualAcceptance':'PASS',
+            'reason_codes':[],'acceptedCases':['C0'+str(n) for n in range(1,10)],'invocations':invocations}}
+        positive=self.build(p,self.Proofs(readers=value))
+        self.assertEqual(positive.checks['readers'],'PASS');self.assertFalse(positive.command_ready)
+        self.assertIn('QUALIFICATION_PHYSICAL_ORIGIN_UNQUALIFIED',positive.reason_codes)
+        for mutation in ('missing','duplicate','owner','entrypoint','context','timestamp','case-roster','foreign-invocation'):
+            evidence=copy.deepcopy(value)
+            if mutation=='missing':evidence['registry']['adoptions']=[]
+            elif mutation=='duplicate':evidence['registry']['adoptions'].append(copy.deepcopy(adoptions[0]))
+            elif mutation=='case-roster':evidence['report']['acceptedCases']=[]
+            elif mutation=='foreign-invocation':evidence['report']['invocations'].append({**invocations[0],'reader_id':'foreign'})
+            else:
+                key={'owner':'owner','entrypoint':'entrypoint','context':'trusted_context_sha256','timestamp':'adopted_at'}[mutation]
+                evidence['registry']['adoptions'][0][key]={'owner':'attacker','entrypoint':'/other/reader.js',
+                    'context':'f'*64,'timestamp':'2026-02-31T00:00:00.000Z'}[mutation]
+            with self.subTest(mutation=mutation):
+                self.assertEqual(self.build(p,self.Proofs(readers=evidence)).checks['readers'],'FAIL')
+
     def test_rehashed_artifact_summary_without_full_operation_preimages_is_incomplete(self):
         from rbridge_installation.models import report_sha256
         p=self.profile;receipts={'only_summary_hash':'f'*64}

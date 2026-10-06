@@ -160,9 +160,21 @@ def _readers(profile,value):
     validate_contract(report,'ReaderQualificationReport');validate_contract(registry,'ReaderRegistry')
     if (report['schema']!='RBRIDGE_READER_QUALIFICATION_V1' or report['actualAcceptance']!='PASS'
             or report['referenceAcceptance']!='PASS' or report['reason_codes']!=[]
+            or report['acceptedCases']!=['C0'+str(n) for n in range(1,10)]
             or encode_report(registry['readers'])!=encode_report(profile.readers)
             or not profile.readers or {r.transport for r in profile.readers}!={'GITHUB','MCP'}):
         _fail('QUALIFICATION_READERS_INVALID')
+    from datetime import datetime
+    registrations={r.reader_id:r for r in profile.readers};adoptions={}
+    for adoption in registry['adoptions']:
+        ident=adoption['reader_id'];registration=registrations.get(ident)
+        if (registration is None or ident in adoptions or report_sha256(adoption)!=registration.adoption_sha256
+                or any(adoption[k]!=getattr(registration,k) for k in ('entrypoint','source_sha256','version','trusted_context_sha256'))
+                or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z',adoption['adopted_at'])):
+            _fail('QUALIFICATION_READER_ADOPTION_INVALID')
+        datetime.fromisoformat(adoption['adopted_at']);adoptions[ident]=adoption
+    if set(adoptions)!=set(registrations) or any(r['reader_id'] not in registrations for r in report['invocations']):
+        _fail('QUALIFICATION_READER_ADOPTION_INCOMPLETE')
     for registration in profile.readers:
         rows=[r for r in report['invocations'] if r['reader_id']==registration.reader_id]
         cases={'C0'+str(n) for n in range(1,9)} if registration.transport=='GITHUB' else {'C09'}
