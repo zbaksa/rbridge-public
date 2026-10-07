@@ -257,7 +257,8 @@ def compare_copy_ledger_cases(profile,value):
     a,b=records['copy'];fixed={name:_bytes(raw) for name,raw in sorted(FILES.items())}
     if (type(a) is not dict or set(a)!={'schema','profile_sha256','fixture_kind','files','manifest','runtime_uid','production_copy'}
             or a['schema']!='RBRIDGE_COPY_FIXTURE_INPUT_V1' or a['profile_sha256']!=report_sha256(profile)
-            or a['fixture_kind']!='TINY_FIXED_MATERIAL_ONLY' or a['files']!=fixed or a['runtime_uid']!=value['runtime_uid']
+            or a['fixture_kind']!='TINY_FIXED_MATERIAL_ONLY' or a['files']!=fixed
+            or type(a['runtime_uid']) is not int or a['runtime_uid']!=value['runtime_uid']
             or a['production_copy'] is not value['production_copy']):_fail('COPY_LEDGER_FIXTURE_COPY_INPUT_INVALID')
     try:manifest=ArtifactManifest(**{**a['manifest'],'entries':tuple(ArtifactEntry(**e) for e in a['manifest']['entries'])});validate_manifest(manifest)
     except (TypeError,KeyError,InstallationError):_fail('COPY_LEDGER_FIXTURE_MANIFEST_INVALID')

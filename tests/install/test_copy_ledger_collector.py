@@ -48,5 +48,11 @@ class CopyLedgerCollectorTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError,'COPY_LEDGER_COLLECTOR_ROOT_CONTEXT_UNQUALIFIED',self.verify,self.profile,token,{})
         finally:del collector._observations[token]
 
+    def test_fixture_directory_prefix_is_fixed_before_any_root_parent_open(self):
+        from rbridge_installation.copy_ledger_collector import _FixtureDirectory
+        for prefix in ('../../','caller-','/tmp/fixture-'):
+            with patch('os.open',side_effect=AssertionError('Caller Root prefix open')):
+                self.assertRaisesRegex(ValueError,'COPY_LEDGER_COLLECTOR_FIXTURE_PREFIX_INVALID',_FixtureDirectory,self.profile,prefix=prefix)
+
 
 if __name__=='__main__':unittest.main()

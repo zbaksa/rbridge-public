@@ -64,16 +64,17 @@ def _materials(profile,root,runtime_manifest,toolkit_manifest,request):
 
 
 class _FixtureDirectory:
-    def __init__(self,profile,path=None):
+    def __init__(self,profile,path=None,*,prefix='.rbridge-copy-ledger-'):
         self.parent=None;self.fd=None
         try:
+            if prefix not in ('.rbridge-copy-ledger-','.rbridge-config-cas-'):_fail('COPY_LEDGER_COLLECTOR_FIXTURE_PREFIX_INVALID')
             self.parent=ProtectedParent(FilesystemAuthority(0,profile.binding.uid,Path('/root'),'RUNTIME'))
             if path is None:
-                name='.rbridge-copy-ledger-'+secrets.token_hex(16)
+                name=prefix+secrets.token_hex(16)
                 os.mkdir(name,0o700,dir_fd=self.parent.fd);os.fsync(self.parent.fd)
             else:
                 value=Path(path)
-                if value.parent!=Path('/root') or re.fullmatch(r'\.rbridge-copy-ledger-[0-9a-f]{32}',value.name) is None:
+                if value.parent!=Path('/root') or re.fullmatch(re.escape(prefix)+'[0-9a-f]{32}',value.name) is None:
                     _fail('COPY_LEDGER_COLLECTOR_FIXTURE_PATH_INVALID')
                 name=value.name
             self.name=name;self.path=Path('/root')/name

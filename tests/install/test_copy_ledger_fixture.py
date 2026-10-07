@@ -90,6 +90,12 @@ class CopyLedgerFixtureTests(unittest.TestCase):
         row['input_sha256']=hashlib.sha256(row['input_json'].encode()).hexdigest();row['output_sha256']=hashlib.sha256(row['output_json'].encode()).hexdigest()
         self.assertRaisesRegex(ValueError,'COPY_LEDGER_FIXTURE_MANIFEST_CHANGED',self.compare,self.profile,report)
 
+    def test_boolean_copy_uid_cannot_substitute_a_numeric_zero_identity(self):
+        report=self.produce(self.root,self.profile);report.update(uid=0,euid=0,runtime_uid=0)
+        row=report['cases']['copy'];inputs=json.loads(row['input_json']);inputs['runtime_uid']=False
+        row['input_json']=encode_report(inputs).decode();row['input_sha256']=hashlib.sha256(row['input_json'].encode()).hexdigest()
+        self.assertRaises(ValueError,self.compare,self.profile,report)
+
     def test_missing_pidfd_authority_prevents_child_ledger_mutation(self):
         from rbridge_installation.copy_ledger_fixture import _crash
         from rbridge_installation.ledger import _open_fixture_ledger,MARKERS
