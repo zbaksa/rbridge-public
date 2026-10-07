@@ -34,6 +34,14 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ---
 
+## 2026-10-07 — P2A installation Task16 integration draft
+
+[Draft PR #34](https://github.com/zbaksa/rbridge-public/pull/34) combines the protected bootstrap publication continuation with the newer authenticated retrieval, exact-command review and acceptance fixes. Publication retains the original authenticated bootstrap bytes and genuine issuer/custody origin; it grants no execution or service-switch authority. The newer owner-command route remains the single executable installation entry.
+
+Implementation candidate `057f004b21b4d598f2010f25e84ed24a6ac8bfc4`, tree `87815a208548b293bde6b93e16b7f6e666bb39df`, passed [CI run 37685281712](https://github.com/zbaksa/rbridge-public/actions/runs/37685281712): 344 Python and 630 TypeScript tests in 70 files, typecheck, lint, server build, public-source scrub and clean-source checks on the dedicated non-root Node 22.23.3 runner. The Native UID0/Node24 TypeScript run remains recorded as FAIL; it is not artifact qualification.
+
+Actual final-artifact Node 22.23.2 qualification, protected Root fixtures, registered-reader evidence and installed acceptance remain unqualified. **Status: UNMERGED DRAFT. Owner command/production switch: BLOCKED. Live deployment: NOT DEPLOYED.** This history entry is a later documentation change; the linked CI qualifies its exact implementation tree.
+
 ## 2026-10-05 — Shared read-only core P2A draft
 
 [PR #32](https://github.com/zbaksa/rbridge-public/pull/32) implements the approved shared owner for GitHub and MCP. New SAFE HEALTH and six FILE reads use scoped durable intent, original policy snapshots, independently verified output, recovery and cancellation. Disabled SAFE mutations/process/transfers have durable BLOCK receipts. Existing legacy V1/V2 records, V1/APP_RUN and FlowPilot keep their engine with a common core identity guard.
