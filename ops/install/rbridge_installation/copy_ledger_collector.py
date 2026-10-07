@@ -67,7 +67,7 @@ class _FixtureDirectory:
     def __init__(self,profile,path=None,*,prefix='.rbridge-copy-ledger-',limit=LIMIT):
         self.parent=None;self.fd=None
         try:
-            if prefix not in ('.rbridge-copy-ledger-','.rbridge-config-cas-','.rbridge-helper-family-','.rbridge-fake-unit-'):_fail('COPY_LEDGER_COLLECTOR_FIXTURE_PREFIX_INVALID')
+            if prefix not in ('.rbridge-copy-ledger-','.rbridge-config-cas-','.rbridge-helper-family-','.rbridge-fake-unit-','.rbridge-bootstrap-fixture-'):_fail('COPY_LEDGER_COLLECTOR_FIXTURE_PREFIX_INVALID')
             if type(limit) is not int or not 1<=limit<=67108864:_fail('COPY_LEDGER_COLLECTOR_FIXTURE_LIMIT_INVALID')
             self.limit=limit
             self.parent=ProtectedParent(FilesystemAuthority(0,profile.binding.uid,Path('/root'),'RUNTIME'))

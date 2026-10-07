@@ -105,14 +105,16 @@ def _identity(s):
     return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
 
 
-def _publish(parent,payload,manifest,capture,binding,production):
+def _publish(parent,payload,manifest,capture,binding,production,root_fixture=False):
     proof=verify_bootstrap_artifact(payload,manifest,capture,binding)
     path=Path(parent)
     if not path.is_absolute() or any(p in ('','..','.') for p in str(path).split('/')[1:]):_fail('BOOTSTRAP_PARENT_INVALID')
     owner=os.getuid();handles=[];links=[];payload_fd=None;stage_fd=None
     if production:
         if owner!=0 or os.geteuid()!=0 or not sys.flags.isolated:_fail('BOOTSTRAP_ROOT_ISOLATION_REQUIRED')
-        if str(path)!='/var/lib/rbridge-maintenance':_fail('BOOTSTRAP_PARENT_UNQUALIFIED')
+        if root_fixture:
+            if not re.fullmatch('/root/\\.rbridge-bootstrap-fixture-[0-9a-f]{32}',str(path)):_fail('BOOTSTRAP_PARENT_UNQUALIFIED')
+        elif str(path)!='/var/lib/rbridge-maintenance':_fail('BOOTSTRAP_PARENT_UNQUALIFIED')
     flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
     def stable(s):return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid)
     try:
@@ -170,6 +172,14 @@ def publish_bootstrap_artifact(parent,payload,manifest,capture,binding):
 
 def _publish_fixture_bootstrap(parent,payload,manifest,capture,binding):
     return _publish(parent,payload,manifest,capture,binding,False)
+
+
+def _publish_root_fixture_bootstrap(parent,payload,manifest,capture,binding):
+    """Protected byte mechanics only; actual origin belongs to the Root collector."""
+    if (os.getuid()!=0 or os.geteuid()!=0 or not sys.flags.isolated or not sys.flags.no_site
+            or not sys.flags.dont_write_bytecode or os.getcwd()!='/'):
+        _fail('BOOTSTRAP_ROOT_FIXTURE_CONTEXT_UNQUALIFIED')
+    return _publish(parent,payload,manifest,capture,binding,True,True)
 
 
 def main():

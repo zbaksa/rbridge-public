@@ -437,7 +437,7 @@ def verify_import_closure(toolkit_root,profile,qualification_request):
         path=getattr(module,'__file__',None)
         if path is None:continue
         if type(path) is not str:_fail('QUALIFICATION_PYTHON_IMPORT_PATH_UNQUALIFIED')
-        if (path not in files and path!=str(root)+'/ops/install/rbridge_install.py'
+        if (path not in files and path not in (str(root)+'/ops/install/rbridge_install.py',str(root)+'/ops/install/rbridge_bootstrap.py')
                 and not path.startswith(str(root)+'/ops/install/rbridge_installation/')):
             _fail('QUALIFICATION_PYTHON_IMPORT_PATH_UNQUALIFIED')
         imported.append({'module':name,'path':path})
