@@ -127,6 +127,9 @@ def verify_root_bundle_origin(profile,bundle):
     closures remain mandatory. No serialized bundle or cold PASS reconstitutes
     these live private origins.
     """
+    if type(bundle) is _QualifiedBundle and bundle not in _origins:
+        from .qualification_custody import verify_root_custody_origin
+        return verify_root_custody_origin(profile,bundle)
     row,request=_registered(profile,bundle)
     _pin,material,review,p,runtime_manifest,toolkit_manifest,_artifact,request_json,evidence_json,fixture_path=row
     p,root=_context(p,request);_materials(p,root,runtime_manifest,toolkit_manifest,request)
