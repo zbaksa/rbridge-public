@@ -93,6 +93,14 @@ class PauseLease:
         This is a lock/lease proof, never a stopped-service or writer proof.
         """
         if self.closed or time.monotonic()>=self.deadline:raise PauseError('PAUSE_LEASE_EXPIRED')
+        self.check_ownership()
+    def check_ownership(self):
+        """Prove the retained exclusion for containment, without admitting new work.
+
+        The maintenance deadline limits mutations and start authority. It does
+        not close the descriptor or suppress a fixed stop after uncertain start.
+        """
+        if self.closed:raise PauseError('PAUSE_LEASE_EXPIRED')
         try:
             if self.lock_guard:self.lock_guard.check()
             before=os.fstat(self.lock_fd);named=os.stat(self.profile.paths.lock_path,follow_symlinks=False)

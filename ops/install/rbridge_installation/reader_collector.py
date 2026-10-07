@@ -65,7 +65,7 @@ def _prepare_reader_input(profile,registry,fixtures,archive_captures,artifact_fi
             core[case['fixture_id']]=case
     mcp={};mcp_used=set()
     if mcp_cases is not None:
-        if type(mcp_cases) is not list or len(mcp_cases)!=2:_fail('READER_COLLECTOR_MCP_CASE_INVALID')
+        if type(mcp_cases) is not list or not 1<=len(mcp_cases)<=512:_fail('READER_COLLECTOR_MCP_CASE_INVALID')
         for case in mcp_cases:
             if (type(case) is not dict or type(case.get('fixture_id')) is not str or case['fixture_id'] in mcp
                     or case.get('transport')!='MCP' or case.get('provenance')!='SOURCE_PRODUCER'):_fail('READER_COLLECTOR_MCP_CASE_INVALID')
@@ -83,9 +83,10 @@ def _prepare_reader_input(profile,registry,fixtures,archive_captures,artifact_fi
         ids.add(f['fixture_id'])
         if f.get('transport')=='GITHUB':
             if f.get('case_id') not in ['C0'+str(n) for n in range(1,9)]:_fail('READER_COLLECTOR_CASES_INVALID')
-            if f['case_id']=='C01':
+            if f['case_id']=='C01' or f['case_id']=='C03' and f.get('provenance')=='AUTHENTIC_ARCHIVE':
                 capture=f.get('capture');expected=f.get('expected')
                 if type(capture) is not dict or type(expected) is not dict:_fail('READER_COLLECTOR_ARCHIVE_INVALID')
+                if f['case_id']=='C03' and expected.get('mode')!='LEGACY':_fail('READER_COLLECTOR_ARCHIVE_INVALID')
                 digest=capture.get('capture_sha256')
                 if (f.get('provenance')!='AUTHENTIC_ARCHIVE' or digest not in archives
                         or encode_report(capture)!=encode_report(archives[digest]) or capture.get('scope')!='AUTHENTICATED_GITHUB_READ'
@@ -100,7 +101,7 @@ def _prepare_reader_input(profile,registry,fixtures,archive_captures,artifact_fi
             elif f.get('provenance')!='SYNTHETIC':_fail('READER_COLLECTOR_CORE_CASE_ORIGIN_UNKNOWN')
         elif f.get('transport')=='MCP':
             if (f.get('case_id')!='C09' or f.get('era') not in ('legacy','modern')
-                    or f['era'] in eras or 'isolated_root' in f or 'transcript' in f):_fail('READER_COLLECTOR_MCP_CASE_INVALID')
+                    or 'isolated_root' in f or 'transcript' in f):_fail('READER_COLLECTOR_MCP_CASE_INVALID')
             if mcp_cases is not None:
                 if f['fixture_id'] not in mcp or encode_report(f)!=encode_report(mcp[f['fixture_id']]):
                     _fail('READER_COLLECTOR_MCP_CASE_CHANGED')

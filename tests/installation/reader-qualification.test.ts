@@ -4,7 +4,7 @@ import {readRBridgeMcpOutput,qualifyRBridgeReaders,createReferenceReaderRunner} 
 import type {McpReadClient,McpReaderScope} from '../../src/installation/rbridge-installation-client.js';
 import {canonicalRBridgeJson} from '../../src/domain/rbridgeCoreValidation.js';
 import type {RBridgeJsonValue,RBridgeExecutionReceiptV1} from '../../src/domain/rbridgeExecutionContract.js';
-import {fixture as githubFixture,core,rewrite,chunks,reseal,sha as carrierSha} from '../fixtures/rbridge-reader-carriers.js';
+import {fixture as githubFixture,core,rewrite,chunks,reseal,request,sha as carrierSha} from '../fixtures/rbridge-reader-carriers.js';
 import {readRBridgeGitHubCarrier} from '../../src/installation/githubCarrierReader.js';
 import type {ReaderFixture,ReaderRegistry} from '../../src/installation/readerQualification.js';
 import {Client,InMemoryTransport} from '@modelcontextprotocol/client';
@@ -40,12 +40,35 @@ describe('reader qualification and complete MCP output',()=>{
     const cases:ReaderFixture[]=[plain,positive,terminal,large,wrongDigest,wrongAuthor,replay,absent].map((f,n)=>({fixture_id:'fixture-'+n,case_id:('C0'+(n+1)) as ReaderFixture['case_id'],transport:'GITHUB',provenance:'SYNTHETIC',...(n===6?{replayed_at:'2026-10-06T10:00:00.000Z'}:{}),capture:f.capture,expected:f.expected,expected_verdict_sha256:sha(JSON.stringify(readRBridgeGitHubCarrier(f.capture,f.expected)))}));
     const m=fixture(),verdict=await readRBridgeMcpOutput(m.client,scope);cases.push({fixture_id:'fixture-9',case_id:'C09',transport:'MCP',provenance:'SYNTHETIC',client:m.client,expected:scope,expected_verdict_sha256:sha(JSON.stringify(verdict))});
     const registration={reader_id:'github-reference',source_sha256:'d'.repeat(64),entrypoint:'/srv/fixture/rbridgeReadResult.js',version:'1',transport:'GITHUB' as const,trusted_context_sha256:'c'.repeat(64),qualification_sha256:'f'.repeat(64),adoption_sha256:'f'.repeat(64)},registry:ReaderRegistry={readers:[registration,{...registration,reader_id:'mcp-reference',transport:'MCP'}],adoptions:[]};
-    const report=await qualifyRBridgeReaders(registry,{cases},createReferenceReaderRunner());expect(report.referenceAcceptance).toBe('PASS');expect(report.actualAcceptance).toBe('UNKNOWN');expect(report.acceptedCases).toEqual(['C01','C02','C03','C04','C05','C06','C07','C08','C09']);expect(report.invocations).toHaveLength(9);
+    const report=await qualifyRBridgeReaders(registry,{cases},createReferenceReaderRunner());expect(report.referenceAcceptance).toBe('UNKNOWN');expect(report.actualAcceptance).toBe('UNKNOWN');expect(report.reason_codes).toContain('READER_SEMANTIC_MATRIX_INCOMPLETE');expect(report.acceptedCases).toEqual(['C01','C02','C03','C04','C05','C06','C07','C08','C09']);expect(report.invocations).toHaveLength(9);
     validateInstallContract(report,'ReaderQualificationReport');for(const row of report.invocations){expect(sha(row.input_json)).toBe(row.input_sha256);expect(sha(row.verdict_json)).toBe(row.output_sha256);}
     const mislabeled=cases.map(f=>f.case_id==='C02'?{...cases[0]!,fixture_id:f.fixture_id,case_id:f.case_id}:f);const wrongCase=await qualifyRBridgeReaders(registry,{cases:mislabeled},createReferenceReaderRunner());expect(wrongCase.actualAcceptance).toBe('FAIL');expect(wrongCase.reason_codes).toContain('READER_CASE_MEANING_INVALID');
     expect((await qualifyRBridgeReaders({...registry,readers:[{...registration,version:'wrong-version'}]},{cases},createReferenceReaderRunner())).actualAcceptance).toBe('FAIL');
     const adoption={schema:'RBRIDGE_READER_ADOPTION_V1' as const,reader_id:registration.reader_id,owner:'fixture-owner',workflow:'fixture-workflow',entrypoint:registration.entrypoint,source_sha256:'e'.repeat(64),version:'1',trusted_context_sha256:registration.trusted_context_sha256,fixture_set_sha256:'f'.repeat(64),adopted_at:'2026-10-06T00:00:00.000Z'};
     expect((await qualifyRBridgeReaders({...registry,adoptions:[adoption]},{cases},createReferenceReaderRunner())).actualAcceptance).toBe('FAIL');
+  });
+  it('admits correctly rejected legacy raw-body and rehashed inner-scope negatives without claiming complete coverage',async()=>{
+    const body=JSON.stringify(request,null,2),legacy=githubFixture({status:'BLOCKED',reason:'REMOTE_BRIDGE_V2_REQUEST_EXPIRED',requestSha256:sha(body),completedAt:'2026-10-05T11:00:00.000Z'},body);
+    legacy.expected.digest_branch='RAW_BODY_PRECLAIM_REJECTION';
+    const forged=core();forged.receipt.principalId='attacker';(forged.envelope as Record<string,unknown>).resultSha256=sha(JSON.stringify(forged.payload));rewrite(forged);
+    const registration={reader_id:'github-reference',source_sha256:'d'.repeat(64),entrypoint:'/srv/fixture/rbridgeReadResult.js',version:'1',transport:'GITHUB' as const,trusted_context_sha256:'c'.repeat(64),qualification_sha256:'f'.repeat(64),adoption_sha256:'f'.repeat(64)};
+    const cases:ReaderFixture[]=[['C03',legacy],['C06',forged]].map(([caseId,f])=>{const value=f as typeof legacy;return {fixture_id:String(caseId),case_id:caseId as ReaderFixture['case_id'],transport:'GITHUB',provenance:'SYNTHETIC',capture:value.capture,expected:value.expected,expected_verdict_sha256:sha(JSON.stringify(readRBridgeGitHubCarrier(value.capture,value.expected)))};});
+    const report=await qualifyRBridgeReaders({readers:[registration],adoptions:[]},{cases},createReferenceReaderRunner());
+    expect(report.referenceAcceptance).toBe('UNKNOWN');expect(report.acceptedCases).toEqual(['C03','C06']);
+    expect(report.reason_codes).not.toContain('READER_CASE_MEANING_INVALID');
+  });
+  it('qualifies C04 missing assembly and C09 NOT_FOUND as negative invocations while keeping their matrix incomplete',async()=>{
+    const large=githubFixture();chunks(large);large.capture.comments.shift();reseal(large);
+    const githubVerdict=readRBridgeGitHubCarrier(large.capture,large.expected);
+    expect(githubVerdict.kind).toBe('INVALID');
+    const m=fixture();const original=m.client.callTool;
+    m.client.callTool=async(input,options)=>input.name==='rbridge_status'?{content:[{type:'text',text:JSON.stringify({schema:'RBRIDGE_MCP_CORE_QUERY_RESULT_V1',tool:input.name,result:{status:'NOT_FOUND',operationId:scope.operationId,principalId:scope.principalId,targetInstanceId:scope.targetInstanceId}})}],structuredContent:{schema:'RBRIDGE_MCP_CORE_QUERY_RESULT_V1',tool:input.name,result:{status:'NOT_FOUND',operationId:scope.operationId,principalId:scope.principalId,targetInstanceId:scope.targetInstanceId}}}:original(input,options);
+    const mcpVerdict=await readRBridgeMcpOutput(m.client,scope);expect(mcpVerdict.status).toBe('NOT_FOUND');
+    const registration={reader_id:'github-reference',source_sha256:'d'.repeat(64),entrypoint:'/srv/fixture/rbridgeReadResult.js',version:'1',transport:'GITHUB' as const,trusted_context_sha256:'c'.repeat(64),qualification_sha256:'f'.repeat(64),adoption_sha256:'f'.repeat(64)};
+    const cases:ReaderFixture[]=[{fixture_id:'missing-carrier',case_id:'C04',transport:'GITHUB',provenance:'SYNTHETIC',capture:large.capture,expected:large.expected,expected_verdict_sha256:sha(JSON.stringify(githubVerdict))},{fixture_id:'mcp-not-found',case_id:'C09',transport:'MCP',provenance:'SYNTHETIC',client:m.client,expected:scope,expected_verdict_sha256:sha(JSON.stringify(mcpVerdict))}];
+    const report=await qualifyRBridgeReaders({readers:[registration,{...registration,reader_id:'mcp-reference',transport:'MCP'}],adoptions:[]},{cases},createReferenceReaderRunner());
+    expect(report.referenceAcceptance).toBe('UNKNOWN');expect(report.acceptedCases).toEqual(['C04','C09']);
+    expect(report.reason_codes).not.toContain('READER_CASE_MEANING_INVALID');
   });
   it.each(['legacy','modern'] as const)('genuine official SDK records package and negotiated protocol separately (%s)',async era=>{
     const f=fixture(),[wire,serverWire]=InMemoryTransport.createLinkedPair(),handle=serveStdio(()=>createRBridgeMcpSafeServer({binding:{authenticatedSubject:'uid:1027',principalId:scope.principalId,targetInstanceId:scope.targetInstanceId},bindingProvider:async()=>({schema:'RBRIDGE_CORE_BINDING_V1',journalSchema:'RBRIDGE_EXECUTION_JOURNAL_V1',runtimeUid:1027,principalId:scope.principalId,targetInstanceId:scope.targetInstanceId,policySha256:scope.policy_sha256,enabledActions:RBRIDGE_ENABLED_ACTIONS}),core:{async submit(){throw new Error('READER_MUST_NOT_SUBMIT');},async status(){return {status:'RECEIPT',receipt:f.receipt};},async result(_id,cursor,maxBytes){const part=f.bytes.subarray(cursor,cursor+maxBytes);return {status:'RESULT',receipt:f.receipt,resultSha256:f.receipt.resultSha256!,cursor,nextCursor:cursor+part.length,eof:cursor+part.length===f.bytes.length,dataBase64:part.toString('base64')};},async requestCancel(){throw new Error('READER_MUST_NOT_CANCEL');}}}),{transport:serverWire,legacy:'serve'}),client=new Client({name:'fixture-read-only',version:'source-fixture'},{versionNegotiation:{mode:era==='legacy'?'legacy':{pin:'2026-07-28'}}});

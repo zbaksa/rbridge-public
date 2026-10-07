@@ -4,6 +4,8 @@ RBridge is currently **Linux/systemd-first**. This document describes the suppor
 
 For a P2A upgrade of an existing service, follow the [approved installation design](superpowers/specs/2026-10-05-p2a-installation-design.md) and [implementation plan](superpowers/plans/2026-10-06-p2a-installation-native.md). The account creation and first-service setup examples below are for a new deployment. They do not authorize an existing service switch.
 
+The Task16 draft retains containment exclusion after maintenance expiry without extending start authority. A timed-out helper can close its process journal only after complete retained identity, ready pidfds and two fresh empty session observations; its operation still fails. Reader qualification checks mandatory semantic variants within C01–C09. The protected Core/MCP producers still lack parts of that negative matrix, so their current positive cases leave full reader qualification UNKNOWN. The staging-ancestor rename refusal fixture also remains open. These source changes do not qualify an owner command or a production switch.
+
 ## 1. Runtime requirements
 
 Required for the base GitHub transport:

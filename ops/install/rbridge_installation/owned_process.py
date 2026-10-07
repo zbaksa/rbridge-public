@@ -147,12 +147,12 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
         raise
     _pending_sessions[child.pid]={'argv':[pin.path,*args],'executable_sha256':pin.sha256}
     handles={}; observed={}; out=bytearray(); errors=bytearray()
-    deadline=time.monotonic()+timeout_ms/1000; parent=None; released=ready is None; pending=memoryview(input_bytes)
+    deadline=time.monotonic()+timeout_ms/1000; parent=None; family_unclassified=False; released=ready is None; pending=memoryview(input_bytes)
     proof={'schema':'RBRIDGE_OWNED_HELPER_SESSION_V1','scope':'ROOT_FIXED_PROCESS_OBSERVATION',
         'status':'UNKNOWN','pid':child.pid,'argv':[pin.path,*args],
         'executable_sha256':pin.sha256,'input_sha256':hashlib.sha256(input_bytes).hexdigest(),'processes':[]}
-    def census():
-        rows=_session_rows(child.pid,min(deadline,time.monotonic()+5))
+    def observe_family(scan_deadline):
+        rows=_session_rows(child.pid,scan_deadline)
         if rows:
             nonlocal parent
             actual=next((r for r in rows if r['pid']==child.pid),None)
@@ -176,6 +176,14 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
                         raise
                     handles[pid]=handle; observed[pid]=row
         return rows
+    def census(scan_deadline=None):
+        nonlocal family_unclassified
+        try:return observe_family(min(deadline,time.monotonic()+5) if scan_deadline is None else scan_deadline)
+        except (InstallationError,OSError,UnicodeError) as error:
+            # Deadline exhaustion alone is an incomplete operation, not an
+            # identity mismatch. Cleanup must perform a fresh complete census.
+            if str(error)!='OWNED_HELPER_DEADLINE':family_unclassified=True
+            raise
     def journal_observation():
         if census():return
         if census() or not handles:_fail('OWNED_HELPER_FAMILY_UNSETTLED')
@@ -234,6 +242,11 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
     finally:
         try:
             selector.close()
+            # A failed IO/deadline result can still have a fully identified,
+            # contained family. Examine it under a separate bounded cleanup
+            # window before signalling; never clear a prior identity failure.
+            try:census(time.monotonic()+5)
+            except (InstallationError,OSError,UnicodeError):family_unclassified=True
             # Signal only processes whose exact identities this launch retained.
             for handle in reversed(list(handles.values())):
                 try: signal.pidfd_send_signal(handle,signal.SIGKILL)
@@ -255,12 +268,13 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
                 _fail('OWNED_HELPER_FAMILY_UNSETTLED')
             members={pid:{'pid':pid,'start_ticks':row['start_ticks']} for pid,row in observed.items()}
             members.setdefault(child.pid,{'pid':child.pid,'start_ticks':proof.get('start_ticks','0')})
-            # Cleanup after an unclassified observation cannot close its
-            # durable history. A failed helper exit may be settled, but only
-            # when the complete original launch/IO/identity proof completed.
-            if proof['status']=='PASS':
+            # SETTLED records process containment, never operation success.
+            # Complete retained identities, ready pidfds and two empty censuses
+            # permit closure after timeout; unclassified observations do not.
+            if not family_unclassified and (proof['status']=='PASS' or parent is not None):
                 journal._settled([members[pid] for pid in sorted(members)],handles)
                 _pending_sessions.pop(child.pid,None)
+            elif proof['status']=='PASS':_fail('OWNED_HELPER_FAMILY_UNCLASSIFIED')
         finally:
             for handle in handles.values():os.close(handle)
             for stream in (child.stdin,child.stdout,child.stderr):stream.close()

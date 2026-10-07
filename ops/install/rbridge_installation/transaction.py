@@ -11,6 +11,7 @@ import json
 import os
 import re
 import stat
+import time
 import weakref
 from .models import InstallationError,record,encode_report,report_sha256
 from .profile import parse_profile
@@ -188,7 +189,7 @@ def _hold(prepared,backend,reason):
     prepared.poisoned=True
     if prepared.lease is None:return _result(prepared,'BLOCKED',2,'HOLD_UNSETTLED',(reason,'EXCLUSION_NOT_PROVEN'))
     try:
-        prepared.lease.check_exclusion()
+        prepared.lease.check_ownership()
         try:backend.stop_unit(prepared.profile.service.unit)
         except (InstallationError,OSError):pass
         if prepared.scope!='FIXTURE_AUTHORITY_ONLY':
@@ -249,6 +250,11 @@ def apply_installation(prepared,authorization,backend):
         _authorization(prepared,authorization)
         if prepared.config.session.observed()!=prepared.config.after_sha256:raise TransactionError('TRANSACTION_CONFIG_DRIFT')
         prepared.pointer.session.check()
+        # Reserve the fixed start timeout, installed acceptance window and one
+        # containment stop before recording any durable start intent.
+        reserve_ms=2*p.budget.stop_ms+p.budget.acceptance_ms
+        if prepared.lease.deadline-time.monotonic()<=reserve_ms/1000:
+            raise TransactionError('START_WINDOW_BUDGET_INSUFFICIENT')
         ledger.append('START_ATTEMPTED',{'profile_sha256':prepared.profile_sha256,'runtime_manifest_sha256':prepared.runtime_manifest.sha256,'pointer_sha256':prepared.pointer.after_sha256,'config_sha256':prepared.config.after_sha256})
         prepared.start_call_issued=True;backend.start_candidate(prepared);prepared.lease.check_exclusion()
         invocation=backend.observe_candidate(prepared)

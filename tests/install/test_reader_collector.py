@@ -116,5 +116,23 @@ class ReaderCollectorTests(unittest.TestCase):
         self.assertRaises(ValueError,self.prepare,self.profile,self.registry,{'cases':cases[:-1]},[self.capture],
             self.fixture['artifact'],self.home,mcp_cases=produced)
 
+    def test_authentic_archive_can_supply_legacy_rejection_case_without_core_origin(self):
+        cases=copy.deepcopy(self.cases);cases[0]['case_id']='C03';cases[0]['expected']['mode']='LEGACY'
+        packet=self.prepare(self.profile,self.registry,{'cases':cases},[self.capture],self.fixture['artifact'],self.home)
+        self.assertEqual(packet['fixtures']['cases'][0]['case_id'],'C03')
+        cases[0]['expected']['mode']='CORE'
+        self.assertRaises(ValueError,self.prepare,self.profile,self.registry,{'cases':cases},[self.capture],self.fixture['artifact'],self.home)
+
+    def test_multiple_mcp_cases_per_era_keep_each_exact_producer_preimage(self):
+        cases=copy.deepcopy(self.cases)
+        for case in cases[1:]:case['provenance']='SOURCE_PRODUCER'
+        negative=copy.deepcopy(cases[1]);negative['fixture_id']='source-mcp-legacy-negative'
+        cases.append(negative);produced=copy.deepcopy(cases[1:])
+        packet=self.prepare(self.profile,self.registry,{'cases':cases},[self.capture],self.fixture['artifact'],self.home,mcp_cases=produced)
+        self.assertEqual(packet['fixtures']['cases'],cases)
+        changed=copy.deepcopy(produced);changed[-1]['expected_verdict_sha256']='f'*64
+        self.assertRaisesRegex(ValueError,'MCP_CASE_CHANGED',self.prepare,self.profile,self.registry,
+            {'cases':cases},[self.capture],self.fixture['artifact'],self.home,mcp_cases=changed)
+
 
 if __name__=='__main__':unittest.main()

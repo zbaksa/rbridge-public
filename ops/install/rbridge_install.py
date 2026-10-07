@@ -1,9 +1,9 @@
 #!/usr/bin/python3
 """Fixed protected-toolkit entry point. No source checkout is a root installer.
 
-Preparation never grants switch permission. Unsettled transactions remain in the
-foreground for the bounded owner-present window and leave their durable hold on
-exit; a flock is never claimed to survive process death.
+Preparation never grants switch permission. An unsettled transaction retains
+foreground exclusion until owner interruption or loss of its ownership proof;
+a flock is never claimed to survive process death.
 """
 import hashlib
 import importlib.util
@@ -128,18 +128,18 @@ def import_protected_toolkit(value):
         for fd in reversed(handles):os.close(fd)
 
 def foreground_hold(prepared,result):
-    """No automatic old start or ownership release; deadline leaves a durable block."""
+    """An expired maintenance window cannot automatically release an unsettled hold."""
     from rbridge_installation.models import encode_report
     emit(json.loads(encode_report(result)))
     if result.exit_code==0 or prepared.lease is None:return result.exit_code
     next_report=time.monotonic()+30
-    while time.monotonic()<prepared.lease.deadline:
-        try:prepared.lease.check_exclusion()
+    while result.phase=='HOLD_UNSETTLED' or time.monotonic()<prepared.lease.deadline:
+        try:prepared.lease.check_ownership()
         except ValueError:break
         if time.monotonic()>=next_report:
             emit({'schema':'RBRIDGE_INSTALL_FOREGROUND_HOLD_V1','status':'HOLD','phase':result.phase,'transaction_id':prepared.ledger.transaction_id,'old_restart_forbidden':True,'lock_scope':'CURRENT_FOREGROUND_PROCESS_ONLY'});next_report=time.monotonic()+30
-        time.sleep(min(1,max(0,prepared.lease.deadline-time.monotonic())))
-    emit({'schema':'RBRIDGE_INSTALL_FOREGROUND_HOLD_V1','status':'UNKNOWN','phase':'HOLD_UNSETTLED','transaction_id':prepared.ledger.transaction_id,'old_restart_forbidden':True,'lock_scope':'REQUIRES_FRESH_REACQUISITION_AFTER_EXIT','reason_codes':['FOREGROUND_WINDOW_ENDED']})
+        time.sleep(1)
+    emit({'schema':'RBRIDGE_INSTALL_FOREGROUND_HOLD_V1','status':'UNKNOWN','phase':'HOLD_UNSETTLED','transaction_id':prepared.ledger.transaction_id,'old_restart_forbidden':True,'lock_scope':'REQUIRES_FRESH_REACQUISITION_AFTER_EXIT','reason_codes':['FOREGROUND_OWNERSHIP_LOST' if result.phase=='HOLD_UNSETTLED' else 'FOREGROUND_WINDOW_ENDED']})
     return 2
 
 def dispatch(operation,value,*,reviewed_command=None):

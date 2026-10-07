@@ -13,6 +13,7 @@ const canonical=(v:unknown)=>canonicalRBridgeJson(v as RBridgeJsonValue),hash=(v
 function fail(reason:string):never{throw new Error(reason);}
 function object(v:unknown){if(!v||typeof v!=='object'||Array.isArray(v))fail('MCP_READER_FIELDS_INVALID');return v as Record<string,unknown>;}
 function fields(v:Record<string,unknown>,required:readonly string[],optional:readonly string[]=[]){if(required.some(k=>!Object.hasOwn(v,k))||Object.keys(v).some(k=>![...required,...optional].includes(k)))fail('MCP_READER_FIELDS_INVALID');}
+function parsed<T>(run:()=>T,reason:string):T{try{return run();}catch{fail(reason);}}
 export interface McpQueryEvidence{name:string;arguments_json:string;response_json:string;response_sha256:string;}
 export type McpReaderResult={scope:'REFERENCE_MCP_READ';status:'RESULT'|'TERMINAL'|'NOT_READY'|'NOT_FOUND'|'UNAVAILABLE'|'INVALID';reason_codes:readonly string[];receipt?:RBridgeExecutionReceiptV1;output?:unknown;output_sha256?:string;raw_output_base64?:string;response_sha256?:readonly string[];query_evidence:readonly McpQueryEvidence[];sdk_package_version?:string;negotiated_protocol_version?:string;protocol_era?:'legacy'|'modern';};
 export async function readRBridgeMcpOutput(client:McpReadClient,scope:McpReaderScope):Promise<McpReaderResult>{
@@ -42,25 +43,26 @@ export async function readRBridgeMcpOutput(client:McpReadClient,scope:McpReaderS
     }
     const capability=await capabilities();
     async function core(name:'rbridge_status'|'rbridge_result',args:Record<string,unknown>){
-      const {row:r,isError}=await query(name,args);if(r.schema!=='RBRIDGE_MCP_CORE_QUERY_RESULT_V1'||r.tool!==name)fail('MCP_READER_BINDING_INVALID');
+      const {row:r,isError}=await query(name,args);if(r.schema!=='RBRIDGE_MCP_CORE_QUERY_RESULT_V1')fail('MCP_READER_SCHEMA_INVALID');if(r.tool!==name)fail('MCP_READER_BINDING_INVALID');
       if(Object.hasOwn(r,'result')){fields(r,['schema','tool','result']);if(isError)fail('MCP_READER_QUERY_UNAVAILABLE');return r.result;}
       fields(r,['schema','tool','operationId','principalId','targetInstanceId','status','reason']);if(r.operationId!==scope.operationId||r.principalId!==scope.principalId||r.targetInstanceId!==scope.targetInstanceId||!isError||!['BLOCKED','UNCERTAIN'].includes(String(r.status))||!['RBRIDGE_MCP_ABORTED_BEFORE_QUERY','RBRIDGE_MCP_CORE_NOT_CONFIGURED','RBRIDGE_MCP_CORE_UNAVAILABLE','RBRIDGE_MCP_CORE_RESULT_UNKNOWN'].includes(String(r.reason)))fail('MCP_READER_BINDING_INVALID');fail('MCP_READER_QUERY_UNAVAILABLE');
     }
-    const found=parseRBridgeCoreLookupResult(await core('rbridge_status',{operationId:scope.operationId}),scope);
+    const lookup=await core('rbridge_status',{operationId:scope.operationId}),found=parsed(()=>parseRBridgeCoreLookupResult(lookup,scope),'MCP_READER_STATUS_INVALID');
     const metadata={sdk_package_version:client.sdk_package_version,negotiated_protocol_version:client.negotiated_protocol_version,protocol_era:client.protocol_era};
     if(found.status==='NOT_FOUND')return {...base,status:'NOT_FOUND',reason_codes:[],response_sha256:responseHashes,...metadata};
-    const receipt=parseRBridgeExecutionReceipt(found.receipt,scope,scope.intent_sha256),receiptSHA=hash(receipt);
+    const receipt=parsed(()=>parseRBridgeExecutionReceipt(found.receipt,scope,scope.intent_sha256),'MCP_READER_RECEIPT_INVALID'),receiptSHA=hash(receipt);
     if(receipt.policy.policySha256!==scope.policy_sha256||(scope.receipt_sha256&&scope.receipt_sha256!==receiptSHA))fail('MCP_READER_RECEIPT_INVALID');
     if(receipt.phase!=='TERMINAL'){if(receipt.resultSha256||scope.output_sha256)fail('MCP_READER_RECEIPT_INVALID');return {...base,status:'NOT_READY',reason_codes:[],receipt,response_sha256:responseHashes,...metadata};}
     if(!receipt.resultSha256){if(receipt.outcome==='PASS'||scope.output_sha256)fail('MCP_READER_OUTPUT_MISSING');return {...base,status:'TERMINAL',reason_codes:[],receipt,response_sha256:responseHashes,...metadata};}
     const parts:Buffer[]=[];let cursor=0,eof=false;
     for(let n=0;n<=8388608/32768&&!eof;n++){
-      const page=parseRBridgeCoreResultPage(await core('rbridge_result',{operationId:scope.operationId,cursor,maxBytes:32768}),scope,cursor,32768);
+      const rawPage=await core('rbridge_result',{operationId:scope.operationId,cursor,maxBytes:32768}),page=parsed(()=>parseRBridgeCoreResultPage(rawPage,scope,cursor,32768),'MCP_READER_PAGE_INVALID');
       if(page.status!=='RESULT'||hash(page.receipt)!==receiptSHA||page.resultSha256!==receipt.resultSha256)fail('MCP_READER_PAGE_RECEIPT_INVALID');parts.push(Buffer.from(page.dataBase64,'base64'));cursor=page.nextCursor;eof=page.eof;
     }
     if(!eof)fail('MCP_READER_PAGE_LIMIT');const bytes=Buffer.concat(parts,cursor);if(sha(bytes)!==receipt.resultSha256||(scope.output_sha256&&sha(bytes)!==scope.output_sha256))fail('MCP_READER_WHOLE_DIGEST_INVALID');
-    const output=parseRBridgeCarrierJson(bytes,8388608);if(!bytes.equals(Buffer.from(canonical(output))))fail('MCP_READER_CANONICAL_OUTPUT_INVALID');
-    const final=parseRBridgeCoreLookupResult(await core('rbridge_status',{operationId:scope.operationId}),scope);if(final.status!=='RECEIPT'||hash(final.receipt)!==receiptSHA||hash(await capabilities())!==hash(capability))fail('MCP_READER_FINAL_IDENTITY_CHANGED');
+    parsed(()=>new TextDecoder('utf-8',{fatal:true}).decode(bytes),'MCP_READER_UTF8_INVALID');
+    const output=parsed(()=>parseRBridgeCarrierJson(bytes,8388608),'MCP_READER_JSON_INVALID');if(!bytes.equals(Buffer.from(canonical(output))))fail('MCP_READER_CANONICAL_OUTPUT_INVALID');
+    const finalLookup=await core('rbridge_status',{operationId:scope.operationId}),final=parsed(()=>parseRBridgeCoreLookupResult(finalLookup,scope),'MCP_READER_STATUS_INVALID');if(final.status!=='RECEIPT'||hash(final.receipt)!==receiptSHA||hash(await capabilities())!==hash(capability))fail('MCP_READER_FINAL_IDENTITY_CHANGED');
     return {...base,status:'RESULT',reason_codes:[],receipt,output,output_sha256:receipt.resultSha256,raw_output_base64:bytes.toString('base64'),response_sha256:responseHashes,...metadata};
   }catch(error){const reason=error instanceof Error&&/^MCP_READER_[A-Z_]+$/.test(error.message)?error.message:'MCP_READER_INPUT_INVALID';return {...base,status:['MCP_READER_DEADLINE','MCP_READER_OWNER_UNAVAILABLE','MCP_READER_QUERY_UNAVAILABLE'].includes(reason)?'UNAVAILABLE':'INVALID',reason_codes:[reason]};}
 }
@@ -70,21 +72,87 @@ export type ReaderFixture={fixture_id:string;case_id:'C01'|'C02'|'C03'|'C04'|'C0
 export interface ReaderFixtureSet{cases:readonly ReaderFixture[];}
 function assertCaseMeaning(f:ReaderFixture,value:unknown){
   const v=object(value);let valid=false;
-  if(f.transport==='MCP')valid=f.case_id==='C09'&&v.status==='RESULT'&&typeof v.output_sha256==='string'&&typeof v.raw_output_base64==='string'&&Array.isArray(v.query_evidence)&&v.query_evidence.length>0;
+  if(f.transport==='MCP')valid=f.case_id==='C09'&&Array.isArray(v.query_evidence)&&(
+    v.status==='RESULT'&&typeof v.output_sha256==='string'&&typeof v.raw_output_base64==='string'&&v.query_evidence.length>0
+    ||['NOT_FOUND','NOT_READY','TERMINAL','UNAVAILABLE'].includes(String(v.status))&&!Object.hasOwn(v,'output')&&v.query_evidence.length>0
+    ||v.status==='INVALID'&&Array.isArray(v.reason_codes)&&v.reason_codes.length>0&&v.reason_codes.every(r=>/^MCP_READER_[A-Z_]+$/.test(String(r))));
   else{
     const e=f.expected,c=f.capture;
     switch(f.case_id){
       case 'C01':valid=e.mode==='LEGACY'&&v.kind==='LEGACY_RESULT'&&v.status==='PASS';break;
       case 'C02':valid=e.mode==='CORE'&&v.kind==='CORE_RESULT'&&v.status==='PASS';break;
-      case 'C03':valid=e.mode==='CORE'&&v.kind==='CORE_RESULT'&&['FAIL','BLOCKED','UNCERTAIN'].includes(String(v.status));break;
-      case 'C04':valid=v.kind==='LEGACY_RESULT'||v.kind==='CORE_RESULT';valid=valid&&v.status==='PASS'&&!!v.evidence&&Buffer.from(String(object(v.evidence).raw_envelope_base64),'base64').length>60000&&c.comments.some(row=>row.body.includes('"schema": "COCWIN_REMOTE_BRIDGE_RESULT_MANIFEST_V1"'));break;
+      case 'C03':valid=e.mode==='CORE'&&v.kind==='CORE_RESULT'&&['FAIL','BLOCKED','UNCERTAIN'].includes(String(v.status))||e.mode==='LEGACY'&&v.kind==='LEGACY_REJECTION'&&['BLOCKED','UNCERTAIN'].includes(String(v.status))&&!Object.hasOwn(v,'output')&&!Object.hasOwn(v,'receipt');break;
+      case 'C04':valid=((v.kind==='LEGACY_RESULT'||v.kind==='CORE_RESULT')&&v.status==='PASS'&&!!v.evidence&&Buffer.from(String(object(v.evidence).raw_envelope_base64),'base64').length>60000&&c.comments.some(row=>row.body.includes('"schema": "COCWIN_REMOTE_BRIDGE_RESULT_MANIFEST_V1"')))||v.kind==='INVALID'&&Array.isArray(v.reason_codes)&&v.reason_codes.some(r=>/^CARRIER_(CHUNK_|MANIFEST_|ORPHAN_CHUNK|RESULT_CONFLICT|WHOLE_DIGEST_)/.test(String(r)));break;
       case 'C05':valid=v.kind==='INVALID'&&Array.isArray(v.reason_codes)&&v.reason_codes.some(r=>String(r).includes('DIGEST')||String(r).includes('SHA'));break;
-      case 'C06':valid=v.kind==='INVALID'&&(c.issue.author!==e.author||c.repository!==e.repository||c.viewer!==e.author||c.comments.some(row=>row.author!==e.author));break;
+      case 'C06':valid=v.kind==='INVALID'&&trustNegatives(f).length>0;break;
       case 'C07':{const request=object(parseRBridgeCarrierJson(Buffer.from(c.issue.body),65536)),replayed=f.replayed_at?new Date(f.replayed_at):undefined;valid=!!replayed&&Number.isFinite(replayed.getTime())&&replayed.toISOString()===f.replayed_at&&replayed.getTime()>Date.parse(String(request.expiresAt))&&e.mode==='CORE'&&v.kind==='CORE_RESULT'&&v.status==='PASS'&&c.issue.state==='CLOSED'&&!!e.receipt_sha256&&!!e.output_sha256&&!!e.selected_comment_id&&object(v.evidence).selected_comment_id===e.selected_comment_id&&c.comments.filter(row=>row.body===c.comments.find(row=>row.id===e.selected_comment_id)?.body).length>1;break;}
       case 'C08':valid=v.kind==='UNAVAILABLE'&&v.status==='UNKNOWN'&&c.comments.length===0;break;
     }
   }
   if(!valid)fail('READER_CASE_MEANING_INVALID');
+}
+function trustNegatives(f:Extract<ReaderFixture,{transport:'GITHUB'}>):string[]{
+  const {capture:c,expected:e}=f,tags:string[]=[];
+  if(c.issue.author!==e.author||c.viewer!==e.author||c.comments.some(row=>row.author!==e.author))tags.push('AUTHOR');
+  if(c.repository!==e.repository)tags.push('REPOSITORY');
+  if(c.issue.number!==e.issue_number||c.issue.url!==`https://github.com/${e.repository}/issues/${e.issue_number}`)tags.push('ISSUE');
+  if(c.issue.title!==e.request_title||sha(c.issue.body)!==e.request_body_sha256)tags.push('REQUEST');
+  for(const comment of c.comments){
+    try{
+      if(!comment.body.startsWith('```json\n')||!comment.body.endsWith('\n```\n'))continue;
+      const envelope=object(parseRBridgeCarrierJson(Buffer.from(comment.body.slice(8,-5)),65536));
+      if(envelope.requestId!==e.request_id)tags.push('REQUEST');
+      if(envelope.issueNumber!==e.issue_number)tags.push('ISSUE');
+      if(!envelope.operationResult)continue;
+      const payload=object(envelope.operationResult);if(payload.schema!=='RBRIDGE_GITHUB_CORE_RESULT_V1'||!e.scope)continue;
+      const receipt=object(payload.receipt),scopeChanged=['operationId','principalId','targetInstanceId'].some(k=>receipt[k]!==e.scope![k as keyof typeof e.scope]);
+      if(scopeChanged)tags.push('SCOPE');
+      if(envelope.resultSha256===sha(JSON.stringify(payload))&&(scopeChanged||receipt.intentSha256!==e.intent_sha256
+        ||object(receipt.policy).policySha256!==e.policy_sha256||!!e.receipt_sha256&&hash(receipt)!==e.receipt_sha256))tags.push('FORGED_RECEIPT');
+    }catch{/* Malformed bytes do not count as a demonstrated trust variant. */}
+  }
+  return tags;
+}
+const requiredGitHubSemantics=['C01_HEALTH','C01_FILE','C02_HEALTH','C02_FILE','C03_CORE_FAIL','C03_CORE_BLOCKED','C03_CORE_UNCERTAIN','C03_CORE_TERMINATED','C03_LEGACY_BLOCKED','C03_LEGACY_UNCERTAIN','C03_RAW_REJECTION','C04_LARGE','C04_MISSING','C04_CONFLICTING','C04_MIXED','C04_CORRUPT','C05_OUTER_DIGEST','C05_REQUEST_DIGEST','C05_OUTPUT_DIGEST','C06_AUTHOR','C06_REPOSITORY','C06_ISSUE','C06_REQUEST','C06_SCOPE','C06_FORGED_RECEIPT','C07','C08'];
+const requiredMcpSemantics=['RESULT','NOT_FOUND','NOT_READY','TERMINAL','UNAVAILABLE','BINDING','SCHEMA','CURSOR','DIGEST','UTF8','JSON','CANONICAL'].flatMap(tag=>['legacy','modern'].map(era=>`C09_${era}_${tag}`));
+function semanticCoverage(f:ReaderFixture,value:unknown):string[]{
+  const v=object(value),reasons=Array.isArray(v.reason_codes)?v.reason_codes.map(String):[],tags:string[]=[];
+  if(f.transport==='MCP'){
+    const prefix=`C09_${f.client.protocol_era}_`;
+    if(['RESULT','NOT_FOUND','NOT_READY','TERMINAL','UNAVAILABLE'].includes(String(v.status)))tags.push(prefix+String(v.status));
+    if(reasons.some(r=>/MCP_READER_(BINDING|RECEIPT|VERSION|FINAL_IDENTITY|PAGE_RECEIPT)_/.test(r)))tags.push(prefix+'BINDING');
+    if(reasons.some(r=>/MCP_READER_(FIELDS|FRAME|SCHEMA)_/.test(r)))tags.push(prefix+'SCHEMA');
+    if(reasons.includes('MCP_READER_PAGE_INVALID')&&Array.isArray(v.query_evidence)){
+      for(const raw of v.query_evidence){try{
+        const query=object(raw);if(query.name!=='rbridge_result')continue;
+        const args=object(parseRBridgeCarrierJson(Buffer.from(String(query.arguments_json)),131072)),row=object(parseRBridgeCarrierJson(Buffer.from(String(query.response_json)),131072)),page=object(row.result);
+        if(page.status==='RESULT'&&(page.cursor!==args.cursor||typeof page.nextCursor!=='number'||!Number.isSafeInteger(page.nextCursor)||typeof page.cursor!=='number'||page.nextCursor<page.cursor||page.nextCursor-page.cursor!==Buffer.from(String(page.dataBase64),'base64').length))tags.push(prefix+'CURSOR');
+      }catch{/* Unparsed pages do not prove a cursor variant. */}}
+    }
+    if(reasons.includes('MCP_READER_WHOLE_DIGEST_INVALID'))tags.push(prefix+'DIGEST');
+    if(reasons.includes('MCP_READER_UTF8_INVALID'))tags.push(prefix+'UTF8');
+    if(reasons.includes('MCP_READER_JSON_INVALID'))tags.push(prefix+'JSON');
+    if(reasons.includes('MCP_READER_CANONICAL_OUTPUT_INVALID'))tags.push(prefix+'CANONICAL');
+    return tags;
+  }
+  if(['C01','C02'].includes(f.case_id)){
+    try{const request=object(parseRBridgeCarrierJson(Buffer.from(f.capture.issue.body),65536)),kind=object(request.operation).kind;if(['HEALTH','FILE'].includes(String(kind)))tags.push(f.case_id+'_'+String(kind));}catch{/* No semantic coverage from unparsed input. */}
+  }else if(f.case_id==='C03'){
+    tags.push('C03_'+(f.expected.mode==='CORE'?'CORE_'+String(object(v.receipt).outcome):'LEGACY_'+String(v.status)));
+    if(f.expected.digest_branch==='RAW_BODY_PRECLAIM_REJECTION')tags.push('C03_RAW_REJECTION');
+  }else if(f.case_id==='C04'){
+    if(v.status==='PASS')tags.push('C04_LARGE');
+    if(reasons.includes('CARRIER_CHUNK_MISSING'))tags.push('C04_MISSING');
+    if(reasons.some(r=>['CARRIER_CHUNK_CONFLICT','CARRIER_RESULT_CONFLICT'].includes(r)))tags.push('C04_CONFLICTING');
+    if(reasons.includes('CARRIER_ORPHAN_CHUNK'))tags.push('C04_MIXED');
+    if(reasons.some(r=>['CARRIER_CHUNK_INVALID','CARRIER_WHOLE_DIGEST_INVALID','CARRIER_MANIFEST_INVALID'].includes(r)))tags.push('C04_CORRUPT');
+  }else if(f.case_id==='C05'){
+    if(reasons.includes('CARRIER_OUTER_RESULT_DIGEST_INVALID'))tags.push('C05_OUTER_DIGEST');
+    if(reasons.some(r=>['CARRIER_REQUEST_DIGEST_INVALID','CARRIER_RAW_REJECTION_INVALID'].includes(r)))tags.push('C05_REQUEST_DIGEST');
+    if(reasons.includes('CARRIER_OUTPUT_DIGEST_INVALID'))tags.push('C05_OUTPUT_DIGEST');
+  }else if(f.case_id==='C06')tags.push(...trustNegatives(f).map(tag=>'C06_'+tag));
+  else tags.push(f.case_id);
+  return tags;
 }
 export interface ReaderInvocation{source_sha256:string;version:string;trusted_context_sha256:string;verdict:unknown;input_sha256:string;output_sha256:string;scope:'REFERENCE_PARSER_ONLY'|'QUALIFIED_INSTALLED_READER';}
 export interface RegisteredReaderRunner{invoke(registration:ReaderRegistration,fixture:ReaderFixture):Promise<ReaderInvocation>;}
@@ -120,14 +188,16 @@ export async function qualifyRBridgeReaders(registry:ReaderRegistry,fixtures:Rea
       }
       if(reader.transport==='GITHUB'&&!cases.some(f=>f.transport==='GITHUB'&&f.case_id==='C01'&&f.provenance==='AUTHENTIC_ARCHIVE'&&f.capture.scope==='AUTHENTICATED_GITHUB_READ')){reasons.add('READER_AUTHENTIC_ARCHIVE_UNKNOWN');actual='UNKNOWN';}
       if(reader.transport==='MCP'&&(!cases.some(f=>f.transport==='MCP'&&f.client.protocol_era==='legacy')||!cases.some(f=>f.transport==='MCP'&&f.client.protocol_era==='modern'))){reasons.add('READER_MCP_CLIENT_MATRIX_INCOMPLETE');actual='UNKNOWN';}
-      const own=[];
+      const own=[],coverage=new Set<string>();
       for(const f of cases){
         if(!applicable.includes(f.case_id)||!f.fixture_id||!['AUTHENTIC_ARCHIVE','SOURCE_PRODUCER','SYNTHETIC'].includes(f.provenance)||!/^[0-9a-f]{64}$/.test(f.expected_verdict_sha256))fail('READER_FIXTURE_INVALID');
         const remaining=deadline-performance.now();if(remaining<=0)fail('READER_QUALIFICATION_DEADLINE');let timer:ReturnType<typeof setTimeout>|undefined;let invocation:ReaderInvocation;try{invocation=await Promise.race([runner.invoke(reader,f),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('READER_QUALIFICATION_DEADLINE')),remaining);})]);}finally{clearTimeout(timer);}
         if(invocation.source_sha256!==reader.source_sha256||invocation.version!==reader.version||invocation.trusted_context_sha256!==reader.trusted_context_sha256||invocation.input_sha256!==sha(JSON.stringify(fixtureInput(f)))||invocation.output_sha256!==sha(JSON.stringify(invocation.verdict))||invocation.output_sha256!==f.expected_verdict_sha256)fail('READER_INVOCATION_DRIFT');
-        assertCaseMeaning(f,invocation.verdict);if(invocation.scope!=='QUALIFIED_INSTALLED_READER')actual='UNKNOWN';
+        assertCaseMeaning(f,invocation.verdict);for(const tag of semanticCoverage(f,invocation.verdict))coverage.add(tag);if(invocation.scope!=='QUALIFIED_INSTALLED_READER')actual='UNKNOWN';
         const row={reader_id:reader.reader_id,fixture_id:f.fixture_id,case_id:f.case_id,input_sha256:invocation.input_sha256,output_sha256:invocation.output_sha256,input_json:JSON.stringify(fixtureInput(f)),verdict_json:JSON.stringify(invocation.verdict),scope:invocation.scope};reportBytes+=Buffer.byteLength(JSON.stringify(row));if(reportBytes>67108864)fail('READER_QUALIFICATION_EVIDENCE_LIMIT');reports.push(row);own.push(row);accepted.add(f.case_id);
       }
+      const missing=(reader.transport==='GITHUB'?requiredGitHubSemantics:requiredMcpSemantics).filter(tag=>!coverage.has(tag));
+      if(missing.length){reference='UNKNOWN';actual='UNKNOWN';reasons.add('READER_SEMANTIC_MATRIX_INCOMPLETE');for(const tag of missing)reasons.add('READER_SEMANTIC_MISSING_'+tag);}
       if(installedRunners.has(runner)&&installHash(own)!==reader.qualification_sha256)fail('READER_QUALIFICATION_DRIFT');
     }
   }catch(error){reference='FAIL';actual='FAIL';reasons.add(error instanceof Error&&/^READER_[A-Z_]+$/.test(error.message)?error.message:'READER_QUALIFICATION_UNAVAILABLE');}

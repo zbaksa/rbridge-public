@@ -2,11 +2,13 @@
 from dataclasses import replace
 from pathlib import Path
 import json
+import importlib.util
 import os
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from _loader import toolkit,ROOT
@@ -62,6 +64,40 @@ class TransactionTests(unittest.TestCase):
     def test_stop_timeout_is_unsettled_and_retains_exclusion(self):
         self.host.start_error=True;self.host.unsettled=True;result=self.apply(self.prepared,self.auth,self.host)
         self.assertEqual(result.phase,'HOLD_UNSETTLED');self.assertEqual(result.exit_code,2);self.assertFalse(self.prepared.lease.closed);self.assertFalse(self.host.old_start_called)
+    def test_expired_lost_start_ack_still_attempts_containment_stop(self):
+        stop=self.host.stop_unit;stops=[]
+        def counted_stop(unit):stops.append(unit);stop(unit)
+        def late_start(prepared):
+            self.host.running=True;prepared.lease.deadline=time.monotonic()-1
+            raise OSError('source fixture late lost start ACK')
+        self.host.stop_unit=counted_stop;self.host.start_candidate=late_start
+        result=self.apply(self.prepared,self.auth,self.host)
+        self.assertEqual(stops,[self.profile.service.unit]*2)
+        self.assertFalse(self.host.running);self.assertEqual(result.phase,'HOLD_UNSETTLED')
+        self.assertFalse(self.prepared.lease.closed);self.assertFalse(self.host.old_start_called)
+    def test_start_requires_remaining_start_acceptance_and_containment_budget(self):
+        append=self.ledger.append
+        def limited_window(marker,evidence):
+            value=append(marker,evidence)
+            if marker=='POINTER_SWITCHED':
+                budget=self.profile.budget
+                self.prepared.lease.deadline=time.monotonic()+(budget.acceptance_ms+budget.stop_ms)/1000+1
+            return value
+        with patch.object(self.ledger,'append',side_effect=limited_window):
+            result=self.apply(self.prepared,self.auth,self.host)
+        self.assertFalse(self.host.start_intent_preceded_new_start)
+        self.assertNotIn('START_ATTEMPTED',[e.marker for e in self.ledger.read().entries])
+        self.assertIn('START_WINDOW_BUDGET_INSUFFICIENT',result.reason_codes)
+    def test_unsettled_foreground_retains_exclusion_after_maintenance_deadline(self):
+        self.host.start_error=True;self.host.unsettled=True
+        result=self.apply(self.prepared,self.auth,self.host)
+        self.prepared.lease.deadline=time.monotonic()-1
+        spec=importlib.util.spec_from_file_location('foreground_hold_fixture',ROOT/'ops/install/rbridge_install.py')
+        entry=importlib.util.module_from_spec(spec);spec.loader.exec_module(entry)
+        class OwnerInterrupt(Exception):pass
+        with patch.object(entry,'emit'),patch.object(entry.time,'sleep',side_effect=OwnerInterrupt):
+            with self.assertRaises(OwnerInterrupt):entry.foreground_hold(self.prepared,result)
+        self.assertFalse(self.prepared.lease.closed)
     def test_accepted_fixture_has_every_marker_and_guarded_start(self):
         result=self.apply(self.prepared,self.auth,self.host)
         self.assertEqual(result.status,'ACCEPTED');self.assertEqual(result.exit_code,0);self.assertEqual(self.ledger.read().entries[-1].marker,'ACCEPTED');self.assertTrue(self.host.start_intent_preceded_new_start);self.assertFalse(self.host.old_start_called)

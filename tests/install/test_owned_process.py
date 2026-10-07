@@ -1,6 +1,12 @@
 """Closed helper-family predicates; source fixtures grant no Root authority."""
 import copy
+import hashlib
 import os
+from pathlib import Path
+import secrets
+import subprocess
+import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from _loader import toolkit
@@ -76,6 +82,68 @@ class OwnedProcessTests(unittest.TestCase):
                     started=started,heartbeat=heartbeat,ready=ready)
             launch.assert_not_called();started.assert_not_called()
             heartbeat.assert_not_called();ready.assert_not_called()
+
+    def helper_fixture(self,unclassified=False):
+        """Actual child/pipes/pidfds with Source proc and journal adapters only."""
+        from contextlib import ExitStack
+        from rbridge_installation import owned_process as owned,helper_journal as journal
+        from rbridge_installation.protected_copy import DIR_FLAGS
+        stack=ExitStack();self.addCleanup(stack.close)
+        root=Path(stack.enter_context(tempfile.TemporaryDirectory()));root.chmod(0o700)
+        parent=os.open(root,DIR_FLAGS);stack.callback(os.close,parent)
+        binary='/usr/bin/python3';binary_bytes=Path(binary).read_bytes()
+        pin=SimpleNamespace(path=binary,sha256=hashlib.sha256(binary_bytes).hexdigest())
+        args=['-I','-S','-c','import time; time.sleep(10)'];children=[]
+        real_popen=subprocess.Popen
+        def launch(*a,**kw):
+            child=real_popen(*a,**kw);children.append(child);return child
+        def token(pid):return {'pid':pid,'state':'S','ppid':os.getpid(),'session':pid,'start_ticks':'123456'}
+        def row(pid,t):return {'pid':pid,'start_ticks':t['start_ticks'],'ppid':os.getpid(),'session':pid,
+            'uid':[0]*4,'gid':[0]*4,'groups':[0],'exe':binary,'argv':[binary,*args]}
+        censuses=[]
+        def census(pid,deadline):
+            child=next(c for c in children if c.pid==pid)
+            if child.poll() is not None:return []
+            value=row(pid,token(pid));censuses.append(pid)
+            if unclassified and len(censuses)>1:value['argv']=[binary,'unexpected']
+            return [value]
+        def begin(pin,a,data,specs):
+            for name in sorted(os.listdir(parent)):journal.inspect_helper_journal(parent,name,production=False)
+            value={'argv':[pin.path,*a],'executable_sha256':pin.sha256,
+                'input_sha256':hashlib.sha256(data).hexdigest(),'child_specs_sha256':journal.report_sha256(specs)}
+            return journal._open_fixture_helper_journal(parent,secrets.token_hex(16),value)
+        # Patch this module's os view; the fixture journal keeps the actual UID.
+        root_os=SimpleNamespace(**{**vars(os),'getuid':lambda:0,'geteuid':lambda:0})
+        for obj,name,value in [(owned,'os',root_os),(owned,'_assert_kernel_namespace',lambda:None),
+                (owned,'_protected_bytes',lambda *a:binary_bytes),(owned,'_stat',token),
+                (owned,'_row',row),(owned,'_session_rows',census),
+                (owned.subprocess,'Popen',launch),(journal,'begin_root_helper',begin)]:
+            stack.enter_context(patch.object(obj,name,value))
+        def cleanup_pending():
+            for child in children:owned._pending_sessions.pop(child.pid,None)
+        stack.callback(cleanup_pending)
+        return owned,journal,parent,root,pin,args,children
+
+    def test_timed_out_identified_dead_family_settles_without_operation_success(self):
+        owned,journal,parent,root,pin,args,children=self.helper_fixture()
+        self.assertRaisesRegex(ValueError,'OWNED_HELPER_DEADLINE',owned.run_owned_process,pin,args,30,4096)
+        self.assertIsNotNone(children[0].returncode)
+        self.assertNotIn(children[0].pid,owned._pending_sessions)
+        first=next(root.iterdir());record=journal.inspect_helper_journal(parent,first.name,production=False)
+        self.assertEqual(record['origin_scope'],'FIXTURE_AUTHORITY_ONLY')
+        # A separate fixed launch can reach Popen after the failed operation.
+        self.assertRaisesRegex(ValueError,'OWNED_HELPER_DEADLINE',owned.run_owned_process,pin,args,30,4096)
+        self.assertEqual(len(children),2)
+
+    def test_observed_identity_change_keeps_dead_family_unsettled(self):
+        owned,journal,parent,root,pin,args,children=self.helper_fixture(unclassified=True)
+        self.assertRaisesRegex(ValueError,'OWNED_HELPER_PARENT_CHANGED|OWNED_HELPER_IDENTITY_CHANGED',
+            owned.run_owned_process,pin,args,100,4096)
+        self.assertIsNotNone(children[0].returncode)
+        self.assertIn(children[0].pid,owned._pending_sessions)
+        first=next(root.iterdir());self.assertFalse((first/'settled.json').exists())
+        self.assertRaisesRegex(ValueError,'HELPER_JOURNAL_UNSETTLED',owned.run_owned_process,pin,args,30,4096)
+        self.assertEqual(len(children),1)
 
 
 if __name__ == '__main__': unittest.main()
