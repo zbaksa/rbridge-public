@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import weakref
 from .artifact_collector import _closure
@@ -26,6 +27,45 @@ from .readonly_helper import _json
 
 class ReaderAdoptionError(InstallationError):pass
 def _fail(reason):raise ReaderAdoptionError(reason)
+
+
+def _reader_fixture_sets(profile,report,fixtures):
+    """Match the TS per-transport summary to full original invocation bytes."""
+    if (type(fixtures) is not dict or set(fixtures)!={'cases'} or type(fixtures['cases']) is not list
+            or not 1<=len(fixtures['cases'])<=512):_fail('READER_ADOPTION_FIXTURE_SET_CHANGED')
+    ids=set()
+    for f in fixtures['cases']:
+        if (type(f) is not dict or type(f.get('fixture_id')) is not str or f['fixture_id'] in ids
+                or f.get('transport') not in ('GITHUB','MCP')
+                or f.get('provenance') not in ('AUTHENTIC_ARCHIVE','SOURCE_PRODUCER','SYNTHETIC')
+                or type(f.get('expected_verdict_sha256')) is not str
+                or not re.fullmatch('[0-9a-f]{64}',f['expected_verdict_sha256'])):_fail('READER_ADOPTION_FIXTURE_SET_CHANGED')
+        ids.add(f['fixture_id'])
+    result={}
+    for reader in profile.readers:
+        cases=[f for f in fixtures['cases'] if f['transport']==reader.transport]
+        rows=[r for r in report['invocations'] if r['reader_id']==reader.reader_id]
+        if not cases or [f['fixture_id'] for f in cases]!=[r['fixture_id'] for r in rows]:
+            _fail('READER_ADOPTION_FIXTURE_SET_CHANGED')
+        summary=[]
+        for f,row in zip(cases,rows):
+            if f['case_id']!=row['case_id'] or f['expected_verdict_sha256']!=row['output_sha256']:
+                _fail('READER_ADOPTION_FIXTURE_SET_CHANGED')
+            value=_json(row['input_json'].encode('utf-8',errors='strict'),profile.budget.carrier_bytes)
+            if reader.transport=='GITHUB':
+                expected={'capture':f['capture'],'expected':f['expected']}
+                if f.get('replayed_at'):expected['replayed_at']=f['replayed_at']
+                if encode_report(value)!=encode_report(expected):_fail('READER_ADOPTION_FIXTURE_INPUT_CHANGED')
+            elif (type(value) is not dict or set(value)!={'expected','sdk_package_version','negotiated_protocol_version','protocol_era'}
+                    or encode_report(value['expected'])!=encode_report(f['expected']) or value['sdk_package_version']!='2.3.0'
+                    or value['protocol_era']!=f.get('era') or f.get('era') not in ('legacy','modern')
+                    or value['negotiated_protocol_version'] not in (('2026-07-28',) if f['era']=='modern'
+                        else ('2024-11-05','2025-03-26','2025-06-18','2025-11-25'))):
+                _fail('READER_ADOPTION_FIXTURE_INPUT_CHANGED')
+            summary.append({**{k:f[k] for k in ('fixture_id','case_id','provenance','expected_verdict_sha256')},
+                'input_sha256':row['input_sha256']})
+        result[reader.reader_id]=report_sha256(summary)
+    return result
 
 
 def compare_reader_adoption(profile,registry,report,fixtures,capture):
@@ -49,10 +89,11 @@ def compare_reader_adoption(profile,registry,report,fixtures,capture):
             or encode_report(receipt['registry'])!=encode_report(registry) or receipt['report_sha256']!=report_sha256(report)
             or receipt['fixture_set_sha256']!=report_sha256(fixtures)
             or receipt['consumer_inventory']!='OWNER_DECLARED_COMPLETE_FOR_THIS_DEPLOYMENT'):_fail('READER_ADOPTION_RECEIPT_CHANGED')
-    if any(a['fixture_set_sha256']!=receipt['fixture_set_sha256'] for a in registry['adoptions']):
+    summaries=_reader_fixture_sets(profile,report,fixtures)
+    if any(a['fixture_set_sha256']!=summaries[a['reader_id']] for a in registry['adoptions']):
         _fail('READER_ADOPTION_FIXTURE_SET_CHANGED')
     return {'schema':'RBRIDGE_READER_ADOPTION_COMPARISON_V1','scope':'READER_ADOPTION_DATA_ONLY','status':'PASS',
-        'capture':capture,'receipt':receipt,'physical_origin':'UNQUALIFIED','may_execute':False}
+        'capture':capture,'receipt':receipt,'reader_fixture_sets':summaries,'physical_origin':'UNQUALIFIED','may_execute':False}
 
 
 @dataclass(frozen=True,eq=False)

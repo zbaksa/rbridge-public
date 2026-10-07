@@ -1,9 +1,11 @@
 """Owner adoption data does not authenticate itself or register Root origin."""
 import copy
 import hashlib
+import json
+import subprocess
 import unittest
 from unittest.mock import patch
-from _loader import toolkit
+from _loader import toolkit,ROOT
 from _fixtures import valid_profile
 
 toolkit()
@@ -12,17 +14,29 @@ from rbridge_installation.profile import parse_profile
 
 
 def adoption_data():
-    fixtures={'cases':[{'fixture_id':'source-'+str(n),'case_id':'C0'+str(n)} for n in range(1,10)]}
+    fixtures={'cases':[]}
     registrations=[];adoptions=[];invocations=[]
     base=valid_profile();root=base['paths']['release_parent']+'/toolkit-'+base['toolkit']['source_sha']
-    for transport,cases in (('GITHUB',['C0'+str(n) for n in range(1,9)]),('MCP',['C09'])):
+    for transport,cases in (('GITHUB',[('C0'+str(n),None) for n in range(1,9)]),('MCP',[('C09','legacy'),('C09','modern')])):
         ident='source-'+transport.lower();entry=root+'/dist/server/cli/rbridgeReadResult.js'
-        rows=[{'reader_id':ident,'fixture_id':'source-'+case,'case_id':case,'input_json':'{}','verdict_json':'{}',
-            'input_sha256':hashlib.sha256(b'{}').hexdigest(),'output_sha256':hashlib.sha256(b'{}').hexdigest(),
-            'scope':'QUALIFIED_INSTALLED_READER'} for case in cases]
+        rows=[];summary=[]
+        for case,era in cases:
+            fixture_id='source-'+case+('-'+era if era else '')
+            value={'capture':{},'expected':{}} if transport=='GITHUB' else {'expected':{},'sdk_package_version':'2.3.0',
+                'negotiated_protocol_version':'2025-11-25' if era=='legacy' else '2026-07-28','protocol_era':era}
+            raw=json.dumps(value,separators=(',',':'));digest=hashlib.sha256(raw.encode()).hexdigest()
+            f={'fixture_id':fixture_id,'case_id':case,'transport':transport,'provenance':'SYNTHETIC' if transport=='GITHUB' else 'SOURCE_PRODUCER',
+                'expected_verdict_sha256':hashlib.sha256(b'{}').hexdigest(),'expected':{}}
+            if transport=='GITHUB':f['capture']={}
+            else:f['era']=era
+            fixtures['cases'].append(f)
+            summary.append({k:f[k] for k in ('fixture_id','case_id','provenance','expected_verdict_sha256')})
+            summary[-1]['input_sha256']=digest
+            rows.append({'reader_id':ident,'fixture_id':fixture_id,'case_id':case,'input_json':raw,'verdict_json':'{}',
+                'input_sha256':digest,'output_sha256':f['expected_verdict_sha256'],'scope':'QUALIFIED_INSTALLED_READER'})
         adoption={'schema':'RBRIDGE_READER_ADOPTION_V1','reader_id':ident,'owner':'source-workflow-owner',
             'workflow':'source-readonly-'+transport.lower(),'entrypoint':entry,'source_sha256':'a'*64,'version':'1',
-            'trusted_context_sha256':'b'*64,'fixture_set_sha256':report_sha256(fixtures),'adopted_at':'2026-10-06T00:00:00.000Z'}
+            'trusted_context_sha256':'b'*64,'fixture_set_sha256':report_sha256(summary),'adopted_at':'2026-10-06T00:00:00.000Z'}
         registrations.append({'reader_id':ident,'source_sha256':'a'*64,'entrypoint':entry,'version':'1','transport':transport,
             'trusted_context_sha256':'b'*64,'qualification_sha256':report_sha256(rows),'adoption_sha256':report_sha256(adoption)})
         adoptions.append(adoption);invocations.extend(rows)
@@ -54,6 +68,50 @@ class ReaderAdoptionDataTests(unittest.TestCase):
         from rbridge_installation.qualification import build_qualification,QualificationProofs
         assessment=build_qualification(self.p,QualificationProofs(readers=result))
         self.assertEqual(assessment.status,'BLOCKED');self.assertFalse(assessment.command_ready)
+
+    def test_per_reader_actual_summary_hashes_are_distinct_from_owner_full_packet_hash(self):
+        hashes={a['fixture_set_sha256'] for a in self.registry['adoptions']}
+        self.assertEqual(len(hashes),2);self.assertNotIn(report_sha256(self.fixtures),hashes)
+        result=self.compare(self.p,self.registry,self.report,self.fixtures,self.capture)
+        self.assertEqual(result['receipt']['fixture_set_sha256'],report_sha256(self.fixtures))
+        self.assertFalse(result['may_execute'])
+
+    def test_actual_typescript_consumer_accepts_summary_pin_and_rejects_full_packet_pin(self):
+        # The reference runner has no installed/Root origin. Cases deliberately
+        # retain Source dummy verdict inputs; only adoption drift is examined.
+        module=(ROOT/'src/installation/readerQualification.ts').as_uri()
+        hashes=(ROOT/'src/installation/gateContext.ts').as_uri()
+        code=('import {qualifyRBridgeReaders,createReferenceReaderRunner} from '+json.dumps(module)+';'+
+            'import {installHash} from '+json.dumps(hashes)+';let raw="";for await(const p of process.stdin)raw+=p;'+
+            'const v=JSON.parse(raw),out=[];for(const r of v.registry.readers){'+
+            'const a=v.registry.adoptions.find(a=>a.reader_id===r.reader_id);'+
+            'const cases=v.fixtures.cases.filter(f=>f.transport===r.transport).map(f=>f.transport==="GITHUB"?f:{...f,client:{'+
+            'scope:"FIXTURE_AUTHORITY_ONLY",sdk_package_version:"2.3.0",protocol_era:f.era,'+
+            'negotiated_protocol_version:f.era==="legacy"?"2025-11-25":"2026-07-28",callTool:async()=>{throw Error("SOURCE_ONLY");}}});'+
+            'const good=await qualifyRBridgeReaders({readers:[r],adoptions:[a]},{cases},createReferenceReaderRunner());'+
+            'const wrong={...a,fixture_set_sha256:installHash(v.fixtures)};'+
+            'const bad=await qualifyRBridgeReaders({readers:[{...r,adoption_sha256:installHash(wrong)}],adoptions:[wrong]},{cases},createReferenceReaderRunner());'+
+            'out.push({good:good.reason_codes,bad:bad.reason_codes});}console.log(JSON.stringify(out));')
+        run=subprocess.run(['node','--import','tsx','--input-type=module','-e',code],
+            input=encode_report({'registry':self.registry,'fixtures':self.fixtures}),capture_output=True,cwd=ROOT,timeout=10)
+        self.assertEqual(run.returncode,0,run.stderr.decode())
+        for result in json.loads(run.stdout):
+            self.assertNotIn('READER_ADOPTION_DRIFT',result['good']);self.assertIn('READER_ADOPTION_DRIFT',result['bad'])
+
+    def test_full_packet_rehash_cannot_hide_changed_original_invocation_input(self):
+        fixtures=copy.deepcopy(self.fixtures);fixtures['cases'][0]['expected']={'changed':'Source input'}
+        capture=copy.deepcopy(self.capture);body=json.loads(capture['body']);body['fixture_set_sha256']=report_sha256(fixtures)
+        capture['body']=encode_report(body).decode()
+        self.assertRaises(ValueError,self.compare,self.p,self.registry,self.report,fixtures,capture)
+
+    def test_full_packet_rehash_cannot_hide_case_order_or_provenance_change(self):
+        for change in ('order','provenance'):
+            fixtures=copy.deepcopy(self.fixtures)
+            if change=='order':fixtures['cases'].reverse()
+            else:fixtures['cases'][0]['provenance']='AUTHENTIC_ARCHIVE'
+            capture=copy.deepcopy(self.capture);body=json.loads(capture['body']);body['fixture_set_sha256']=report_sha256(fixtures)
+            capture['body']=encode_report(body).decode()
+            self.assertRaises(ValueError,self.compare,self.p,self.registry,self.report,fixtures,capture)
 
     def test_wrong_authenticated_identity_number_or_repository_refuses_data_comparison(self):
         for key,value in [('author','foreign'),('viewer','foreign'),('repository','foreign/repo'),

@@ -23,7 +23,7 @@ class _OwnedCanary:
         if type(data) is not bytes or not 0<len(data)<=4096: _fail('ACCEPTANCE_CANARY_INVALID')
         try: data.decode('utf-8',errors='strict')
         except UnicodeError: _fail('ACCEPTANCE_CANARY_INVALID')
-        self.path=Path(path);self.fd=None;self.guard=None;self.owner=os.getuid();self.sha256=hashlib.sha256(data).hexdigest()
+        self.path=Path(path);self.fd=None;self.guard=None;self.owner=os.getuid();self.sha256=hashlib.sha256(data).hexdigest();self.mode=0o444
         try:
             self.guard=ProtectedParent(FilesystemAuthority(self.owner,1027,self.path.parent,'RUNTIME',production))
             if production:
@@ -50,7 +50,7 @@ class _OwnedCanary:
     def readback(self):
         self.guard.check();before=os.fstat(self.fd)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid!=self.owner or before.st_nlink!=1
-                or before.st_mode&0o7777!=0o444 or _identity(before)!=self.identity
+                or before.st_mode&0o7777!=self.mode or _identity(before)!=self.identity
                 or _identity(os.stat(self.path.name,dir_fd=self.guard.fd,follow_symlinks=False))!=self.identity):
             _fail('ACCEPTANCE_CANARY_CHANGED')
         os.lseek(self.fd,0,os.SEEK_SET);data=bytearray()
@@ -62,7 +62,7 @@ class _OwnedCanary:
             _fail('ACCEPTANCE_CANARY_CHANGED')
         self.guard.check()
         return {'path':str(self.path),'sha256':self.sha256,'identity':list(map(str,self.identity)),
-            'bytes':len(data),'mode':292,'owner':self.owner}
+            'bytes':len(data),'mode':self.mode,'owner':self.owner}
     def close(self):
         if self.fd is not None:os.close(self.fd);self.fd=None
         if self.guard is not None:self.guard.close();self.guard=None
@@ -71,6 +71,50 @@ class _OwnedCanary:
 def _create_fixture_canary(path,data):
     """Source descriptor fixture, not a production-path or identity authority."""
     return _OwnedCanary(path,data,False)
+
+
+class _ObservedCanary(_OwnedCanary):
+    """Retain existing protected bytes; never create, overwrite or chmod."""
+    def __init__(self,path,data,production):
+        if type(data) is not bytes or not 0<len(data)<=4096:_fail('ACCEPTANCE_CANARY_INVALID')
+        try:data.decode('utf-8',errors='strict')
+        except UnicodeError:_fail('ACCEPTANCE_CANARY_INVALID')
+        self.path=Path(path);self.fd=None;self.guard=None;self.owner=os.getuid();self.sha256=hashlib.sha256(data).hexdigest()
+        try:
+            self.guard=ProtectedParent(FilesystemAuthority(self.owner,1027,self.path.parent,'RUNTIME',production))
+            if production:
+                for _parent,_name,_child,row in self.guard.links:
+                    if not (row.st_mode&0o001 or row.st_gid==1027 and row.st_mode&0o010):
+                        _fail('ACCEPTANCE_CANARY_PARENT_UNREADABLE')
+            self.fd=os.open(self.path.name,FILE_FLAGS,dir_fd=self.guard.fd);row=os.fstat(self.fd)
+            self.mode=stat.S_IMODE(row.st_mode);self.identity=_identity(row)
+            if (not stat.S_ISREG(row.st_mode) or row.st_uid!=self.owner or row.st_nlink!=1
+                    or row.st_mode&0o6022 or not 0<row.st_size<=4096
+                    or production and not (row.st_mode&0o004 or row.st_gid==1027 and row.st_mode&0o040)):
+                _fail('ACCEPTANCE_CANARY_UNPROTECTED')
+            self.readback()
+        except (OSError,ValueError):self.close();_fail('ACCEPTANCE_CANARY_OBSERVATION_UNCERTAIN')
+
+
+def _observe_fixture_canary(path,data):
+    """Current-user Source descriptor mechanics, no physical Root origin."""
+    return _ObservedCanary(path,data,False)
+
+
+def retain_acceptance_restart_snapshot(lease,evidence):
+    """Full fresh paused inventory; the original pre-start backup is untouched."""
+    from .pause_backup import capture_snapshot,_snapshot_report
+    snapshot=capture_snapshot(lease)
+    if snapshot.reason_codes:_fail('ACCEPTANCE_RESTART_SNAPSHOT_UNKNOWN')
+    report={'schema':'RBRIDGE_ACCEPTANCE_RESTART_SNAPSHOT_V1','scope':snapshot.scope,
+        'transaction_id':lease.ledger.transaction_id,'pause_sha256':snapshot.pause_sha256,
+        'snapshot_sha256':snapshot.tree_sha256,'snapshot':_snapshot_report(snapshot),
+        'pre_start_backup_republished':False}
+    evidence.write('accept-restart-paused',report)
+    after=capture_snapshot(lease)
+    if (after.reason_codes or after.tree_sha256!=snapshot.tree_sha256 or after.pause_sha256!=snapshot.pause_sha256):
+        _fail('ACCEPTANCE_RESTART_SNAPSHOT_CHANGED')
+    return report
 
 
 def build_carrier_capture(profile,request,number,before,comments,after,viewer,context_sha256,authenticated=False):
@@ -265,7 +309,8 @@ class QualifiedAcceptanceBackend:
             reads.append(result)
         return {'status':'PASS','ids':list(context.operation_ids),'legacy_absent_paths':local,'mcp':reads}
     def _mcp_expectation(self,request):
-        b=self.profile.binding;submission={'schema':'RBRIDGE_OPERATION_SUBMISSION_V1','operationId':request['requestId'],
+        # Core's intent digest deliberately excludes the distinct operation ID.
+        b=self.profile.binding;submission={'schema':'RBRIDGE_OPERATION_SUBMISSION_V1',
             'principalId':b.principal_id,'targetInstanceId':b.target_instance_id,'operation':request['operation']}
         return {'operationId':request['requestId'],'principalId':b.principal_id,'targetInstanceId':b.target_instance_id,
             'runtime_uid':b.uid,'intent_sha256':report_sha256(submission),'policy_sha256':b.policy_sha256,
@@ -273,9 +318,9 @@ class QualifiedAcceptanceBackend:
     def prepare_canary(self,context):
         self._validate(context)
         if self.canary is not None:_fail('ACCEPTANCE_CANARY_ALREADY_CREATED')
-        context.prepared.evidence.write('accept-canary-intent',{'path':self.profile.paths.canary_path,
+        context.prepared.evidence.write('accept-canary-observe-intent',{'path':self.profile.paths.canary_path,
             'sha256':self.profile.service.canary_sha256,'bytes':len(context.canary_bytes)})
-        self.canary=_OwnedCanary(self.profile.paths.canary_path,context.canary_bytes,True)
+        self.canary=_ObservedCanary(self.profile.paths.canary_path,context.canary_bytes,True)
         return self.canary.readback()
     def submit_once(self,context,request):
         self._validate(context)
@@ -420,12 +465,7 @@ class QualifiedAcceptanceBackend:
         if prepared.ledger.read().entries[-1].marker!='ACCEPTING':_fail('ACCEPTANCE_RESTART_UNQUALIFIED')
         self.settle_helpers(context);self.host.stop_unit(self.profile.service.unit)
         prepared.lease.observe_stopped()
-        from .pause_backup import capture_snapshot,backup_snapshot
-        snapshot=capture_snapshot(prepared.lease)
-        if snapshot.reason_codes:_fail('ACCEPTANCE_RESTART_SNAPSHOT_UNKNOWN')
-        backup=backup_snapshot(snapshot,prepared.ledger.parent_fd)
-        prepared.evidence.write('accept-restart-paused',{'pause_sha256':prepared.lease.pause_sha256,
-            'snapshot_sha256':snapshot.tree_sha256,'backup':backup})
+        retain_acceptance_restart_snapshot(prepared.lease,prepared.evidence)
         self._validate(context);prepared.pointer.session.check()
         if prepared.config.session.observed()!=prepared.config.after_sha256:_fail('ACCEPTANCE_RESTART_CONFIG_CHANGED')
         # START_ATTEMPTED is already durable. Same immutable candidate only.

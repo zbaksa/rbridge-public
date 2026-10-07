@@ -100,6 +100,8 @@ Before `START_ATTEMPTED`, the transaction may restore only its exact owned confi
 
 At or after `START_ATTEMPTED`, do not return to the old pointer, restore an old state snapshot, restart the old service or clear publication/operation history. The candidate may already have admitted work. Stop it through the concrete host backend, prove the service and all writers/helpers have settled, and preserve all current state, manifests, receipts and configuration for compatible recovery. Missing settlement remains `HOLD_UNSETTLED`.
 
+The controlled acceptance restart retains a complete fresh paused snapshot bound to the existing transaction and pause, and verifies a second capture before restarting the same candidate. It preserves the original pre-start backup and does not append another `BACKUP_COMPLETE` after `ACCEPTING`.
+
 ## Maintenance resume and result meanings
 
 A lock is held by the current foreground process only; it does not survive process death. A new process must freshly acquire exclusion and inspect the complete private maintenance registry. An unfinished predecessor, active peer lock, corrupt ledger, partial backup or unknown helper object blocks a new transaction. Resume uses the exact existing transaction ledger and full private evidence; a missing ledger or lock is never initialized as recovery.
