@@ -13,6 +13,12 @@ import {createRBridgeReadonlyHandlers} from '../../src/server/rbridgeReadonlyHan
 import {createRBridgeGitHubCore} from '../../src/adapters/rbridgeGitHubCore.js';
 import {installHash} from '../../src/installation/gateContext.js';
 import type {RBridgeOperationSubmissionV1} from '../../src/domain/rbridgeExecutionContract.js';
+import {Client,InMemoryTransport} from '@modelcontextprotocol/client';
+import {serveStdio} from '@modelcontextprotocol/server/stdio';
+import {createRBridgeMcpSafeServer} from '../../src/server/rbridgeMcpSafe.js';
+import {createFixtureSdkReadClient} from '../../src/installation/rbridge-installation-client.js';
+import {produceMcpArtifactCases} from '../../src/installation/mcpArtifactFixture.js';
+import {readRBridgeMcpOutput} from '../../src/installation/readerQualification.js';
 
 const source='b5881fd8367b4249e82683f1f884f2392cb696d4';
 describe('fixed isolated Core producer',()=>{
@@ -58,6 +64,25 @@ describe('fixed isolated Core producer',()=>{
         originals.push(captureArtifactOperation({submission,context:state.context,receipt:found.receipt,pages:[page],output:Buffer.from(page.dataBase64,'base64'),policy_sha256:found.receipt.policy.policySha256}));
       }
       const before=JSON.stringify(originals),report=await produceCoreCarrierCases({binding:state.binding,repository:'example/rbridge-control',author:'fixture-owner',source_sha:source,context_sha256:'c'.repeat(64),sourceDirectory:directory,core,adapter,port,originals,deadline_ms:15000});
+      const sdkClients=[];
+      try{
+        for(const era of ['legacy','modern'] as const){
+          const [wire,serverWire]=InMemoryTransport.createLinkedPair(),handle=serveStdio(()=>createRBridgeMcpSafeServer({
+            binding:{authenticatedSubject:`uid:${state.uid}`,principalId:state.binding.principalId,targetInstanceId:state.binding.targetInstanceId},
+            bindingProvider:async()=>({schema:'RBRIDGE_CORE_BINDING_V1',journalSchema:'RBRIDGE_EXECUTION_JOURNAL_V1',...state.binding,
+              policySha256:state.policy.evaluate(state.submission()).snapshot.policySha256,enabledActions:state.policy.document.enabledActions}),core}),{transport:serverWire,legacy:'serve'});
+          const client=new Client({name:'actual-source-core-mcp-producer',version:'source'},{versionNegotiation:{mode:era==='legacy'?'legacy':{pin:'2026-07-28'}}});
+          await client.connect(wire);sdkClients.push({client:await createFixtureSdkReadClient(client),async close(){await client.close();await handle.close();}});
+        }
+        const mcp=await produceMcpArtifactCases({binding:state.binding,source_sha:source,policy_sha256:state.policy.evaluate(state.submission()).snapshot.policySha256,
+          originals,clients:sdkClients.map(c=>c.client),deadline_ms:15000});
+        expect(mcp.scope).toBe('ISOLATED_MCP_SOURCE_DATA_ONLY');
+        expect(mcp.cases.map(c=>[c.case_id,c.era,c.expected.operationId])).toEqual([['C09','legacy','artifact-health'],['C09','modern','artifact-read']]);
+        for(const [index,c] of mcp.cases.entries()){
+          const verdict=await readRBridgeMcpOutput(sdkClients[index]!.client,c.expected);
+          expect(verdict.status).toBe('RESULT');expect(JSON.stringify(verdict)).toBe(c.expected_verdict_json);
+        }
+      }finally{for(const c of sdkClients.reverse())await c.close();}
       expect(report.scope).toBe('ISOLATED_CORE_SOURCE_DATA_ONLY');
       expect(report.cases.map(f=>f.case_id)).toEqual(['C02','C02','C03','C03','C04','C05','C06','C07','C08','C08']);
       expect(JSON.stringify(originals)).toBe(before);

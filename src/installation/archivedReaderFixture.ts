@@ -11,6 +11,8 @@ import {verifyInstalledReaderAuthority,type InstalledReaderAuthority} from './rb
 import {encodeInstallReport,validateInstallContract,type ArtifactManifest,type InstallProfile} from './types.js';
 import type {ReaderQualificationReport} from './readerQualification.js';
 import {createIsolatedCoreCarrierPort,produceCoreCarrierCases} from './coreCarrierFixture.js';
+import {produceMcpArtifactCases} from './mcpArtifactFixture.js';
+import {createInstalledMcpReadClient} from './rbridge-installation-client.js';
 import type {RBridgeGitHubPort} from '../adapters/githubIssueRemoteBridge.js';
 import type {RBridgeOwnerRuntime} from '../server/rbridgeOwnerRuntime.js';
 import type {RBridgeDeploymentBinding} from '../domain/rbridgeCoreProtocol.js';
@@ -88,4 +90,18 @@ export async function runArchivedCoreProducer(authority:InstalledReaderAuthority
     binding:{runtimeUid:p.binding.uid,principalId:p.binding.principal_id,targetInstanceId:p.binding.target_instance_id},repository:p.binding.repository,author:p.binding.author,
     source_sha:p.runtime.source_sha as 'b5881fd8367b4249e82683f1f884f2392cb696d4',context_sha256:contextSHA256,sourceDirectory:join(isolatedHome,'source'),
     core:owner.core,adapter:owner.githubCore,port,originals,deadline_ms:Math.min(p.budget.acceptance_ms,180000)}));
+}
+
+export async function runArchivedMcpProducer(authority:InstalledReaderAuthority,runtimeManifest:ArtifactManifest,isolatedHome:string,artifactFixture:unknown){
+  await verifyInstalledReaderAuthority(authority);const p=authority.profile;
+  const github:RBridgeGitHubPort={async readIssue(){fail();},async readCommentPage(){fail();},async postComment(){fail();},async closeIssue(){fail();}};
+  const originals=artifactReceipts(p,artifactFixture).map(row=>row.record),root=join(validateArtifactIsolationHome(p,isolatedHome),'.local/state/rbridge/execution-v2');
+  return withArchivedOwner(authority,runtimeManifest,isolatedHome,artifactFixture,github,async()=>{
+    const clients:Array<Awaited<ReturnType<typeof createInstalledMcpReadClient>>>=[];
+    try{
+      for(const era of ['legacy','modern'] as const)clients.push(await createInstalledMcpReadClient(authority,runtimeManifest,era,root));
+      return await produceMcpArtifactCases({binding:{runtimeUid:p.binding.uid,principalId:p.binding.principal_id,targetInstanceId:p.binding.target_instance_id},
+        source_sha:p.runtime.source_sha,policy_sha256:p.binding.policy_sha256,originals,clients,deadline_ms:Math.min(p.budget.acceptance_ms,180000)});
+    }finally{for(const client of clients.reverse())await client.close();}
+  });
 }

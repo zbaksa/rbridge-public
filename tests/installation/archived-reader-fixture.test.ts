@@ -13,6 +13,11 @@ const mcp=(era:'legacy'|'modern')=>({fixture_id:'source-'+era,case_id:'C09',prov
     receipt_sha256:original.receiptSHA256,output_sha256:original.resultSHA256,deadline_ms:15000}});
 
 describe('archived isolated reader fixture Source data',()=>{
+  it('refuses caller-made MCP producer authority before opening an owner or launching SDK children',async()=>{
+    const module=await import('../../src/installation/archivedReaderFixture.js');
+    expect(module.runArchivedMcpProducer).toBeTypeOf('function');
+    await expect(module.runArchivedMcpProducer({profile} as never,{} as never,home,fixture)).rejects.toThrow('READER_');
+  });
   it('refuses a caller-made installed authority before opening the original owner',async()=>{
     await expect(runArchivedCoreProducer({profile} as never,{} as never,home,fixture,'c'.repeat(64))).rejects.toThrow('READER_');
   });

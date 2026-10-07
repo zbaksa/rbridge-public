@@ -104,5 +104,17 @@ class ReaderCollectorTests(unittest.TestCase):
         self.assertRaisesRegex(ValueError,'CORE_CASE_INCOMPLETE',self.prepare,self.profile,self.registry,
             {'cases':self.cases},[self.capture],self.fixture['artifact'],self.home,core_cases=[case])
 
+    def test_mcp_producer_cases_must_match_each_exact_preimage_and_complete_both_eras(self):
+        cases=copy.deepcopy(self.cases)
+        for case in cases[1:]:case['provenance']='SOURCE_PRODUCER'
+        produced=copy.deepcopy(cases[1:])
+        packet=self.prepare(self.profile,self.registry,{'cases':cases},[self.capture],self.fixture['artifact'],self.home,mcp_cases=produced)
+        self.assertEqual(packet['fixtures']['cases'][1:],produced)
+        changed=copy.deepcopy(produced);changed[0]['expected_verdict_sha256']='f'*64
+        self.assertRaisesRegex(ValueError,'MCP_CASE_CHANGED',self.prepare,self.profile,self.registry,
+            {'cases':cases},[self.capture],self.fixture['artifact'],self.home,mcp_cases=changed)
+        self.assertRaises(ValueError,self.prepare,self.profile,self.registry,{'cases':cases[:-1]},[self.capture],
+            self.fixture['artifact'],self.home,mcp_cases=produced)
+
 
 if __name__=='__main__':unittest.main()

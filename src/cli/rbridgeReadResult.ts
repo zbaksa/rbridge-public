@@ -5,7 +5,7 @@ import {createInstalledReaderRunner,createReferenceReaderRunner,qualifyRBridgeRe
 import {createInstalledMcpReadClient,qualifyInstalledReaderRuntime,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from '../installation/rbridge-installation-client.js';
 import {parseRBridgeInstallProfile,type ArtifactManifest} from '../installation/types.js';
 import type {CarrierCapture,ReaderExpectation} from '../installation/rbridge-installation-reader.js';
-import {runArchivedReaderFixture,runArchivedCoreProducer} from '../installation/archivedReaderFixture.js';
+import {runArchivedReaderFixture,runArchivedCoreProducer,runArchivedMcpProducer} from '../installation/archivedReaderFixture.js';
 import {acceptRBridgeInstallation,type InstallAcceptanceCase,type InstallAcceptanceReport} from './rbridgeInstallationAccept.js';
 function fail():never{throw new Error('READER_CLI_INPUT_INVALID');}
 function object(v:unknown){if(!v||typeof v!=='object'||Array.isArray(v))fail();return v as Record<string,unknown>;}
@@ -21,13 +21,18 @@ export async function runRBridgeReadResult(input:unknown){
     const row=object(input);if(row.schema!=='RBRIDGE_READER_INPUT_V1')fail();
     if(row.operation==='GITHUB_PARSE'){fields(row,['schema','operation','capture','expected']);return readRBridgeGitHubCarrier(row.capture as CarrierCapture,row.expected as ReaderExpectation);}
     if(row.operation==='MCP_TRANSCRIPT'){fields(row,['schema','operation','transcript','expected']);return await readRBridgeMcpOutput(createTranscriptMcpClient(row.transcript),row.expected as McpReaderScope);}
-    if(!['QUALIFY_REFERENCE','QUALIFY_INSTALLED','QUALIFY_INSTALLED_ARCHIVED_ARTIFACT','PRODUCE_CORE_ARCHIVED_ARTIFACT','MCP_READ_INSTALLED','ACCEPT_READ_INSTALLED'].includes(String(row.operation)))fail();
+    if(!['QUALIFY_REFERENCE','QUALIFY_INSTALLED','QUALIFY_INSTALLED_ARCHIVED_ARTIFACT','PRODUCE_CORE_ARCHIVED_ARTIFACT','PRODUCE_MCP_ARCHIVED_ARTIFACT','MCP_READ_INSTALLED','ACCEPT_READ_INSTALLED'].includes(String(row.operation)))fail();
     let authority:InstalledReaderAuthority|undefined;
     if(row.operation!=='QUALIFY_REFERENCE'){const profile=parseRBridgeInstallProfile(row.profile);authority=await qualifyInstalledReaderRuntime(profile,row.toolkit_manifest as ArtifactManifest);}
     if(row.operation==='PRODUCE_CORE_ARCHIVED_ARTIFACT'){
       fields(row,['schema','operation','profile','toolkit_manifest','runtime_manifest','isolated_home','artifact_fixture','context_sha256']);
       if(!authority||typeof row.isolated_home!=='string'||typeof row.context_sha256!=='string')fail();
       return await runArchivedCoreProducer(authority,row.runtime_manifest as ArtifactManifest,row.isolated_home,row.artifact_fixture,row.context_sha256);
+    }
+    if(row.operation==='PRODUCE_MCP_ARCHIVED_ARTIFACT'){
+      fields(row,['schema','operation','profile','toolkit_manifest','runtime_manifest','isolated_home','artifact_fixture']);
+      if(!authority||typeof row.isolated_home!=='string')fail();
+      return await runArchivedMcpProducer(authority,row.runtime_manifest as ArtifactManifest,row.isolated_home,row.artifact_fixture);
     }
     if(row.operation==='QUALIFY_INSTALLED_ARCHIVED_ARTIFACT'){
       fields(row,['schema','operation','profile','toolkit_manifest','runtime_manifest','registry','fixtures','isolated_home','artifact_fixture']);
@@ -86,7 +91,7 @@ async function main(){
     if(nonce!==undefined){if(!/^[0-9a-f]{64}$/.test(nonce))fail();process.stderr.write(JSON.stringify({schema:'RBRIDGE_INSTALL_HELPER_READY_V1',pid:process.pid,nonce})+'\n');}
     for await(const raw of process.stdin){const bytes=Buffer.from(raw as Uint8Array);size+=bytes.length;if(size>67108864)fail();chunks.push(bytes);}clearTimeout(deadline);
     const result=await runRBridgeReadResult(parseRBridgeCarrierJson(Buffer.concat(chunks),67108864));const bytes=Buffer.from(JSON.stringify(result));if(bytes.length>67108864)fail();process.stdout.write(bytes);process.stdout.write('\n');
-    process.exitCode='actualAcceptance'in result?result.actualAcceptance==='PASS'?0:result.actualAcceptance==='FAIL'?5:2:'schema'in result&&result.schema==='RBRIDGE_ISOLATED_CORE_CASES_V1'?0:'status'in result&&['INVALID','FAIL'].includes(result.status)?5:2;
+    process.exitCode='actualAcceptance'in result?result.actualAcceptance==='PASS'?0:result.actualAcceptance==='FAIL'?5:2:'schema'in result&&['RBRIDGE_ISOLATED_CORE_CASES_V1','RBRIDGE_ISOLATED_MCP_CASES_V1'].includes(result.schema)?0:'status'in result&&['INVALID','FAIL'].includes(result.status)?5:2;
   }catch{process.stdout.write('{"schema":"RBRIDGE_READER_CLI_ERROR_V1","status":"UNKNOWN","reason_codes":["READER_CLI_INPUT_INVALID"]}\n');process.exitCode=2;}finally{clearTimeout(deadline);}
 }
 if(process.argv[1]&&pathToFileURL(process.argv[1]).href===import.meta.url)void main();
