@@ -303,9 +303,8 @@ def verify_qualification_bundle(profile,bundle):
 
 def qualified_owner_command(bundle):
     verify_qualification_bundle(getattr(bundle,'profile',None),bundle)
-    # The collector must additionally issue the exact reviewed bootstrap command;
-    # physical artifact/reader qualification alone never grants a service switch.
-    _fail('QUALIFICATION_REVIEWED_BOOTSTRAP_COMMAND_MISSING')
+    from .owner_command_collector import reviewed_owner_command
+    return reviewed_owner_command(bundle)
 
 
 def _bundle_authorization(bundle,authorization):
