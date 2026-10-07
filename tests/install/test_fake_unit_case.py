@@ -11,8 +11,8 @@ from rbridge_installation.models import encode_report,report_sha256
 from rbridge_installation.profile import parse_profile
 
 
-def synthetic_unit_data(render,argv):
-    p=parse_profile(valid_profile());unit='rbridge-install-fixture-'+'a'*32+'.service'
+def synthetic_unit_data(render,argv,profile=None):
+    p=parse_profile(valid_profile()) if profile is None else profile;unit='rbridge-install-fixture-'+'a'*32+'.service'
     file='/root/.rbridge-fake-unit-'+'a'*32+'/'+unit;home=p.binding.home+'/.rbridge-artifact-'+'b'*32;nonce='c'*64
     home_identity={'dev':'10','ino':'100'};command=argv(p,unit,home,nonce,home_identity)
     rows={'Id':unit,'LoadState':'loaded','ActiveState':'active','SubState':'running','MainPID':'42',
