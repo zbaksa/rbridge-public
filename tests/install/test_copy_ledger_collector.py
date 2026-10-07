@@ -54,5 +54,11 @@ class CopyLedgerCollectorTests(unittest.TestCase):
             with patch('os.open',side_effect=AssertionError('Caller Root prefix open')):
                 self.assertRaisesRegex(ValueError,'COPY_LEDGER_COLLECTOR_FIXTURE_PREFIX_INVALID',_FixtureDirectory,self.profile,prefix=prefix)
 
+    def test_fixture_evidence_limit_is_declared_and_bounded_before_root_open(self):
+        from rbridge_installation.copy_ledger_collector import _FixtureDirectory
+        for limit in (False,0,67108865):
+            with patch('os.open',side_effect=AssertionError('Caller Root limit open')):
+                self.assertRaisesRegex(ValueError,'COPY_LEDGER_COLLECTOR_FIXTURE_LIMIT_INVALID',_FixtureDirectory,self.profile,limit=limit)
+
 
 if __name__=='__main__':unittest.main()

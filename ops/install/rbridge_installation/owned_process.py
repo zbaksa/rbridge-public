@@ -34,8 +34,15 @@ def validate_owned_session(parent, rows, child_specs):
     by_id = {}
     for row in rows:
         if (type(row) is not dict or set(row) != {'pid','start_ticks','ppid','session','uid','gid','groups','exe','argv'}
-                or type(row['pid']) is not int or row['pid'] < 2 or row['pid'] in by_id
-                or type(row['start_ticks']) is not str or not re.fullmatch('[1-9][0-9]*', row['start_ticks'])
+                or type(row['pid']) is not int or not 2<=row['pid']<=2147483647 or row['pid'] in by_id
+                or type(row['ppid']) is not int or not 1<=row['ppid']<=2147483647
+                or type(row['session']) is not int or not 2<=row['session']<=2147483647
+                or any(type(row[k]) is not list or len(row[k])!=4 for k in ('uid','gid'))
+                or type(row['groups']) is not list or len(row['groups'])>65536
+                or any(type(v) is not int or not 0<=v<=4294967294 for k in ('uid','gid','groups') for v in row[k])
+                or type(row['exe']) is not str or not row['exe'].startswith('/') or '\0' in row['exe']
+                or type(row['argv']) is not list or not row['argv'] or any(type(v) is not str or '\0' in v for v in row['argv'])
+                or type(row['start_ticks']) is not str or not re.fullmatch('[1-9][0-9]{0,31}', row['start_ticks'])
                 or row['session'] != parent['pid'] or int(row['start_ticks']) < int(parent['start_ticks'])):
             _fail('OWNED_HELPER_FAMILY_UNCLASSIFIED')
         by_id[row['pid']] = row

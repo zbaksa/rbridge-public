@@ -64,10 +64,12 @@ def _materials(profile,root,runtime_manifest,toolkit_manifest,request):
 
 
 class _FixtureDirectory:
-    def __init__(self,profile,path=None,*,prefix='.rbridge-copy-ledger-'):
+    def __init__(self,profile,path=None,*,prefix='.rbridge-copy-ledger-',limit=LIMIT):
         self.parent=None;self.fd=None
         try:
-            if prefix not in ('.rbridge-copy-ledger-','.rbridge-config-cas-'):_fail('COPY_LEDGER_COLLECTOR_FIXTURE_PREFIX_INVALID')
+            if prefix not in ('.rbridge-copy-ledger-','.rbridge-config-cas-','.rbridge-helper-family-'):_fail('COPY_LEDGER_COLLECTOR_FIXTURE_PREFIX_INVALID')
+            if type(limit) is not int or not 1<=limit<=67108864:_fail('COPY_LEDGER_COLLECTOR_FIXTURE_LIMIT_INVALID')
+            self.limit=limit
             self.parent=ProtectedParent(FilesystemAuthority(0,profile.binding.uid,Path('/root'),'RUNTIME'))
             if path is None:
                 name=prefix+secrets.token_hex(16)
@@ -89,6 +91,7 @@ class _FixtureDirectory:
         if (not _same(named,self.identity) or not _same(actual,self.identity) or not stat.S_ISDIR(actual.st_mode)
                 or actual.st_uid!=0 or actual.st_mode&0o7777!=0o700):_fail('COPY_LEDGER_COLLECTOR_FIXTURE_CHANGED')
     def write(self,raw):
+        if type(raw) is not bytes or not 0<len(raw)<=self.limit:_fail('COPY_LEDGER_COLLECTOR_EVIDENCE_BYTE_LIMIT')
         self.check();handle=os.open('evidence.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=self.fd)
         try:
             row=os.fstat(handle)
@@ -108,10 +111,10 @@ class _FixtureDirectory:
         try:
             before=os.fstat(handle)
             if (not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or before.st_nlink!=1
-                    or before.st_mode&0o7777!=0o600 or not 0<before.st_size<=LIMIT):_fail('COPY_LEDGER_COLLECTOR_EVIDENCE_UNPROTECTED')
+                    or before.st_mode&0o7777!=0o600 or not 0<before.st_size<=self.limit):_fail('COPY_LEDGER_COLLECTOR_EVIDENCE_UNPROTECTED')
             raw=bytearray()
-            while len(raw)<=LIMIT:
-                part=os.read(handle,min(65536,LIMIT+1-len(raw)))
+            while len(raw)<=self.limit:
+                part=os.read(handle,min(65536,self.limit+1-len(raw)))
                 if not part:break
                 raw.extend(part)
             if (len(raw)!=before.st_size or _identity(before)!=_identity(os.fstat(handle))

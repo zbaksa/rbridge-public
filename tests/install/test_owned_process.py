@@ -51,6 +51,13 @@ class OwnedProcessTests(unittest.TestCase):
         self.assertRaises(ValueError, self.validate, self.parent,
             [self.node, self.mcp], self.specs)
 
+    def test_boolean_and_float_kernel_identities_cannot_equal_integer_rows(self):
+        for key,value in [('uid',[False]*4),('gid',[False]*4),('groups',[False]),
+                          ('ppid',10.0),('session',20.0)]:
+            parent=copy.deepcopy(self.parent);parent[key]=value
+            with self.subTest(key=key):
+                self.assertRaises(ValueError,self.validate,parent,[parent,self.node,self.mcp],self.specs)
+
     def test_nonroot_or_incoherent_namespace_blocks_before_process_launch(self):
         with patch('rbridge_installation.owned_process.subprocess.Popen') as launch:
             if os.getuid() != 0:
