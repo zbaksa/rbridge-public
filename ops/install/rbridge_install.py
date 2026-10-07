@@ -145,18 +145,30 @@ def foreground_hold(prepared,result):
 def dispatch(operation,value):
     from rbridge_installation.profile import parse_profile
     from rbridge_installation.transaction import prepare_installation,QualificationInputs,SwitchAuthorization,apply_installation,resume_installation
-    profile=parse_profile(value['profile']);prepared=prepare_installation(profile,QualificationInputs(value['qualification']))
+    if operation not in OPERATIONS:raise EntryError('OPERATION_NOT_APPROVED')
+    qualification=value.get('qualification')
+    if (type(qualification) is not dict or set(qualification)!={'python_closure_sha256','custody'}
+            or type(qualification['python_closure_sha256']) is not str
+            or re.fullmatch('[0-9a-f]{64}',qualification['python_closure_sha256']) is None
+            or type(qualification['custody']) is not dict):raise EntryError('QUALIFICATION_CUSTODY_INPUT_REQUIRED')
+    auth=None;transaction_id=value.get('transaction_id')
+    if operation=='apply':
+        auth=value.get('authorization')
+        if type(auth) is not dict or set(auth)!=set(SwitchAuthorization.__dataclass_fields__):raise EntryError('SWITCH_AUTHORIZATION_MISSING')
+    if operation in ('resume','status') and (type(transaction_id) is not str or not re.fullmatch('[0-9a-f]{32}',transaction_id)):
+        raise EntryError('TRANSACTION_ID_INVALID')
+    from rbridge_installation.qualification_custody import open_root_qualification_custody
+    profile=parse_profile(value['profile'])
+    bundle=open_root_qualification_custody(profile,qualification['custody'],
+        {'python_closure_sha256':qualification['python_closure_sha256']})
+    prepared=prepare_installation(profile,QualificationInputs(bundle))
     if prepared.status!='READY':emit(blocked('PREPARATION_UNQUALIFIED'));return 2
     if operation in ('prepare','check'):
         emit({'schema':'RBRIDGE_INSTALL_PREPARATION_V1','status':'READY','scope':'PREPARATION_ONLY','profile_sha256':prepared.profile_sha256,'runtime_manifest_sha256':prepared.runtime_manifest.sha256,'toolkit_manifest_sha256':prepared.toolkit_manifest_sha256,'readers_sha256':prepared.readers_sha256,'helper_sha256':prepared.helper_sha256,'switch_authorized':False});return 0
     if operation=='apply':
-        auth=value.get('authorization')
-        if type(auth) is not dict or set(auth)!=set(SwitchAuthorization.__dataclass_fields__):raise EntryError('SWITCH_AUTHORIZATION_MISSING')
         from rbridge_installation.host_backend import QualifiedHostBackend
         backend=QualifiedHostBackend(profile);result=apply_installation(prepared,SwitchAuthorization(**auth),backend)
         return foreground_hold(prepared,result)
-    transaction_id=value.get('transaction_id')
-    if type(transaction_id) is not str or not re.fullmatch('[0-9a-f]{32}',transaction_id):raise EntryError('TRANSACTION_ID_INVALID')
     from rbridge_installation.qualification import open_qualified_resume_ledger
     ledger=open_qualified_resume_ledger(prepared.bundle,transaction_id);prepared.ledger=ledger
     if operation=='status':
