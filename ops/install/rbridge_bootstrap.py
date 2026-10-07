@@ -276,7 +276,7 @@ def _protected_file(path,limit,mode=None):
         for fd in reversed(handles):os.close(fd)
 
 
-def _fixture_input():
+def _input(required,allowed):
     import selectors
     import time
     selector=selectors.DefaultSelector();raw=bytearray();deadline=time.monotonic()+15
@@ -291,11 +291,19 @@ def _fixture_input():
             if len(raw)>67108864:_fail('BOOTSTRAP_EXECUTION_INPUT_BYTE_LIMIT')
     finally:selector.close()
     value=_json(bytes(raw),67108864)
-    if type(value) is not dict or set(value)!={'profile','qualification'}:_fail('BOOTSTRAP_EXECUTION_INPUT_INVALID')
+    if type(value) is not dict or not required<=set(value) or set(value)-allowed:_fail('BOOTSTRAP_EXECUTION_INPUT_INVALID')
     return value
 
 
-def _fixture_toolkit(value,payload):
+def _fixture_input():
+    return _input({'profile','qualification'},{'profile','qualification'})
+
+
+def _entry_input():
+    return _input({'profile','qualification'},{'profile','qualification','authorization','transaction_id'})
+
+
+def _load_protected_toolkit(value,payload):
     import importlib.util
     profile=value['profile'];pin=profile['toolkit'];parent='/usr/local/libexec/rbridge/releases'
     if (profile['paths']['release_parent']!=parent or not _hash(pin['source_sha'],40)
@@ -335,7 +343,57 @@ def _fixture_toolkit(value,payload):
     python_manifest=_json(raw,67108864)
     from rbridge_installation.models import encode_report
     if encode_report(python_manifest)!=raw:_fail('BOOTSTRAP_EXECUTION_CLOSURE_NOT_CANONICAL')
+    return module,p,closure,python_manifest
+
+
+def _fixture_toolkit(value,payload):
+    _module,p,closure,python_manifest=_load_protected_toolkit(value,payload)
     return p,closure,python_manifest
+
+
+ENTRY_OPERATIONS=('prepare','check','apply','resume','status')
+
+
+def _production_bootstrap_path(path):
+    """Fixed location predicate only; a matching string grants no authority."""
+    if (type(path) is not str or re.fullmatch(
+            r'/var/lib/rbridge-maintenance/bootstrap-[0-9a-f]{64}/payload\.py',path) is None):
+        _fail('BOOTSTRAP_ENTRY_COPY_PATH_INVALID')
+    return Path(path)
+
+
+def _entry_context(operation):
+    path=os.path.abspath(__file__)
+    try:copy=_production_bootstrap_path(path)
+    except BootstrapError:_fail('BOOTSTRAP_ENTRY_CONTEXT_UNQUALIFIED')
+    if (operation not in ENTRY_OPERATIONS or os.getuid()!=0 or os.geteuid()!=0
+            or not sys.flags.isolated or not sys.flags.no_site or not sys.flags.dont_write_bytecode
+            or os.getcwd()!='/' or sys.argv!=[path,operation]
+            or set(os.environ)!={'PATH','HOME','LC_ALL'}
+            or os.environ['PATH']!='/usr/bin:/bin:/usr/sbin:/sbin'
+            or os.environ['HOME']!='/root' or os.environ['LC_ALL']!='C'):
+        _fail('BOOTSTRAP_ENTRY_CONTEXT_UNQUALIFIED')
+    return copy,_fixture_namespace()
+
+
+def _run_protected_entry(operation):
+    """Fixed cold entry, whose preparation still requires genuine Root custody.
+
+    This internal dispatch is separate from authenticated standalone retrieval
+    and reviewed command rendering. The latter remain mandatory before an owner
+    command can be issued; no Source path, serialized PASS or fixture mode can
+    enter this context.
+    """
+    if operation not in ENTRY_OPERATIONS:_fail('BOOTSTRAP_ENTRY_OPERATION_INVALID')
+    path,kernel=_entry_context(operation);payload,identity=_protected_file(path,49152,0o400)
+    if path.parent.name!='bootstrap-'+hashlib.sha256(payload).hexdigest():_fail('BOOTSTRAP_ENTRY_PAYLOAD_CHANGED')
+    value=_entry_input();module,_profile,_closure,_manifest=_load_protected_toolkit(value,payload)
+    after,observed=_protected_file(path,49152,0o400)
+    current,namespace=_entry_context(operation)
+    if (after!=payload or observed!=identity or current!=path
+            or any(namespace[k]!=kernel[k] for k in ('pid','self_link','uid_map','gid_map','namespaces','mountinfo'))):
+        _fail('BOOTSTRAP_ENTRY_CONTEXT_CHANGED')
+    return module.dispatch(operation,value)
 
 
 def _run_qualification_fixture():
@@ -357,6 +415,12 @@ def _run_qualification_fixture():
 
 
 def main():
+    if len(sys.argv)==2 and sys.argv[1] in ENTRY_OPERATIONS:
+        try:return _run_protected_entry(sys.argv[1])
+        except BootstrapError as error:reason=str(error)
+        except (ValueError,TypeError,KeyError,OSError,ImportError,AttributeError,RecursionError):reason='BOOTSTRAP_ENTRY_PRECONDITIONS_UNQUALIFIED'
+        print(json.dumps({'schema':'RBRIDGE_BOOTSTRAP_ENTRY_V1','status':'BLOCKED','scope':'UNQUALIFIED',
+            'may_execute':False,'reason_codes':[reason]},sort_keys=True));return 2
     if len(sys.argv)==2 and sys.argv[1]=='--qualification-fixture':
         try:return _run_qualification_fixture()
         except BootstrapError as error:reason=str(error)

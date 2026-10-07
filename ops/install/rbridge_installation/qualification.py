@@ -414,7 +414,7 @@ def _verify_copied_bootstrap_import(profile,path):
             or Path(__file__).resolve()!=root/'ops/install/rbridge_installation/qualification.py'
             or profile.paths.release_parent!='/usr/local/libexec/rbridge/releases'
             or type(path) is not str
-            or not re.fullmatch(r'/root/\.rbridge-bootstrap-fixture-[0-9a-f]{32}/bootstrap-[0-9a-f]{64}/payload\.py',path)):
+            or not re.fullmatch(r'(?:/root/\.rbridge-bootstrap-fixture-[0-9a-f]{32}|/var/lib/rbridge-maintenance)/bootstrap-[0-9a-f]{64}/payload\.py',path)):
         _fail('QUALIFICATION_COPIED_BOOTSTRAP_CONTEXT_UNQUALIFIED')
     _assert_kernel_namespace();file=Path(path)
     for parent in (file.parent,file.parent.parent):
