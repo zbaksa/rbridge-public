@@ -229,10 +229,11 @@ def collect_root_reader_invocations(profile,runtime_manifest,toolkit_manifest,re
     finally:home.close()
 
 
-def verify_root_reader_observation(profile,token,qualification_request):
+def verify_root_reader_observation(profile,token,qualification_request,*,artifact_observation=None):
     if type(token) is not _RootReaderObservation or token not in _observations:_fail('READER_COLLECTOR_ORIGIN_UNQUALIFIED')
     pin,runtime_manifest,toolkit_manifest,archives,artifact,core,mcp=_observations[token]
     if report_sha256(token)!=pin or token.profile_sha256!=report_sha256(profile):_fail('READER_COLLECTOR_OBSERVATION_CHANGED')
+    if artifact_observation is not None and artifact_observation is not artifact:_fail('READER_COLLECTOR_ARTIFACT_ORIGIN_CHANGED')
     p,root=_context(profile,qualification_request);input_value=_json(token.input_json.encode());output=_json(token.output_json.encode())
     actual=_inputs(p,root,runtime_manifest,toolkit_manifest,input_value['registry'],input_value['fixtures'],archives,artifact,qualification_request,core,mcp)
     if encode_report(actual).decode()!=token.input_json:_fail('READER_COLLECTOR_OBSERVATION_CHANGED')
