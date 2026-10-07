@@ -398,6 +398,45 @@ def open_qualified_resume_ledger(bundle,transaction_id):
         parent.close()
 
 
+def _verify_copied_bootstrap_import(profile,path):
+    """One copied __main__ entry, compared with the full protected toolkit pin."""
+    import os
+    import stat
+    import sys
+    from .artifact import ArtifactEntry,ArtifactManifest,validate_manifest,_identity
+    from .host_backend import _assert_kernel_namespace,_protected_bytes
+    from .readonly_helper import _json
+    root=Path(profile.paths.release_parent)/('toolkit-'+profile.toolkit.source_sha)
+    if (os.getuid()!=0 or os.geteuid()!=0 or not sys.flags.isolated or not sys.flags.no_site
+            or not sys.flags.dont_write_bytecode or os.getcwd()!='/'
+            or Path(__file__).resolve()!=root/'ops/install/rbridge_installation/qualification.py'
+            or profile.paths.release_parent!='/usr/local/libexec/rbridge/releases'
+            or type(path) is not str
+            or not re.fullmatch(r'/root/\.rbridge-bootstrap-fixture-[0-9a-f]{32}/bootstrap-[0-9a-f]{64}/payload\.py',path)):
+        _fail('QUALIFICATION_COPIED_BOOTSTRAP_CONTEXT_UNQUALIFIED')
+    _assert_kernel_namespace();file=Path(path)
+    for parent in (file.parent,file.parent.parent):
+        row=parent.lstat()
+        if not stat.S_ISDIR(row.st_mode) or row.st_uid!=0 or row.st_mode&0o7777!=0o700:
+            _fail('QUALIFICATION_COPIED_BOOTSTRAP_UNPROTECTED')
+    before=file.lstat();raw=_protected_bytes(file,49152)
+    if (before.st_mode!=stat.S_IFREG|0o400 or before.st_uid!=0 or before.st_nlink!=1
+            or _identity(before)!=_identity(file.lstat()) or file.parent.name!='bootstrap-'+hashlib.sha256(raw).hexdigest()):
+        _fail('QUALIFICATION_COPIED_BOOTSTRAP_CHANGED')
+    value=_json(_protected_bytes(root.with_name(root.name+'.manifest.json'),33554432),33554432)
+    try:
+        manifest=ArtifactManifest(**{**value,'entries':tuple(ArtifactEntry(**row) for row in value['entries'])})
+        validate_manifest(manifest)
+        entry=next(e for e in manifest.entries if e.path=='ops/install/rbridge_bootstrap.py')
+    except (KeyError,TypeError,ValueError,StopIteration):_fail('QUALIFICATION_COPIED_BOOTSTRAP_TOOLKIT_INVALID')
+    if (manifest.kind!='TOOLKIT' or manifest.sha256!=profile.toolkit.manifest_sha256
+            or manifest.source_sha!=profile.toolkit.source_sha or manifest.tree_sha!=profile.toolkit.tree_sha
+            or manifest.node_sha256!=profile.runtime.node_sha256 or entry.kind!='FILE' or entry.size!=len(raw)
+            or entry.sha256!=hashlib.sha256(raw).hexdigest() or _protected_bytes(root/entry.path,49152)!=raw):
+        _fail('QUALIFICATION_COPIED_BOOTSTRAP_TOOLKIT_CHANGED')
+    return {'path':path,'payload_sha256':entry.sha256,'payload_bytes':len(raw),'identity':list(map(str,_identity(before)))}
+
+
 def verify_import_closure(toolkit_root,profile,qualification_request):
     """Observe the running isolated interpreter and every allowed import byte.
 
@@ -432,14 +471,15 @@ def verify_import_closure(toolkit_root,profile,qualification_request):
     files={path for path,row in entries.items() if row['kind']=='FILE'}
     for path in sys.path:
         if path not in directories and path not in manifest['absent_paths']:_fail('QUALIFICATION_PYTHON_IMPORT_PATH_UNQUALIFIED')
-    imported=[]
+    imported=[];copied_bootstrap=None
     for name,module in list(sys.modules.items()):
         path=getattr(module,'__file__',None)
         if path is None:continue
         if type(path) is not str:_fail('QUALIFICATION_PYTHON_IMPORT_PATH_UNQUALIFIED')
         if (path not in files and path not in (str(root)+'/ops/install/rbridge_install.py',str(root)+'/ops/install/rbridge_bootstrap.py')
                 and not path.startswith(str(root)+'/ops/install/rbridge_installation/')):
-            _fail('QUALIFICATION_PYTHON_IMPORT_PATH_UNQUALIFIED')
+            if name!='__main__':_fail('QUALIFICATION_PYTHON_IMPORT_PATH_UNQUALIFIED')
+            copied_bootstrap=_verify_copied_bootstrap_import(p,path)
         imported.append({'module':name,'path':path})
     mapped=set()
     for row in _kernel_bytes('/proc/self/maps',2097152).decode('utf-8',errors='strict').splitlines():
@@ -450,6 +490,8 @@ def verify_import_closure(toolkit_root,profile,qualification_request):
             mapped.add(fields[5])
         elif 'x' in fields[1] and (len(fields)!=6 or fields[5] not in ('[vdso]','[vsyscall]')):
             _fail('QUALIFICATION_PYTHON_MAPPING_UNQUALIFIED')
-    return {**proof,'scope':'RUNNING_ROOT_INTERPRETER_OBSERVATION_ONLY','execution_qualified':False,
+    result={**proof,'scope':'RUNNING_ROOT_INTERPRETER_OBSERVATION_ONLY','execution_qualified':False,
         'profile_sha256':report_sha256(p),'imports':sorted(imported,key=lambda r:r['module']),
         'mapped_files':sorted(mapped),'service_action_authorized':False}
+    if copied_bootstrap is not None:result['copied_bootstrap']=copied_bootstrap
+    return result

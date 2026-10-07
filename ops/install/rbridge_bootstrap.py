@@ -23,8 +23,8 @@ class BootstrapError(ValueError):pass
 def _fail(reason):raise BootstrapError(reason)
 
 
-def _json(raw):
-    if type(raw) is not bytes or not 0<len(raw)<=65536:_fail('BOOTSTRAP_CAPTURE_BYTE_LIMIT')
+def _json(raw,limit=65536):
+    if type(raw) is not bytes or not 0<len(raw)<=limit:_fail('BOOTSTRAP_CAPTURE_BYTE_LIMIT')
     def pairs(rows):
         out={}
         for k,v in rows:
@@ -182,7 +182,187 @@ def _publish_root_fixture_bootstrap(parent,payload,manifest,capture,binding):
     return _publish(parent,payload,manifest,capture,binding,True,True)
 
 
+def _validate_fixture_namespace(value):
+    """Stdlib pre-import predicate, never a kernel observation or authority."""
+    def fail():_fail('BOOTSTRAP_EXECUTION_NAMESPACE_UNQUALIFIED')
+    keys={'pid','self_link','self_status','pid1_status','uid_map','gid_map','namespaces','mountinfo'}
+    if (type(value) is not dict or set(value)!=keys or type(value['pid']) is not int or not 2<=value['pid']<=2147483647
+            or any(type(value[k]) is not str or len(value[k].encode())>1048576 for k in keys-{'pid','namespaces'})
+            or value['self_link']!=str(value['pid'])):fail()
+    for key,pid in (('self_status',value['pid']),('pid1_status',1)):
+        pids=re.findall(r'^Pid:\s*([0-9]+)$',value[key],re.M)
+        nested=re.findall(r'^NSpid:\s*([0-9 \t]+)$',value[key],re.M)
+        if pids!=[str(pid)] or len(nested)!=1 or nested[0].split()!=[str(pid)]:fail()
+    for key in ('uid_map','gid_map'):
+        if [row.split() for row in value[key].splitlines() if row.strip()]!=[['0','0','4294967295']]:fail()
+    if type(value['namespaces']) is not dict or set(value['namespaces'])!={'pid','mnt','user','cgroup'}:fail()
+    for kind,links in value['namespaces'].items():
+        if (type(links) is not list or len(links)!=2 or links[0]!=links[1] or type(links[0]) is not str
+                or not re.fullmatch(re.escape(kind)+r':\[[1-9][0-9]{0,19}\]',links[0])):fail()
+    required={'/proc':'proc','/sys/fs/cgroup':'cgroup2'};found={}
+    for row in value['mountinfo'].splitlines():
+        fields=row.split()
+        if len(fields)<10 or fields.count('-')!=1:fail()
+        separator=fields.index('-')
+        if separator<6 or len(fields)-separator!=4:fail()
+        if fields[4] in required:
+            if fields[4] in found or fields[3]!='/' or fields[separator+1]!=required[fields[4]]:fail()
+            found[fields[4]]=fields[separator+1]
+    if found!=required:fail()
+
+
+def _fixture_namespace():
+    def read(path,limit=65536):
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+        try:
+            raw=bytearray()
+            while len(raw)<=limit:
+                part=os.read(fd,min(65536,limit+1-len(raw)))
+                if not part:break
+                raw.extend(part)
+            if len(raw)>limit:_fail('BOOTSTRAP_EXECUTION_NAMESPACE_UNQUALIFIED')
+            return bytes(raw).decode('utf-8',errors='strict')
+        finally:os.close(fd)
+    def links():return {k:[os.readlink('/proc/self/ns/'+k),os.readlink('/proc/1/ns/'+k)] for k in ('pid','mnt','user','cgroup')}
+    before=links();value={'pid':os.getpid(),'self_link':os.readlink('/proc/self'),
+        'self_status':read('/proc/self/status'),'pid1_status':read('/proc/1/status'),
+        'uid_map':read('/proc/self/uid_map'),'gid_map':read('/proc/self/gid_map'),
+        'namespaces':before,'mountinfo':read('/proc/self/mountinfo',1048576)}
+    _validate_fixture_namespace(value)
+    if before!=links():_fail('BOOTSTRAP_EXECUTION_NAMESPACE_UNQUALIFIED')
+    return value
+
+
+def _fixture_context():
+    path=os.path.abspath(__file__);nonce=os.environ.get('RBRIDGE_BOOTSTRAP_NONCE')
+    if (os.getuid()!=0 or os.geteuid()!=0 or not sys.flags.isolated or not sys.flags.no_site
+            or not sys.flags.dont_write_bytecode or os.getcwd()!='/'
+            or not re.fullmatch(r'/root/\.rbridge-bootstrap-fixture-[0-9a-f]{32}/bootstrap-[0-9a-f]{64}/payload\.py',path)
+            or sys.argv!=[path,'--qualification-fixture'] or not _hash(nonce)
+            or set(os.environ)!={'PATH','HOME','LC_ALL','RBRIDGE_BOOTSTRAP_NONCE'}
+            or os.environ['PATH']!='/usr/bin:/bin:/usr/sbin:/sbin' or os.environ['HOME']!='/root' or os.environ['LC_ALL']!='C'):
+        _fail('BOOTSTRAP_EXECUTION_CONTEXT_UNQUALIFIED')
+    return Path(path),_fixture_namespace()
+
+
+def _protected_file(path,limit,mode=None):
+    """Fixed caller-derived protected paths only; retain every ancestor descriptor."""
+    handles=[];links=[];flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC;handle=None
+    def stable(s):return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid)
+    try:
+        fd=os.open('/',flags);handles.append(fd)
+        for name in path.parts[1:-1]:
+            before=os.stat(name,dir_fd=fd,follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode) or before.st_uid!=0 or before.st_mode&0o6022:_fail('BOOTSTRAP_EXECUTION_PARENT_UNPROTECTED')
+            child=os.open(name,flags,dir_fd=fd);handles.append(child)
+            if stable(before)!=stable(os.fstat(child)):_fail('BOOTSTRAP_EXECUTION_PARENT_CHANGED')
+            links.append((fd,name,child,before));fd=child
+        handle=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,dir_fd=fd);before=os.fstat(handle)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or before.st_nlink!=1 or before.st_mode&0o6022
+                or not 0<before.st_size<=limit or mode is not None and before.st_mode&0o7777!=mode):_fail('BOOTSTRAP_EXECUTION_FILE_UNPROTECTED')
+        raw=bytearray()
+        while len(raw)<=before.st_size:
+            part=os.read(handle,min(65536,before.st_size+1-len(raw)))
+            if not part:break
+            raw.extend(part)
+        if (len(raw)!=before.st_size or _identity(before)!=_identity(os.fstat(handle))
+                or _identity(before)!=_identity(os.stat(path.name,dir_fd=fd,follow_symlinks=False))):_fail('BOOTSTRAP_EXECUTION_FILE_CHANGED')
+        for parent,name,child,previous in links:
+            if stable(previous)!=stable(os.fstat(child)) or stable(previous)!=stable(os.stat(name,dir_fd=parent,follow_symlinks=False)):
+                _fail('BOOTSTRAP_EXECUTION_PARENT_CHANGED')
+        return bytes(raw),list(map(str,_identity(before)))
+    finally:
+        if handle is not None:os.close(handle)
+        for fd in reversed(handles):os.close(fd)
+
+
+def _fixture_input():
+    import selectors
+    import time
+    selector=selectors.DefaultSelector();raw=bytearray();deadline=time.monotonic()+15
+    try:
+        selector.register(sys.stdin.buffer,selectors.EVENT_READ)
+        while True:
+            remaining=deadline-time.monotonic()
+            if remaining<=0 or not selector.select(remaining):_fail('BOOTSTRAP_EXECUTION_INPUT_DEADLINE')
+            part=os.read(sys.stdin.fileno(),65536)
+            if not part:break
+            raw.extend(part)
+            if len(raw)>67108864:_fail('BOOTSTRAP_EXECUTION_INPUT_BYTE_LIMIT')
+    finally:selector.close()
+    value=_json(bytes(raw),67108864)
+    if type(value) is not dict or set(value)!={'profile','qualification'}:_fail('BOOTSTRAP_EXECUTION_INPUT_INVALID')
+    return value
+
+
+def _fixture_toolkit(value,payload):
+    import importlib.util
+    profile=value['profile'];pin=profile['toolkit'];parent='/usr/local/libexec/rbridge/releases'
+    if (profile['paths']['release_parent']!=parent or not _hash(pin['source_sha'],40)
+            or not _hash(pin['tree_sha'],40) or not _hash(pin['manifest_sha256'])):_fail('BOOTSTRAP_EXECUTION_TOOLKIT_UNQUALIFIED')
+    root=Path(parent)/('toolkit-'+pin['source_sha']);raw,_=_protected_file(root.with_name(root.name+'.manifest.json'),33554432)
+    manifest=_json(raw,33554432)
+    required={'schema','kind','source_sha','tree_sha','node_sha256','uid_policy','entries','sha256'}
+    if (type(manifest) is not dict or set(manifest)!=required or manifest['schema']!='RBRIDGE_INSTALL_TOOLKIT_V1'
+            or manifest['kind']!='TOOLKIT' or manifest['uid_policy']!='ROOT_IMMUTABLE_RUNTIME_READABLE'
+            or manifest['sha256']!=pin['manifest_sha256'] or manifest['source_sha']!=pin['source_sha']
+            or manifest['tree_sha']!=pin['tree_sha'] or manifest['node_sha256']!=profile['runtime']['node_sha256']
+            or type(manifest['entries']) is not list or len(manifest['entries'])>100000
+            or hashlib.sha256(json.dumps({k:v for k,v in manifest.items() if k!='sha256'},ensure_ascii=False,sort_keys=True,
+                separators=(',',':'),allow_nan=False).encode()).hexdigest()!=manifest['sha256']):_fail('BOOTSTRAP_EXECUTION_TOOLKIT_UNQUALIFIED')
+    entries={}
+    for row in manifest['entries']:
+        if type(row) is not dict or set(row)!={'path','kind','size','mode','sha256','target'} or type(row['path']) is not str or row['path'] in entries:
+            _fail('BOOTSTRAP_EXECUTION_TOOLKIT_UNQUALIFIED')
+        entries[row['path']]=row
+    for relative in ('ops/install/rbridge_bootstrap.py','ops/install/rbridge_install.py'):
+        entry=entries[relative];data,_=_protected_file(root/relative,49152 if relative.endswith('rbridge_bootstrap.py') else 1048576)
+        if (entry['kind']!='FILE' or type(entry['size']) is not int or len(data)!=entry['size']
+                or hashlib.sha256(data).hexdigest()!=entry['sha256'] or relative.endswith('rbridge_bootstrap.py') and data!=payload):
+            _fail('BOOTSTRAP_EXECUTION_TOOLKIT_BYTES_CHANGED')
+    path=root/'ops/install/rbridge_install.py';spec=importlib.util.spec_from_file_location('_rbridge_protected_install_entry',path)
+    if spec is None or spec.loader is None:_fail('BOOTSTRAP_EXECUTION_TOOLKIT_UNQUALIFIED')
+    module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module
+    # Execute the bytes just checked, rather than a loader-selected cached pyc.
+    exec(compile(data,str(path),'exec'),module.__dict__)
+    module.import_protected_toolkit(value)
+    from rbridge_installation.profile import parse_profile
+    from rbridge_installation.qualification import verify_import_closure
+    p=parse_profile(profile)
+    closure=verify_import_closure(root,p,value['qualification']);pin=value['qualification']['python_closure_sha256']
+    if p.paths.ledger_parent!='/var/lib/rbridge-maintenance' or not _hash(pin):_fail('BOOTSTRAP_EXECUTION_TOOLKIT_UNQUALIFIED')
+    raw,_=_protected_file(Path(p.paths.ledger_parent)/('python-closure-'+pin+'.json'),67108864)
+    python_manifest=_json(raw,67108864)
+    from rbridge_installation.models import encode_report
+    if encode_report(python_manifest)!=raw:_fail('BOOTSTRAP_EXECUTION_CLOSURE_NOT_CANONICAL')
+    return p,closure,python_manifest
+
+
+def _run_qualification_fixture():
+    path,kernel=_fixture_context();payload,identity=_protected_file(path,49152,0o400)
+    digest=hashlib.sha256(payload).hexdigest()
+    if path.parent.name!='bootstrap-'+digest:_fail('BOOTSTRAP_EXECUTION_PAYLOAD_CHANGED')
+    sys.stderr.write(json.dumps({'schema':'RBRIDGE_INSTALL_HELPER_READY_V1','pid':os.getpid(),
+        'nonce':os.environ['RBRIDGE_BOOTSTRAP_NONCE']},sort_keys=True,separators=(',',':'))+'\n');sys.stderr.flush()
+    value=_fixture_input();p,closure,python_manifest=_fixture_toolkit(value,payload)
+    after,observed=_protected_file(path,49152,0o400)
+    if after!=payload or observed!=identity:_fail('BOOTSTRAP_EXECUTION_PAYLOAD_CHANGED')
+    report={'schema':'RBRIDGE_BOOTSTRAP_EXECUTION_REPORT_V1','status':'PASS','scope':'ROOT_INTERPRETER_READONLY_PROBE',
+        'operation':'QUALIFICATION_FIXTURE_ONLY','profile_sha256':closure['profile_sha256'],
+        'toolkit_manifest_sha256':p.toolkit.manifest_sha256,'python_closure_sha256':value['qualification']['python_closure_sha256'],
+        'payload_sha256':digest,'payload_bytes':len(payload),'payload_path':str(path),'payload_identity':identity,
+        'kernel_namespace':kernel,'import_closure':closure,'python_manifest':python_manifest,
+        'may_execute':False,'service_action_authorized':False}
+    print(json.dumps(report,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False));return 0
+
+
 def main():
+    if len(sys.argv)==2 and sys.argv[1]=='--qualification-fixture':
+        try:return _run_qualification_fixture()
+        except BootstrapError as error:reason=str(error)
+        except (ValueError,TypeError,KeyError,OSError,ImportError,AttributeError,RecursionError):reason='BOOTSTRAP_EXECUTION_PRECONDITIONS_UNQUALIFIED'
+        print(json.dumps({'schema':'RBRIDGE_BOOTSTRAP_ENTRY_V1','status':'BLOCKED','scope':'UNQUALIFIED',
+            'may_execute':False,'reason_codes':[reason]},sort_keys=True));return 2
     # An unqualified standalone invocation cannot execute a payload or a service
     # action. Actual retrieval/closure qualification precedes command rendering.
     print(json.dumps({'schema':'RBRIDGE_BOOTSTRAP_ENTRY_V1','status':'BLOCKED',
