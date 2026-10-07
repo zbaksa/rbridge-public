@@ -271,6 +271,8 @@ def verify_qualification_bundle(profile,bundle):
         _fail('QUALIFICATION_PHYSICAL_ORIGIN_UNQUALIFIED')
     if report_sha256(profile)!=report_sha256(bundle.profile) or _bundle_pin(bundle)!=_qualified[bundle]:
         _fail('QUALIFICATION_BUNDLE_CHANGED')
+    from .qualification_issuer import verify_root_bundle_origin
+    verify_root_bundle_origin(profile,bundle)
     from .host_backend import _assert_kernel_namespace
     from .protected_copy import verify_published,FilesystemAuthority
     import os
