@@ -117,7 +117,7 @@ These are transaction outcomes, not generic meanings for every reader/audit CLI 
 
 The foreground CLI retains exclusion for its bounded owner-present window after a failed transaction. When that window ends, it leaves durable evidence and reports that fresh reacquisition is required. It never promises a surviving flock. The bootstrap wrapper preserves the child/sudo exit status without exiting the interactive parent shell; shell liveness alone is not a successful installation result.
 
-The current Native qualification/bootstrap implementation is incomplete and refuses Root command readiness. Source fixtures and CI can pass while actual artifact, reader, import-closure or privileged qualification remains `UNKNOWN`. Do not assemble a production command from draft components or serialized PASS reports.
+The current Native qualification/bootstrap handoff refuses Root command readiness while physical qualification remains unperformed. The Source driver requires genuine cold custody, authenticated bootstrap bytes and authenticated owner review of the entire command/input before executing a fresh protected copy. A direct entry invocation or serialized review cannot substitute its private review origin. Source fixtures and CI can pass while actual artifact, reader, import-closure or privileged qualification remains `UNKNOWN`. Do not assemble a production command from draft components or serialized PASS reports.
 
 ## GitHub transport housekeeping
 

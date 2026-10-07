@@ -276,7 +276,7 @@ def _protected_file(path,limit,mode=None):
         for fd in reversed(handles):os.close(fd)
 
 
-def _fixture_input():
+def _bounded_input():
     import selectors
     import time
     selector=selectors.DefaultSelector();raw=bytearray();deadline=time.monotonic()+15
@@ -291,6 +291,12 @@ def _fixture_input():
             if len(raw)>67108864:_fail('BOOTSTRAP_EXECUTION_INPUT_BYTE_LIMIT')
     finally:selector.close()
     value=_json(bytes(raw),67108864)
+    if type(value) is not dict:_fail('BOOTSTRAP_EXECUTION_INPUT_INVALID')
+    return value
+
+
+def _fixture_input():
+    value=_bounded_input()
     if type(value) is not dict or set(value)!={'profile','qualification'}:_fail('BOOTSTRAP_EXECUTION_INPUT_INVALID')
     return value
 
@@ -356,7 +362,86 @@ def _run_qualification_fixture():
     print(json.dumps(report,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False));return 0
 
 
+def _owner_context():
+    """Observe actual Root context before reading input or importing a toolkit."""
+    path=os.path.abspath(__file__);argv=sys.argv
+    original=re.fullmatch(r'/usr/local/libexec/rbridge/releases/toolkit-[0-9a-f]{40}/ops/install/rbridge_bootstrap\.py',path)
+    copied=re.fullmatch(r'/root/\.rbridge-bootstrap-fixture-[0-9a-f]{32}/bootstrap-[0-9a-f]{64}/payload\.py',path)
+    retrieve=len(argv)==3 and argv[1]=='--retrieve' and original
+    dispatch=len(argv)==4 and argv[1]=='--dispatch' and copied
+    if (os.getuid()!=0 or os.geteuid()!=0 or not sys.flags.isolated or not sys.flags.no_site
+            or not sys.flags.dont_write_bytecode or os.getcwd()!='/' or not (retrieve or dispatch)
+            or argv[0]!=path or argv[2] not in ('prepare','check','apply','resume','status')
+            or set(os.environ)!={'PATH','HOME','LC_ALL'} or os.environ['PATH']!='/usr/bin:/bin:/usr/sbin:/sbin'
+            or os.environ['HOME']!='/root' or os.environ['LC_ALL']!='C'):_fail('BOOTSTRAP_OWNER_CONTEXT_UNQUALIFIED')
+    if dispatch and re.fullmatch(r'/root/\.rbridge-privileged-[0-9a-f]{32}/evidence\.json',argv[3]) is None:
+        _fail('BOOTSTRAP_OWNER_INPUT_PATH_UNQUALIFIED')
+    _fixture_namespace();return Path(path),argv[1],argv[2]
+
+
+def _run_owner_command():
+    path,mode,operation=_owner_context();payload,identity=_protected_file(path,49152,0o400 if mode=='--dispatch' else None)
+    if mode=='--dispatch' and path.parent.name!='bootstrap-'+hashlib.sha256(payload).hexdigest():
+        _fail('BOOTSTRAP_OWNER_PAYLOAD_CHANGED')
+    if mode=='--retrieve':value=_bounded_input()
+    else:
+        raw,_input_identity=_protected_file(Path(sys.argv[3]),67108864,0o600)
+        value=_json(raw,67108864)
+        if json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()!=raw:
+            _fail('BOOTSTRAP_OWNER_INPUT_NOT_CANONICAL')
+    p,_closure,_python_manifest=_fixture_toolkit(value,payload)
+    from rbridge_installation.owner_command import owner_command_recipe,collect_root_owner_command_review,verify_root_owner_command,entry_input
+    from rbridge_installation.qualification_custody import open_root_qualification_custody
+    from rbridge_installation.bootstrap_collector import collect_root_bootstrap_bytes
+    from rbridge_installation.copy_ledger_collector import _FixtureDirectory
+    from rbridge_installation.models import encode_report
+    owner_command_recipe(p,operation,value)
+    request={'python_closure_sha256':value['qualification']['python_closure_sha256']}
+    bundle=open_root_qualification_custody(p,value['qualification']['custody'],request)
+    bootstrap=collect_root_bootstrap_bytes(p,bundle.runtime_manifest,bundle.toolkit_manifest,
+        value['bootstrap']['manifest'],value['bootstrap']['issue_number'],request)
+    review=collect_root_owner_command_review(p,bundle,bootstrap,operation,value)
+    actual=verify_root_owner_command(p,review,bundle=bundle)
+    evidence=actual['evidence']['bootstrap'];remote=base64.b64decode(evidence['payload_base64'],validate=True)
+    after,observed=_protected_file(path,49152,0o400 if mode=='--dispatch' else None)
+    if after!=payload or observed!=identity or remote!=payload:_fail('BOOTSTRAP_OWNER_PAYLOAD_CHANGED')
+    if mode=='--retrieve':
+        # A fresh retained private directory avoids adopting any existing copy.
+        stage=_FixtureDirectory(p,prefix='.rbridge-bootstrap-fixture-',limit=p.budget.carrier_bytes)
+        try:
+            capture=evidence['evidence']['capture'];binding={'repository':p.binding.repository,'author':p.binding.author,
+                'issue_number':value['bootstrap']['issue_number']}
+            published=_publish_root_fixture_bootstrap(stage.path,payload,value['bootstrap']['manifest'],capture,binding)
+            stage.check();copy_path=Path(published['path']);copied,copied_identity=_protected_file(copy_path,49152,0o400)
+            if copied!=payload or copied_identity!=published['identity']:_fail('BOOTSTRAP_OWNER_COPY_CHANGED')
+        finally:stage.close()
+        fixture=_FixtureDirectory(p,prefix='.rbridge-privileged-',limit=p.budget.carrier_bytes)
+        try:
+            fixture.write(encode_report(value));input_path=fixture.path/'evidence.json'
+            retained,_retained_identity=_protected_file(input_path,p.budget.carrier_bytes,0o600)
+            if retained!=encode_report(value):_fail('BOOTSTRAP_OWNER_INPUT_CHANGED')
+        finally:fixture.close()
+        # Recheck before replacement. The new interpreter authenticates and
+        # reviews again; no former in-memory producer token crosses this exec.
+        verify_root_owner_command(p,review,bundle=bundle)
+        final,final_identity=_protected_file(copy_path,49152,0o400)
+        if final!=payload or final_identity!=copied_identity:_fail('BOOTSTRAP_OWNER_COPY_CHANGED')
+        os.execve(p.toolkit.python_path,[p.toolkit.python_path,'-I','-S','-B',str(copy_path),'--dispatch',operation,str(input_path)],
+            {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':'/root','LC_ALL':'C'})
+        _fail('BOOTSTRAP_OWNER_EXEC_UNCERTAIN')
+    entry=sys.modules.get('_rbridge_protected_install_entry')
+    expected=Path(p.paths.release_parent)/('toolkit-'+p.toolkit.source_sha)/'ops/install/rbridge_install.py'
+    if entry is None or Path(entry.__file__)!=expected:_fail('BOOTSTRAP_OWNER_ENTRY_UNQUALIFIED')
+    return entry.dispatch(operation,entry_input(value),reviewed_command=review)
+
+
 def main():
+    if len(sys.argv)>1 and sys.argv[1] in ('--retrieve','--dispatch'):
+        try:return _run_owner_command()
+        except BootstrapError as error:reason=str(error)
+        except (ValueError,TypeError,KeyError,OSError,ImportError,AttributeError,RecursionError):reason='BOOTSTRAP_OWNER_PRECONDITIONS_UNQUALIFIED'
+        print(json.dumps({'schema':'RBRIDGE_BOOTSTRAP_ENTRY_V1','status':'BLOCKED','scope':'UNQUALIFIED',
+            'may_execute':False,'reason_codes':[reason]},sort_keys=True));return 2
     if len(sys.argv)==2 and sys.argv[1]=='--qualification-fixture':
         try:return _run_qualification_fixture()
         except BootstrapError as error:reason=str(error)

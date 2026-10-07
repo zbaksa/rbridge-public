@@ -142,7 +142,7 @@ def foreground_hold(prepared,result):
     emit({'schema':'RBRIDGE_INSTALL_FOREGROUND_HOLD_V1','status':'UNKNOWN','phase':'HOLD_UNSETTLED','transaction_id':prepared.ledger.transaction_id,'old_restart_forbidden':True,'lock_scope':'REQUIRES_FRESH_REACQUISITION_AFTER_EXIT','reason_codes':['FOREGROUND_WINDOW_ENDED']})
     return 2
 
-def dispatch(operation,value):
+def dispatch(operation,value,*,reviewed_command=None):
     from rbridge_installation.profile import parse_profile
     from rbridge_installation.transaction import prepare_installation,QualificationInputs,SwitchAuthorization,apply_installation,resume_installation
     if operation not in OPERATIONS:raise EntryError('OPERATION_NOT_APPROVED')
@@ -158,9 +158,13 @@ def dispatch(operation,value):
     if operation in ('resume','status') and (type(transaction_id) is not str or not re.fullmatch('[0-9a-f]{32}',transaction_id)):
         raise EntryError('TRANSACTION_ID_INVALID')
     from rbridge_installation.qualification_custody import open_root_qualification_custody
+    from rbridge_installation.owner_command import reviewed_dispatch_bundle
     profile=parse_profile(value['profile'])
-    bundle=open_root_qualification_custody(profile,qualification['custody'],
-        {'python_closure_sha256':qualification['python_closure_sha256']})
+    if reviewed_command is None:
+        open_root_qualification_custody(profile,qualification['custody'],
+            {'python_closure_sha256':qualification['python_closure_sha256']})
+        raise EntryError('QUALIFICATION_REVIEWED_BOOTSTRAP_COMMAND_MISSING')
+    bundle=reviewed_dispatch_bundle(profile,reviewed_command,operation,value)
     prepared=prepare_installation(profile,QualificationInputs(bundle))
     if prepared.status!='READY':emit(blocked('PREPARATION_UNQUALIFIED'));return 2
     if operation in ('prepare','check'):
