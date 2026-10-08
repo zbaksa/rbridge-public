@@ -34,6 +34,12 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ---
 
+## 2026-10-08 — Protected Core reader producer continuation
+
+The independent producer now derives missing, conflicting, mixed and corrupt large-carrier cases from the actual isolated Core publisher bytes, plus foreign receipt scope and policy cases whose outer envelope digest is recomputed. The Root collector requires the complete fixed sixteen-case roster; caller-provided scope or verdict hashes still cannot register a producer origin. Both original artifact receipts and outputs are read back unchanged.
+
+The test-only checkpoint `d61a029d60be3a58f5ba7bdabc86b30315ab0c35` reproduced the gap on [non-root Node22 CI run 37754802495](https://github.com/zbaksa/rbridge-public/actions/runs/37754802495): the producer returned ten cases while the regression required sixteen. Exact-candidate implementation verification is recorded in [draft PR #34](https://github.com/zbaksa/rbridge-public/pull/34). Additional mandatory GitHub and MCP variants and physical reader qualification remain open. **Status: UNMERGED DRAFT. Owner command/production switch: BLOCKED. Live deployment: NOT DEPLOYED.**
+
 ## 2026-10-07 — P2A installation Task16 integration draft
 
 The final source review reproduced a containment stop skipped after maintenance expiry and a timed-out, identified dead helper retaining an unfinished journal. Regression tests now cover late lost start acknowledgements, the remaining start/acceptance/stop budget, foreground exclusion after expiry, and independent helper-family settlement. Operation timeout still fails; unclassified or changed process identity remains unsettled. New starts require their original maintenance deadline, while a fixed containment stop can use retained exclusion after it expires.

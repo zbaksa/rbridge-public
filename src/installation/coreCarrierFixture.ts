@@ -151,6 +151,38 @@ export async function produceCoreCarrierCases(input:CoreCarrierCaseInput){
     const capture=input.port.capture(number,input.context_sha256);if(capture.comments.length||capture.issue.state!=='OPEN')fail();
     add('C08',number===107?'fresh-expired':'collision',capture,expected(capture,submission(id,operation)),{scope:'REFERENCE_PARSER_ONLY',kind:'UNAVAILABLE',status:'UNKNOWN',reason_codes:['CARRIER_RESULT_UNAVAILABLE']});
   }
+  function invalid(caseId:ProducerCase['case_id'],suffix:string,row:ProducerCase,reason:string){
+    seal(row.capture);row.expected.capture_sha256=row.capture.capture_sha256;
+    add(caseId,suffix,row.capture,row.expected,{scope:'REFERENCE_PARSER_ONLY',kind:'INVALID',status:'FAIL',reason_codes:[reason]});
+  }
+  function chunk(row:ProducerCase){
+    const comment=row.capture.comments.find(c=>c.body.startsWith('```json\n')&&JSON.parse(c.body.slice(8,-5)).schema==='COCWIN_REMOTE_BRIDGE_RESULT_CHUNK_V1');
+    if(!comment)fail('CORE_FIXTURE_LARGE_CHUNK_UNAVAILABLE');
+    return {comment,value:JSON.parse(comment.body.slice(8,-5)) as {transferId:string;dataBase64:string;chunkSha256:string;objectSha256:string}};
+  }
+  const largeMissing=structuredClone(cases[4]!);const missingChunk=chunk(largeMissing).comment;
+  largeMissing.capture.comments=largeMissing.capture.comments.filter(c=>c.id!==missingChunk.id);
+  invalid('C04','large-missing',largeMissing,'CARRIER_CHUNK_MISSING');
+  const largeConflicting=structuredClone(cases[4]!),conflict=chunk(largeConflicting),conflictBytes=Buffer.from(conflict.value.dataBase64,'base64');
+  conflictBytes[0]=conflictBytes[0]!^1;conflict.value.dataBase64=conflictBytes.toString('base64');conflict.value.chunkSha256=sha(conflictBytes);
+  const conflictId=Math.max(...largeConflicting.capture.comments.map(c=>c.id))+1;
+  largeConflicting.capture.comments.push({...conflict.comment,id:conflictId,url:largeConflicting.capture.issue.url+'#issuecomment-'+conflictId,body:fence(conflict.value)});
+  invalid('C04','large-conflicting',largeConflicting,'CARRIER_CHUNK_CONFLICT');
+  const largeMixed=structuredClone(cases[4]!),mixed=chunk(largeMixed);mixed.value.objectSha256='d'.repeat(64);mixed.value.transferId='result-'+mixed.value.objectSha256;
+  const mixedId=Math.max(...largeMixed.capture.comments.map(c=>c.id))+1;
+  largeMixed.capture.comments.push({...mixed.comment,id:mixedId,url:largeMixed.capture.issue.url+'#issuecomment-'+mixedId,body:fence(mixed.value)});
+  invalid('C04','large-mixed',largeMixed,'CARRIER_ORPHAN_CHUNK');
+  const largeCorrupt=structuredClone(cases[4]!),corrupt=chunk(largeCorrupt),corruptBytes=Buffer.from(corrupt.value.dataBase64,'base64');
+  corruptBytes[0]=corruptBytes[0]!^1;corrupt.value.dataBase64=corruptBytes.toString('base64');corrupt.comment.body=fence(corrupt.value);
+  invalid('C04','large-corrupt',largeCorrupt,'CARRIER_CHUNK_INVALID');
+  for(const [suffix,reason,mutate] of [
+    ['rehashed-foreign-scope','CARRIER_INPUT_INVALID',(receipt:RBridgeExecutionReceiptV1)=>{receipt.principalId='foreign-fixture-principal';}],
+    ['rehashed-foreign-policy','CARRIER_POLICY_BINDING_INVALID',(receipt:RBridgeExecutionReceiptV1)=>{receipt.policy.policySha256='d'.repeat(64);}],
+  ] as const){
+    const row=structuredClone(cases[0]!),outer=JSON.parse(row.capture.comments[0]!.body.slice(8,-5));
+    mutate(outer.operationResult.receipt);outer.resultSha256=sha(JSON.stringify(outer.operationResult));row.capture.comments[0]!.body=fence(outer);
+    invalid('C06',suffix,row,reason);
+  }
   await originals();check();
   return {schema:'RBRIDGE_ISOLATED_CORE_CASES_V1' as const,scope:'ISOLATED_CORE_SOURCE_DATA_ONLY' as const,producer_source_sha:SOURCE,binding_sha256:installHash(binding),context_sha256:input.context_sha256,
     original_receipts:input.originals.map(r=>({operation_id:r.operationId,receipt_json:r.receiptJSON,receipt_sha256:r.receiptSHA256,output_sha256:r.resultSHA256})),originals_unchanged:true as const,cases};

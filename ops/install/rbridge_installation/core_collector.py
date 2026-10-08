@@ -76,9 +76,11 @@ def compare_core_producer_output(profile,output,artifact_fixture,context):
             or output['producer_source_sha']!=profile.runtime.source_sha or output['binding_sha256']!=report_sha256(binding)
             or output['context_sha256']!=context or output['originals_unchanged'] is not True
             or encode_report(output['original_receipts'])!=encode_report(originals)
-            or type(output['cases']) is not list or len(output['cases'])!=10):_fail('CORE_COLLECTOR_OUTPUT_INVALID')
+            or type(output['cases']) is not list or len(output['cases'])!=16):_fail('CORE_COLLECTOR_OUTPUT_INVALID')
     expected_ids=[('C02','health'),('C02','file'),('C03','missing'),('C03','blocked'),('C04','large'),
-        ('C05','digest-substitution'),('C06','foreign-author'),('C07','expired-closed-replay'),('C08','fresh-expired'),('C08','collision')]
+        ('C05','digest-substitution'),('C06','foreign-author'),('C07','expired-closed-replay'),('C08','fresh-expired'),('C08','collision'),
+        ('C04','large-missing'),('C04','large-conflicting'),('C04','large-mixed'),('C04','large-corrupt'),
+        ('C06','rehashed-foreign-scope'),('C06','rehashed-foreign-policy')]
     fixtures=[]
     for case,(case_id,suffix) in zip(output['cases'],expected_ids):
         fields={'fixture_id','case_id','transport','provenance','capture','expected','expected_verdict_json','expected_verdict_sha256','expected_verdict_canonical_sha256'}
