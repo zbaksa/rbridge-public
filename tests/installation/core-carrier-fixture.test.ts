@@ -84,7 +84,8 @@ describe('fixed isolated Core producer',()=>{
         }
       }finally{for(const c of sdkClients.reverse())await c.close();}
       expect(report.scope).toBe('ISOLATED_CORE_SOURCE_DATA_ONLY');
-      expect(report.cases.map(f=>f.case_id)).toEqual(['C02','C02','C03','C03','C04','C05','C06','C07','C08','C08']);
+      expect(report.cases.map(f=>f.case_id)).toEqual(['C02','C02','C03','C03','C04','C05','C06','C07','C08','C08','C04','C04','C04','C04','C06','C06']);
+      expect(report.cases.slice(10).map(f=>f.fixture_id)).toEqual(['core-producer-large-missing','core-producer-large-conflicting','core-producer-large-mixed','core-producer-large-corrupt','core-producer-rehashed-foreign-scope','core-producer-rehashed-foreign-policy']);
       expect(JSON.stringify(originals)).toBe(before);
       for(const f of report.cases){
         const verdict=readRBridgeGitHubCarrier(f.capture,f.expected);
@@ -93,7 +94,8 @@ describe('fixed isolated Core producer',()=>{
         expect(f.capture.scope).toBe('FIXTURE_AUTHORITY_ONLY');
       }
       const outcomes=report.cases.map(f=>JSON.parse(f.expected_verdict_json));
-      expect(outcomes.map(v=>v.kind)).toEqual(['CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','INVALID','INVALID','CORE_RESULT','UNAVAILABLE','UNAVAILABLE']);
+      expect(outcomes.map(v=>v.kind)).toEqual(['CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','INVALID','INVALID','CORE_RESULT','UNAVAILABLE','UNAVAILABLE','INVALID','INVALID','INVALID','INVALID','INVALID','INVALID']);
+      expect(outcomes.slice(10).map(v=>v.reason_codes)).toEqual([['CARRIER_CHUNK_MISSING'],['CARRIER_CHUNK_CONFLICT'],['CARRIER_ORPHAN_CHUNK'],['CARRIER_CHUNK_INVALID'],['CARRIER_INPUT_INVALID'],['CARRIER_POLICY_BINDING_INVALID']]);
       expect(outcomes[2].status).toBe('FAIL');expect(outcomes[3].status).toBe('BLOCKED');
       expect(outcomes[2]).not.toHaveProperty('output');expect(outcomes[3]).not.toHaveProperty('output');
       expect(outcomes[4].output.text.length).toBeGreaterThan(60000);
