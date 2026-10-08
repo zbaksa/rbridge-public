@@ -143,8 +143,14 @@ class QualifiedHostBackend:
         result={}
         for row in raw.splitlines():
             key,separator,value=row.partition('=')
-            if not separator or key in result:raise PauseError('HOST_SERVICE_OBSERVATION_INVALID')
-            result[key]=value
+            if not separator:raise PauseError('HOST_SERVICE_OBSERVATION_INVALID')
+            if key in result:
+                # systemctl emits one EnvironmentFiles row per file, in order.
+                # No repeated scalar may overwrite an earlier observation.
+                if key!='EnvironmentFiles' or not result[key] or not value:
+                    raise PauseError('HOST_SERVICE_OBSERVATION_INVALID')
+                result[key]+=' '+value
+            else:result[key]=value
         if set(result)!=set(PROPERTIES):raise PauseError('HOST_SERVICE_OBSERVATION_INVALID')
         cgroup=result['ControlGroup']
         if cgroup:

@@ -34,6 +34,12 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ---
 
+## 2026-10-08 — systemd environment-file observation compatibility
+
+Real systemd output reproduced a preflight refusal when each `EnvironmentFiles` item appeared on its own line. The installer now retains those array values in their original effective order; repeated scalar properties and empty repeated array values still refuse. A regression failed with `HOST_SERVICE_OBSERVATION_INVALID` before the narrow correction. Exact-candidate full verification is recorded in [draft PR #34](https://github.com/zbaksa/rbridge-public/pull/34).
+
+This changes configuration observation only. Physical Root/import-closure/artifact/reader qualification and installed acceptance remain separate, unperformed gates. **Status: UNMERGED DRAFT. Owner command/production switch: BLOCKED. Live deployment: NOT DEPLOYED.**
+
 ## 2026-10-08 — Protected reader producer continuation
 
 The independent Core producer derives malformed large carriers and rehashed foreign receipt scope/policy from actual isolated publisher preimages. Its fixed twenty-six-case roster also covers Source receipt uncertainty/termination, legacy rejection, request/output digest mismatch and foreign repository/issue/request. The mutated uncertainty/termination receipts exercise parsing; they do not claim a physically uncertain or stopped operation. Original artifact receipts and outputs are read back unchanged before and after archived fixtures.
