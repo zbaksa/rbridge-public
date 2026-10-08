@@ -64,6 +64,7 @@ describe('fixed isolated Core producer',()=>{
         originals.push(captureArtifactOperation({submission,context:state.context,receipt:found.receipt,pages:[page],output:Buffer.from(page.dataBase64,'base64'),policy_sha256:found.receipt.policy.policySha256}));
       }
       const before=JSON.stringify(originals),report=await produceCoreCarrierCases({binding:state.binding,repository:'example/rbridge-control',author:'fixture-owner',source_sha:source,context_sha256:'c'.repeat(64),sourceDirectory:directory,core,adapter,port,originals,deadline_ms:15000});
+      expect(report.cases).toHaveLength(26);
       const sdkClients=[];
       try{
         for(const era of ['legacy','modern'] as const){
