@@ -50,6 +50,7 @@ def _packet(profile,root,runtime_manifest,toolkit_manifest,artifact,request):
     observed=verify_root_artifact_for_reader_profile(profile,artifact,request)
     needed={'dist/server/cli/rbridgeReadResult.js','dist/server/installation/archivedReaderFixture.js',
         'dist/server/installation/mcpArtifactFixture.js','dist/server/installation/artifactFixture.js',
+        'dist/server/installation/mcpNegativeCases.js','dist/server/installation/mcpNegativeFixture.js',
         'ops/install/rbridge_installation/mcp_collector.py'}
     if not needed<={e.path for e in toolkit_manifest.entries if e.kind=='FILE'}:_fail('MCP_COLLECTOR_ENTRY_UNQUALIFIED')
     packet={'schema':'RBRIDGE_READER_INPUT_V1','operation':'PRODUCE_MCP_ARCHIVED_ARTIFACT','profile':profile,
@@ -71,7 +72,7 @@ def compare_mcp_producer_output(profile,output,artifact_fixture):
             or output['schema']!='RBRIDGE_ISOLATED_MCP_CASES_V1' or output['scope']!='ISOLATED_MCP_SOURCE_DATA_ONLY'
             or output['producer_source_sha']!=profile.runtime.source_sha or output['binding_sha256']!=report_sha256(binding)
             or output['originals_unchanged'] is not True or encode_report(output['original_receipts'])!=encode_report(originals)
-            or type(output['cases']) is not list or len(output['cases'])!=2):_fail('MCP_COLLECTOR_OUTPUT_INVALID')
+            or type(output['cases']) is not list or len(output['cases'])!=24):_fail('MCP_COLLECTOR_OUTPUT_INVALID')
     fixtures=[]
     for case,era,original in zip(output['cases'],('legacy','modern'),artifact_fixture['receipts']):
         fields={'fixture_id','case_id','transport','provenance','era','expected','expected_verdict_json',
@@ -135,7 +136,101 @@ def compare_mcp_producer_output(profile,output,artifact_fixture):
                     or '_meta' in frame and frame['_meta']!={'io.modelcontextprotocol/serverInfo':{'name':'rbridge','version':'0.1.0-dev'}}):
                 _fail('MCP_COLLECTOR_FRAME_CHANGED')
         fixtures.append({k:v for k,v in case.items() if k not in ('expected_verdict_json','expected_verdict_canonical_sha256','sdk_transcript_json')})
+    variants=('not-found','not-ready','terminal','unavailable','binding','schema','cursor','digest','utf8','json','canonical')
+    for case,(era,variant) in zip(output['cases'][2:],((era,variant) for era in ('legacy','modern') for variant in variants)):
+        fixtures.append(_compare_negative_case(profile,case,era,variant,artifact_fixture['receipts'][0]))
     return {'scope':'ISOLATED_MCP_SOURCE_DATA_ONLY','fixtures':fixtures,'may_execute':False}
+
+
+def _negative_recipe(profile,original,variant):
+    """Independent Python oracle for the fixed Source byte recipes."""
+    binding=profile.binding;operation='artifact-mcp-'+variant
+    intent=report_sha256({'schema':'RBRIDGE_OPERATION_SUBMISSION_V1','principalId':binding.principal_id,
+        'targetInstanceId':binding.target_instance_id,'operation':{'kind':'HEALTH','action':'STATUS'}})
+    expected={'operationId':operation,'principalId':binding.principal_id,'targetInstanceId':binding.target_instance_id,
+        'runtime_uid':binding.uid,'intent_sha256':intent,'policy_sha256':binding.policy_sha256,
+        'deadline_ms':min(profile.budget.acceptance_ms,180000)}
+    capability={'schema':'RBRIDGE_MCP_CAPABILITIES_V1','mode':'SAFE','principalId':binding.principal_id,'targetInstanceId':binding.target_instance_id,
+        'supportedKinds':['HEALTH','FILE','PROCESS','CHUNK'],
+        'enabledActions':['HEALTH/STATUS','FILE/LIST','FILE/STAT','FILE/READ','FILE/READ_MANY','FILE/READ_BINARY','FILE/SEARCH'],
+        'policySha256':binding.policy_sha256,'executionAvailable':True,'executionStatus':'CORE_CONNECTED'}
+    queries=[('rbridge_capabilities',{},capability,False)]
+    def envelope(tool,result):return {'schema':'RBRIDGE_MCP_CORE_QUERY_RESULT_V1','tool':tool,'result':result}
+    if variant=='not-found':
+        queries.append(('rbridge_status',{'operationId':operation},envelope('rbridge_status',{'status':'NOT_FOUND',
+            'operationId':operation,'principalId':binding.principal_id,'targetInstanceId':binding.target_instance_id}),False))
+        return expected,{'status':'NOT_FOUND','reason_codes':[]},queries
+    if variant=='unavailable':
+        queries.append(('rbridge_status',{'operationId':operation},{'schema':'RBRIDGE_MCP_CORE_QUERY_RESULT_V1','tool':'rbridge_status',
+            'operationId':operation,'principalId':binding.principal_id,'targetInstanceId':binding.target_instance_id,
+            'status':'UNCERTAIN','reason':'RBRIDGE_MCP_CORE_UNAVAILABLE'},True))
+        return expected,{'status':'UNAVAILABLE','reason_codes':['MCP_READER_QUERY_UNAVAILABLE']},queries
+    receipt=_json(original['receiptJSON'].encode());receipt['operationId']=operation;receipt['intentSha256']=intent;receipt.pop('reason',None)
+    data=encode_report({'fixture':'reader-negative','text':'é🙂'})
+    if variant=='utf8':data=bytes((0xc3,0x28))
+    if variant=='json':data=b'{'
+    if variant=='canonical':data='{ "fixture": "reader-negative", "text": "é🙂" }'.encode()
+    receipt['resultSha256']='d'*64 if variant=='digest' else hashlib.sha256(data).hexdigest()
+    if variant=='not-ready':
+        receipt['phase']='RUNNING';receipt.pop('outcome');receipt.pop('resultSha256')
+        receipt['transitions']=[row for row in receipt['transitions'] if row['phase']!='TERMINAL']
+    if variant=='terminal':
+        receipt['outcome']='FAIL';receipt['reason']='SOURCE_FIXTURE_TERMINAL_NO_OUTPUT';receipt.pop('resultSha256')
+    expected['receipt_sha256']=report_sha256(receipt)
+    if 'resultSha256' in receipt:expected['output_sha256']=receipt['resultSha256']
+    status=envelope('rbridge_result' if variant=='binding' else 'rbridge_status',{'status':'RECEIPT','receipt':receipt})
+    if variant=='schema':status['schema']='SOURCE_FIXTURE_WRONG_SCHEMA'
+    queries.append(('rbridge_status',{'operationId':operation},status,False))
+    if variant in ('not-ready','terminal'):
+        return expected,{'status':'NOT_READY' if variant=='not-ready' else 'TERMINAL','reason_codes':[],'receipt':receipt},queries
+    reasons={'binding':'MCP_READER_BINDING_INVALID','schema':'MCP_READER_SCHEMA_INVALID','cursor':'MCP_READER_PAGE_INVALID',
+        'digest':'MCP_READER_WHOLE_DIGEST_INVALID','utf8':'MCP_READER_UTF8_INVALID','json':'MCP_READER_JSON_INVALID','canonical':'MCP_READER_CANONICAL_OUTPUT_INVALID'}
+    if variant not in ('binding','schema'):
+        import base64
+        queries.append(('rbridge_result',{'operationId':operation,'cursor':0,'maxBytes':32768},envelope('rbridge_result',{
+            'status':'RESULT','receipt':receipt,'resultSha256':receipt['resultSha256'],'cursor':0,
+            'nextCursor':len(data)+(1 if variant=='cursor' else 0),'eof':True,'dataBase64':base64.b64encode(data).decode()}),False))
+    return expected,{'status':'INVALID','reason_codes':[reasons[variant]]},queries
+
+
+def _compare_negative_case(profile,case,era,variant,original):
+    fields={'fixture_id','case_id','transport','provenance','era','expected','expected_verdict_json',
+        'expected_verdict_sha256','expected_verdict_canonical_sha256','sdk_transcript_json'}
+    if (type(case) is not dict or set(case)!=fields or case['fixture_id']!='mcp-producer-'+era+'-'+variant
+            or case['case_id']!='C09' or case['transport']!='MCP' or case['provenance']!='SOURCE_PRODUCER' or case['era']!=era
+            or type(case['expected_verdict_json']) is not str or type(case['sdk_transcript_json']) is not str):_fail('MCP_COLLECTOR_CASE_INVALID')
+    expected,want,queries=_negative_recipe(profile,original,variant)
+    raw=case['expected_verdict_json'];verdict=_json(raw.encode(),profile.budget.carrier_bytes)
+    transcript=_json(case['sdk_transcript_json'].encode(),profile.budget.carrier_bytes)
+    tf={'sdk_package_version','negotiated_protocol_version','protocol_era','responses'}
+    if (type(transcript) is not dict or set(transcript)!=tf or transcript['sdk_package_version']!='2.3.0' or transcript['protocol_era']!=era
+            or (transcript['negotiated_protocol_version']!='2026-07-28' if era=='modern' else transcript['negotiated_protocol_version'] not in
+                ('2024-11-05','2025-03-26','2025-06-18','2025-11-25'))):_fail('MCP_COLLECTOR_TRANSCRIPT_INVALID')
+    vf={'scope','query_evidence',*want}
+    valid=want['status'] in ('NOT_FOUND','NOT_READY','TERMINAL')
+    if valid:vf.update(('response_sha256','sdk_package_version','negotiated_protocol_version','protocol_era'))
+    if (encode_report(case['expected'])!=encode_report(expected) or type(verdict) is not dict or set(verdict)!=vf
+            or verdict['scope']!='REFERENCE_MCP_READ' or any(encode_report(verdict[k])!=encode_report(v) for k,v in want.items())
+            or hashlib.sha256(raw.encode()).hexdigest()!=case['expected_verdict_sha256']
+            or report_sha256(verdict)!=case['expected_verdict_canonical_sha256']
+            or valid and any(verdict[k]!=transcript[k] for k in tf-{'responses'})):_fail('MCP_COLLECTOR_ORACLE_CHANGED')
+    evidence=verdict['query_evidence'];responses=transcript['responses']
+    if (type(evidence) is not list or type(responses) is not list or len(evidence)!=len(queries) or len(responses)!=len(queries)
+            or valid and verdict['response_sha256']!=[q.get('response_sha256') for q in evidence if type(q) is dict]):_fail('MCP_COLLECTOR_TRANSCRIPT_INCOMPLETE')
+    for (name,args,row,is_error),query,response in zip(queries,evidence,responses):
+        if (type(query) is not dict or set(query)!={'name','arguments_json','response_json','response_sha256'} or query['name']!=name
+                or type(query['arguments_json']) is not str or type(query['response_json']) is not str
+                or encode_report(_json(query['arguments_json'].encode()))!=encode_report(args)
+                or encode_report(_json(query['response_json'].encode(),131072))!=encode_report(row)
+                or hashlib.sha256(query['response_json'].encode()).hexdigest()!=query['response_sha256']
+                or type(response) is not dict or set(response)!={'name','arguments','response'} or response['name']!=name
+                or encode_report(response['arguments'])!=encode_report(args)):_fail('MCP_COLLECTOR_TRANSCRIPT_CHANGED')
+        frame=response['response']
+        if (type(frame) is not dict or not {'content','structuredContent'}<=set(frame) or set(frame)-{'content','structuredContent','isError','_meta'}
+                or (frame.get('isError') is not True if is_error else 'isError' in frame and frame['isError'] is not False)
+                or encode_report(frame['structuredContent'])!=encode_report(row) or frame['content']!=[{'type':'text','text':query['response_json']}]
+                or '_meta' in frame and frame['_meta']!={'io.modelcontextprotocol/serverInfo':{'name':'rbridge','version':'0.1.0-dev'}}):_fail('MCP_COLLECTOR_FRAME_CHANGED')
+    return {k:v for k,v in case.items() if k not in ('expected_verdict_json','expected_verdict_canonical_sha256','sdk_transcript_json')}
 
 
 def collect_root_mcp_cases(profile,runtime_manifest,toolkit_manifest,artifact_observation,qualification_request):
@@ -153,7 +248,8 @@ def collect_root_mcp_cases(profile,runtime_manifest,toolkit_manifest,artifact_ob
         sdk=[p.runtime.node_path,str(root/'dist/server/installation/artifactFixture.js'),'--stdio-client',str(runtime),str(state),json.dumps(binding,separators=(',',':'))]
         spec={'exe':p.runtime.node_path,'argv':args,'uid':p.binding.uid,'gid':p.binding.gid,
             'groups':list(p.binding.supplementary_gids),'parent_argv':argv,'max_count':1}
-        specs=[spec,{**spec,'argv':sdk,'parent_argv':args,'max_count':2}];nonce=secrets.token_hex(32);child=None
+        negative=[p.runtime.node_path,str(root/'dist/server/installation/mcpNegativeFixture.js'),'--stdio-client',str(runtime),str(state),json.dumps(binding,separators=(',',':'))]
+        specs=[spec,{**spec,'argv':sdk,'parent_argv':args,'max_count':2},{**spec,'argv':negative,'parent_argv':args,'max_count':2}];nonce=secrets.token_hex(32);child=None
         def started(actual):
             nonlocal child
             child=actual

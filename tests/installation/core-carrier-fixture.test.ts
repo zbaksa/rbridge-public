@@ -18,7 +18,7 @@ import {serveStdio} from '@modelcontextprotocol/server/stdio';
 import {createRBridgeMcpSafeServer} from '../../src/server/rbridgeMcpSafe.js';
 import {createFixtureSdkReadClient} from '../../src/installation/rbridge-installation-client.js';
 import {produceMcpArtifactCases} from '../../src/installation/mcpArtifactFixture.js';
-import {readRBridgeMcpOutput} from '../../src/installation/readerQualification.js';
+import {readRBridgeMcpOutput,qualifyRBridgeReaders,createReferenceReaderRunner,type ReaderFixture} from '../../src/installation/readerQualification.js';
 
 const source='b5881fd8367b4249e82683f1f884f2392cb696d4';
 describe('fixed isolated Core producer',()=>{
@@ -85,8 +85,8 @@ describe('fixed isolated Core producer',()=>{
         }
       }finally{for(const c of sdkClients.reverse())await c.close();}
       expect(report.scope).toBe('ISOLATED_CORE_SOURCE_DATA_ONLY');
-      expect(report.cases.map(f=>f.case_id)).toEqual(['C02','C02','C03','C03','C04','C05','C06','C07','C08','C08','C04','C04','C04','C04','C06','C06']);
-      expect(report.cases.slice(10).map(f=>f.fixture_id)).toEqual(['core-producer-large-missing','core-producer-large-conflicting','core-producer-large-mixed','core-producer-large-corrupt','core-producer-rehashed-foreign-scope','core-producer-rehashed-foreign-policy']);
+      expect(report.cases.map(f=>f.case_id)).toEqual(['C02','C02','C03','C03','C04','C05','C06','C07','C08','C08','C04','C04','C04','C04','C06','C06','C03','C03','C03','C03','C03','C05','C05','C06','C06','C06']);
+      expect(report.cases.slice(10,16).map(f=>f.fixture_id)).toEqual(['core-producer-large-missing','core-producer-large-conflicting','core-producer-large-mixed','core-producer-large-corrupt','core-producer-rehashed-foreign-scope','core-producer-rehashed-foreign-policy']);
       expect(JSON.stringify(originals)).toBe(before);
       for(const f of report.cases){
         const verdict=readRBridgeGitHubCarrier(f.capture,f.expected);
@@ -94,15 +94,24 @@ describe('fixed isolated Core producer',()=>{
         expect(installHash(JSON.parse(f.expected_verdict_json))).toBe(f.expected_verdict_canonical_sha256);
         expect(f.capture.scope).toBe('FIXTURE_AUTHORITY_ONLY');
       }
+      const registration={reader_id:'core-producer-source',source_sha256:'d'.repeat(64),entrypoint:'/srv/fixture/rbridgeReadResult.js',version:'1',transport:'GITHUB' as const,
+        trusted_context_sha256:'c'.repeat(64),qualification_sha256:'f'.repeat(64),adoption_sha256:'f'.repeat(64)};
+      const fixtures:ReaderFixture[]=report.cases.map(c=>({fixture_id:c.fixture_id,case_id:c.case_id,transport:c.transport,provenance:c.provenance,
+        capture:c.capture,expected:c.expected,expected_verdict_sha256:c.expected_verdict_sha256,...(c.replayed_at?{replayed_at:c.replayed_at}:{})}));
+      const qualification=await qualifyRBridgeReaders({readers:[registration],adoptions:[]},{cases:fixtures},createReferenceReaderRunner());
+      expect(qualification.referenceAcceptance).toBe('UNKNOWN');expect(qualification.actualAcceptance).toBe('UNKNOWN');expect(qualification.invocations).toHaveLength(26);
+      expect(qualification.reason_codes.filter(code=>code.startsWith('READER_SEMANTIC_MISSING_'))).toEqual(['READER_SEMANTIC_MISSING_C01_FILE','READER_SEMANTIC_MISSING_C01_HEALTH']);
       const outcomes=report.cases.map(f=>JSON.parse(f.expected_verdict_json));
-      expect(outcomes.map(v=>v.kind)).toEqual(['CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','INVALID','INVALID','CORE_RESULT','UNAVAILABLE','UNAVAILABLE','INVALID','INVALID','INVALID','INVALID','INVALID','INVALID']);
-      expect(outcomes.slice(10).map(v=>v.reason_codes)).toEqual([['CARRIER_CHUNK_MISSING'],['CARRIER_CHUNK_CONFLICT'],['CARRIER_ORPHAN_CHUNK'],['CARRIER_CHUNK_INVALID'],['CARRIER_INPUT_INVALID'],['CARRIER_POLICY_BINDING_INVALID']]);
+      expect(outcomes.map(v=>v.kind)).toEqual(['CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','CORE_RESULT','INVALID','INVALID','CORE_RESULT','UNAVAILABLE','UNAVAILABLE','INVALID','INVALID','INVALID','INVALID','INVALID','INVALID','CORE_RESULT','CORE_RESULT','LEGACY_REJECTION','LEGACY_REJECTION','LEGACY_REJECTION','INVALID','INVALID','INVALID','INVALID','INVALID']);
+      expect(outcomes.slice(10,16).map(v=>v.reason_codes)).toEqual([['CARRIER_CHUNK_MISSING'],['CARRIER_CHUNK_CONFLICT'],['CARRIER_ORPHAN_CHUNK'],['CARRIER_CHUNK_INVALID'],['CARRIER_INPUT_INVALID'],['CARRIER_POLICY_BINDING_INVALID']]);
+      expect(outcomes.slice(16,21).map(v=>v.status)).toEqual(['UNCERTAIN','BLOCKED','BLOCKED','UNCERTAIN','BLOCKED']);
+      for(const v of outcomes.slice(16,21))expect(v).not.toHaveProperty('output');
       expect(outcomes[2].status).toBe('FAIL');expect(outcomes[3].status).toBe('BLOCKED');
       expect(outcomes[2]).not.toHaveProperty('output');expect(outcomes[3]).not.toHaveProperty('output');
       expect(outcomes[4].output.text.length).toBeGreaterThan(60000);
       expect(report.cases[7]!.capture.comments).toHaveLength(2);
       expect(outcomes[7].receipt).toEqual(JSON.parse(originals[0]!.receiptJSON));
-      for(const v of outcomes.slice(8))expect(v).not.toHaveProperty('receipt');
+      for(const v of [...outcomes.slice(8,16),...outcomes.slice(18)])expect(v).not.toHaveProperty('receipt');
       await expect(produceCoreCarrierCases({binding:state.binding,repository:'example/rbridge-control',author:'fixture-owner',source_sha:source,context_sha256:'c'.repeat(64),sourceDirectory:directory,core,adapter,port,originals,deadline_ms:15000})).rejects.toThrow();
     }finally{await core.close();await rm(directory,{recursive:true,force:true});await cleanupRBridgeTestStates();}
   },30000);

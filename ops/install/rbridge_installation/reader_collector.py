@@ -179,6 +179,7 @@ def _inputs(profile,root,runtime_manifest,toolkit_manifest,registry,fixtures,arc
     paths={e.path:e for e in toolkit_manifest.entries if e.kind=='FILE'}
     needed={'dist/server/cli/rbridgeReadResult.js','dist/server/installation/archivedReaderFixture.js',
         'dist/server/installation/readerQualification.js','dist/server/installation/rbridge-installation-client.js',
+        'dist/server/installation/mcpNegativeCases.js','dist/server/installation/mcpNegativeFixture.js',
         'ops/install/rbridge_installation/reader_collector.py'}
     entry='dist/server/cli/rbridgeReadResult.js'
     if (not needed<=set(paths) or any(r.entrypoint!=str(root/entry) or r.source_sha256!=paths[entry].sha256
@@ -204,7 +205,8 @@ def collect_root_reader_invocations(profile,runtime_manifest,toolkit_manifest,re
         sdk_args=[p.runtime.node_path,str(root/'dist/server/installation/artifactFixture.js'),'--stdio-client',str(runtime),str(state),json.dumps(binding,separators=(',',':'))]
         spec={'exe':p.runtime.node_path,'argv':node_args,'uid':p.binding.uid,'gid':p.binding.gid,
             'groups':list(p.binding.supplementary_gids),'parent_argv':parent_args,'max_count':1}
-        specs=[spec,{**spec,'argv':sdk_args,'parent_argv':node_args,'max_count':2}]
+        negative_args=[p.runtime.node_path,str(root/'dist/server/installation/mcpNegativeFixture.js'),'--stdio-client',str(runtime),str(state),json.dumps(binding,separators=(',',':'))]
+        specs=[spec,{**spec,'argv':sdk_args,'parent_argv':node_args,'max_count':2},{**spec,'argv':negative_args,'parent_argv':node_args,'max_count':2}]
         nonce=secrets.token_hex(32);child=None
         def started(actual):
             nonlocal child

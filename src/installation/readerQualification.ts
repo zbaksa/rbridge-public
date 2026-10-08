@@ -5,7 +5,7 @@ import type {RBridgeExecutionReceiptV1,RBridgeJsonValue} from '../domain/rbridge
 import {parseRBridgeCarrierJson} from './carrierJson.js';
 import {readRBridgeGitHubCarrier} from './githubCarrierReader.js';
 import type {CarrierCapture,ReaderExpectation} from './rbridge-installation-reader.js';
-import {assertInstalledMcpReaderScope,isInstalledMcpReadClient,isInstalledReaderAuthority,verifyInstalledReaderAuthority,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from './rbridge-installation-client.js';
+import {assertInstalledMcpReaderScope,assertInstalledMcpFixtureScope,isInstalledMcpFixtureReadClient,isInstalledMcpReadClient,isInstalledReaderAuthority,verifyInstalledReaderAuthority,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from './rbridge-installation-client.js';
 import {installHash} from './gateContext.js';
 import {validateInstallContract,type ReaderRegistration} from './types.js';
 const sha=(v:string|Uint8Array)=>createHash('sha256').update(v).digest('hex');
@@ -64,7 +64,7 @@ export async function readRBridgeMcpOutput(client:McpReadClient,scope:McpReaderS
     const output=parsed(()=>parseRBridgeCarrierJson(bytes,8388608),'MCP_READER_JSON_INVALID');if(!bytes.equals(Buffer.from(canonical(output))))fail('MCP_READER_CANONICAL_OUTPUT_INVALID');
     const finalLookup=await core('rbridge_status',{operationId:scope.operationId}),final=parsed(()=>parseRBridgeCoreLookupResult(finalLookup,scope),'MCP_READER_STATUS_INVALID');if(final.status!=='RECEIPT'||hash(final.receipt)!==receiptSHA||hash(await capabilities())!==hash(capability))fail('MCP_READER_FINAL_IDENTITY_CHANGED');
     return {...base,status:'RESULT',reason_codes:[],receipt,output,output_sha256:receipt.resultSha256,raw_output_base64:bytes.toString('base64'),response_sha256:responseHashes,...metadata};
-  }catch(error){const reason=error instanceof Error&&/^MCP_READER_[A-Z_]+$/.test(error.message)?error.message:'MCP_READER_INPUT_INVALID';return {...base,status:['MCP_READER_DEADLINE','MCP_READER_OWNER_UNAVAILABLE','MCP_READER_QUERY_UNAVAILABLE'].includes(reason)?'UNAVAILABLE':'INVALID',reason_codes:[reason]};}
+  }catch(error){const reason=error instanceof Error&&/^MCP_READER_[A-Z0-9_]+$/.test(error.message)?error.message:'MCP_READER_INPUT_INVALID';return {...base,status:['MCP_READER_DEADLINE','MCP_READER_OWNER_UNAVAILABLE','MCP_READER_QUERY_UNAVAILABLE'].includes(reason)?'UNAVAILABLE':'INVALID',reason_codes:[reason]};}
 }
 export interface ReaderAdoption{schema:'RBRIDGE_READER_ADOPTION_V1';reader_id:string;owner:string;workflow:string;entrypoint:string;source_sha256:string;version:string;trusted_context_sha256:string;fixture_set_sha256:string;adopted_at:string;}
 export interface ReaderRegistry{readers:readonly ReaderRegistration[];adoptions:readonly ReaderAdoption[];}
@@ -75,7 +75,7 @@ function assertCaseMeaning(f:ReaderFixture,value:unknown){
   if(f.transport==='MCP')valid=f.case_id==='C09'&&Array.isArray(v.query_evidence)&&(
     v.status==='RESULT'&&typeof v.output_sha256==='string'&&typeof v.raw_output_base64==='string'&&v.query_evidence.length>0
     ||['NOT_FOUND','NOT_READY','TERMINAL','UNAVAILABLE'].includes(String(v.status))&&!Object.hasOwn(v,'output')&&v.query_evidence.length>0
-    ||v.status==='INVALID'&&Array.isArray(v.reason_codes)&&v.reason_codes.length>0&&v.reason_codes.every(r=>/^MCP_READER_[A-Z_]+$/.test(String(r))));
+    ||v.status==='INVALID'&&Array.isArray(v.reason_codes)&&v.reason_codes.length>0&&v.reason_codes.every(r=>/^MCP_READER_[A-Z0-9_]+$/.test(String(r))));
   else{
     const e=f.expected,c=f.capture;
     switch(f.case_id){
@@ -164,7 +164,10 @@ export async function createInstalledReaderRunner(authority:InstalledReaderAutho
   if(!isInstalledReaderAuthority(authority))fail('READER_RUNNER_UNQUALIFIED');await verifyInstalledReaderAuthority(authority);
   const runner:RegisteredReaderRunner={async invoke(registration,fixture){
     const pinned=authority.profile.readers.find(r=>r.reader_id===registration.reader_id);if(!pinned||installHash(pinned)!==installHash(registration)||registration.entrypoint!==authority.entrypoint||registration.source_sha256!==authority.entrypoint_sha256||registration.version!==authority.version||fixture.transport!==registration.transport)fail('READER_REGISTRATION_DRIFT');
-    if(fixture.transport==='MCP'&&!isInstalledMcpReadClient(fixture.client))fail('READER_ACTUAL_MCP_CLIENT_REQUIRED');
+    if(fixture.transport==='MCP'&&!isInstalledMcpReadClient(fixture.client)){
+      if(fixture.provenance!=='SOURCE_PRODUCER'||!isInstalledMcpFixtureReadClient(fixture.client))fail('READER_ACTUAL_MCP_CLIENT_REQUIRED');
+      assertInstalledMcpFixtureScope(fixture.client,fixture.expected,authority);
+    }
     const result=await createReferenceReaderRunner().invoke(registration,fixture);await verifyInstalledReaderAuthority(authority);return {...result,source_sha256:authority.entrypoint_sha256,version:authority.version,scope:'QUALIFIED_INSTALLED_READER'};
   }};installedRunners.add(runner);return Object.freeze(runner);
 }

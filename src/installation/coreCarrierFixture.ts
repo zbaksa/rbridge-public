@@ -183,6 +183,46 @@ export async function produceCoreCarrierCases(input:CoreCarrierCaseInput){
     mutate(outer.operationResult.receipt);outer.resultSha256=sha(JSON.stringify(outer.operationResult));row.capture.comments[0]!.body=fence(outer);
     invalid('C06',suffix,row,reason);
   }
+  function sourceResult(suffix:string,row:ProducerCase,outer:Record<string,unknown>,kind:'CORE_RESULT'|'LEGACY_REJECTION'){
+    row.capture.comments[0]!.body=fence(outer);seal(row.capture);row.expected.capture_sha256=row.capture.capture_sha256;
+    const payload=outer.operationResult as {receipt:RBridgeExecutionReceiptV1}|undefined;
+    if(payload)row.expected.receipt_sha256=installHash(payload.receipt);
+    else{row.expected.mode='LEGACY';delete row.expected.receipt_sha256;delete row.expected.output_sha256;}
+    const bytes=Buffer.from(JSON.stringify(outer)),comment=row.capture.comments[0]!;
+    add('C03',suffix,row.capture,row.expected,{scope:'REFERENCE_PARSER_ONLY',status:outer.status,reason_codes:[],envelope:outer,
+      evidence:{capture_sha256:row.capture.capture_sha256,context_sha256:row.capture.context_sha256,comment_ids:[comment.id],
+        comment_body_sha256:[sha(comment.body)],selected_comment_id:comment.id,envelope_sha256:sha(bytes),raw_envelope_base64:bytes.toString('base64')},
+      kind,...(payload?{receipt:payload.receipt}:{})});
+  }
+  // Fixed Source data exercises receipt parsing; these mutations do not claim
+  // that an actual Core operation became uncertain or was physically stopped.
+  for(const outcome of ['UNCERTAIN','TERMINATED'] as const){
+    const row=structuredClone(cases[2]!),outer=JSON.parse(row.capture.comments[0]!.body.slice(8,-5));
+    outer.operationResult.receipt.outcome=outcome;outer.operationResult.receipt.reason='SOURCE_FIXTURE_'+outcome;
+    outer.status=outcome==='TERMINATED'?'BLOCKED':outcome;outer.reason=outcome==='TERMINATED'?'RBRIDGE_CORE_TERMINATED':outer.operationResult.receipt.reason;
+    outer.resultSha256=sha(JSON.stringify(outer.operationResult));sourceResult(outcome.toLowerCase(),row,outer,'CORE_RESULT');
+  }
+  for(const status of ['BLOCKED','UNCERTAIN'] as const){
+    const row=structuredClone(cases[0]!),outer=JSON.parse(row.capture.comments[0]!.body.slice(8,-5));
+    delete outer.operationResult;delete outer.resultSha256;outer.status=status;outer.reason='SOURCE_FIXTURE_LEGACY_'+status;
+    sourceResult('legacy-'+status.toLowerCase(),row,outer,'LEGACY_REJECTION');
+  }
+  const rawExpired=structuredClone(cases[0]!),rawOuter=JSON.parse(rawExpired.capture.comments[0]!.body.slice(8,-5));
+  delete rawOuter.operationResult;delete rawOuter.resultSha256;rawOuter.status='BLOCKED';rawOuter.reason='REMOTE_BRIDGE_V2_REQUEST_EXPIRED';
+  rawOuter.requestSha256=sha(rawExpired.capture.issue.body);rawExpired.expected.digest_branch='RAW_BODY_PRECLAIM_REJECTION';
+  sourceResult('raw-expired-rejection',rawExpired,rawOuter,'LEGACY_REJECTION');
+  const requestDigest=structuredClone(cases[0]!),requestOuter=JSON.parse(requestDigest.capture.comments[0]!.body.slice(8,-5));
+  requestOuter.requestSha256='d'.repeat(64);requestDigest.capture.comments[0]!.body=fence(requestOuter);
+  invalid('C05','request-digest',requestDigest,'CARRIER_REQUEST_DIGEST_INVALID');
+  const outputDigest=structuredClone(cases[0]!),outputOuter=JSON.parse(outputDigest.capture.comments[0]!.body.slice(8,-5));
+  outputOuter.operationResult.output.uptimeMs++;outputOuter.resultSha256=sha(JSON.stringify(outputOuter.operationResult));outputDigest.capture.comments[0]!.body=fence(outputOuter);
+  invalid('C05','output-digest',outputDigest,'CARRIER_OUTPUT_DIGEST_INVALID');
+  const foreignRepository=structuredClone(cases[0]!);foreignRepository.capture.repository='foreign-fixture/rbridge-control';
+  invalid('C06','foreign-repository',foreignRepository,'CARRIER_AUTHENTICATION_INVALID');
+  const foreignIssue=structuredClone(cases[0]!);foreignIssue.capture.issue.number++;
+  invalid('C06','foreign-issue',foreignIssue,'CARRIER_AUTHENTICATION_INVALID');
+  const foreignRequest=structuredClone(cases[0]!);foreignRequest.capture.issue.title+='-foreign';
+  invalid('C06','foreign-request',foreignRequest,'CARRIER_AUTHENTICATION_INVALID');
   await originals();check();
   return {schema:'RBRIDGE_ISOLATED_CORE_CASES_V1' as const,scope:'ISOLATED_CORE_SOURCE_DATA_ONLY' as const,producer_source_sha:SOURCE,binding_sha256:installHash(binding),context_sha256:input.context_sha256,
     original_receipts:input.originals.map(r=>({operation_id:r.operationId,receipt_json:r.receiptJSON,receipt_sha256:r.receiptSHA256,output_sha256:r.resultSHA256})),originals_unchanged:true as const,cases};

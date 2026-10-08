@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
 import {prepareArchivedReaderInput,runArchivedCoreProducer} from '../../src/installation/archivedReaderFixture.js';
 import {parseRBridgeInstallProfile} from '../../src/installation/types.js';
+import {createMcpNegativeCases} from '../../src/installation/mcpNegativeCases.js';
 
 const source=JSON.parse(readFileSync(new URL('../fixtures/rbridge-artifact-preimages.json',import.meta.url),'utf8'));
 const profile=parseRBridgeInstallProfile(source.profile),home=profile.binding.home+'/.rbridge-artifact-'+'a'.repeat(32);
@@ -40,5 +41,16 @@ describe('archived isolated reader fixture Source data',()=>{
       expect(()=>prepareArchivedReaderInput(profile,{cases:rows},fixture,home)).toThrow();
     const changed=structuredClone(fixture);changed.receipts[0].resultBase64=Buffer.from('{}').toString('base64');
     expect(()=>prepareArchivedReaderInput(profile,{cases},changed,home)).toThrow();
+  });
+  it('binds every negative recipe to the original health receipt and one existing home without caller-selected fixture controls',()=>{
+    const binding={runtimeUid:profile.binding.uid,principalId:profile.binding.principal_id,targetInstanceId:profile.binding.target_instance_id};
+    const negative=['legacy','modern'].flatMap(era=>createMcpNegativeCases(binding,profile.binding.policy_sha256,receipt,15000).map(r=>({fixture_id:'mcp-producer-'+era+'-'+r.variant,
+      case_id:'C09',provenance:'SOURCE_PRODUCER',transport:'MCP',era,expected:r.expected,expected_verdict_sha256:'b'.repeat(64)})));
+    const cases=[mcp('legacy'),mcp('modern'),...negative],result=prepareArchivedReaderInput(profile,{cases},fixture,home);
+    expect(result.fixtures.cases).toHaveLength(24);expect(result.fixtures.cases.slice(2).every(row=>row.isolated_root===result.root&&typeof row.fixture_variant==='string')).toBe(true);
+    for(const change of [{fixture_variant:'binding'},{isolated_root:profile.paths.state_root+'/execution-v2'},{transcript:{}},
+      {expected:{...negative[0]!.expected,principalId:'foreign-principal'}},{provenance:'AUTHENTIC_ARCHIVE'}]){
+      const changed=structuredClone(cases);Object.assign(changed[2]!,change);expect(()=>prepareArchivedReaderInput(profile,{cases:changed},fixture,home)).toThrow();
+    }
   });
 });

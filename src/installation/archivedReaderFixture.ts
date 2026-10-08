@@ -12,7 +12,10 @@ import {encodeInstallReport,validateInstallContract,type ArtifactManifest,type I
 import type {ReaderQualificationReport} from './readerQualification.js';
 import {createIsolatedCoreCarrierPort,produceCoreCarrierCases} from './coreCarrierFixture.js';
 import {produceMcpArtifactCases} from './mcpArtifactFixture.js';
-import {createInstalledMcpReadClient} from './rbridge-installation-client.js';
+import {createInstalledMcpReadClient,createInstalledMcpFixtureSession} from './rbridge-installation-client.js';
+import {createMcpNegativeCases} from './mcpNegativeCases.js';
+import {installHash} from './gateContext.js';
+import {parseRBridgeCoreResultPage} from '../domain/rbridgeCoreValidation.js';
 import type {RBridgeGitHubPort} from '../adapters/githubIssueRemoteBridge.js';
 import type {RBridgeOwnerRuntime} from '../server/rbridgeOwnerRuntime.js';
 import type {RBridgeDeploymentBinding} from '../domain/rbridgeCoreProtocol.js';
@@ -41,10 +44,19 @@ function artifactReceipts(profile:InstallProfile,value:unknown){
 export function prepareArchivedReaderInput(profile:InstallProfile,fixtures:unknown,artifactFixture:unknown,isolatedHome:string){
   const home=validateArtifactIsolationHome(profile,isolatedHome),root=join(home,'.local/state/rbridge/execution-v2'),rows=artifactReceipts(profile,artifactFixture),input=object(fixtures);
   if(Object.keys(input).some(k=>k!=='cases')||!Array.isArray(input.cases)||input.cases.length>512)fail();
-  const eras=new Set<string>(),cases=input.cases.map(value=>{
-    const f=object(value);if(f.transport==='GITHUB')return structuredClone(f);
-    if(f.transport!=='MCP'||f.case_id!=='C09'||!['legacy','modern'].includes(String(f.era))||eras.has(String(f.era))||Object.hasOwn(f,'isolated_root')||Object.hasOwn(f,'transcript'))fail();
-    eras.add(String(f.era));const e=object(f.expected),original=rows.find(row=>row.record.operationId===e.operationId);if(!original)fail();
+  const eras=new Set<string>(),ids=new Set<string>(),cases=input.cases.map(value=>{
+    const f=object(value);if(typeof f.fixture_id!=='string'||ids.has(f.fixture_id))fail();ids.add(f.fixture_id);
+    if(f.transport==='GITHUB')return structuredClone(f);
+    if(f.transport!=='MCP'||f.case_id!=='C09'||!['legacy','modern'].includes(String(f.era))||Object.hasOwn(f,'isolated_root')||Object.hasOwn(f,'transcript')||Object.hasOwn(f,'fixture_variant'))fail();
+    eras.add(String(f.era));const e=object(f.expected);validateInstallContract(e,'McpReaderScope');
+    if(typeof e.deadline_ms!=='number'||e.deadline_ms>Math.min(profile.budget.acceptance_ms,180000))fail();
+    const binding={runtimeUid:profile.binding.uid,principalId:profile.binding.principal_id,targetInstanceId:profile.binding.target_instance_id};
+    const recipe=createMcpNegativeCases(binding,profile.binding.policy_sha256,rows[0]!.receipt,e.deadline_ms).find(r=>f.fixture_id==='mcp-producer-'+String(f.era)+'-'+r.variant);
+    if(recipe){
+      if(f.provenance!=='SOURCE_PRODUCER'||installHash(e)!==installHash(recipe.expected))fail();
+      return {...structuredClone(f),isolated_root:root,fixture_variant:recipe.variant};
+    }
+    const original=rows.find(row=>row.record.operationId===e.operationId);if(!original)fail();
     if(e.principalId!==profile.binding.principal_id||e.targetInstanceId!==profile.binding.target_instance_id||e.runtime_uid!==profile.binding.uid||e.policy_sha256!==profile.binding.policy_sha256||e.intent_sha256!==original.receipt.intentSha256||e.receipt_sha256!==original.record.receiptSHA256||e.output_sha256!==original.record.resultSHA256)fail();
     return {...structuredClone(f),isolated_root:root};
   });
@@ -66,7 +78,16 @@ async function withArchivedOwner<T>(authority:InstalledReaderAuthority,runtimeMa
     owner=await owners.startRBridgeOwnerRuntime({runtimeIdentity:{username:user.username,homedir:isolatedHome,uid:p.binding.uid,euid:p.binding.uid},env:{RBRIDGE_RUNTIME_USER:p.binding.account,RBRIDGE_MCP_PRINCIPAL_ID:binding.principalId,RBRIDGE_INSTANCE_ID:binding.targetInstanceId,RBRIDGE_GITHUB_REPOSITORY:p.binding.repository,RBRIDGE_GITHUB_AUTHOR:p.binding.author},sourceRoot:join(isolatedHome,'source'),health:{snapshot(){fail();}},github:{...github,async listOpenRequests(){return [];},async publishResult(){fail();}}});
     ipc=await ipcModule.connectRBridgeCoreIpcClient({root,expectedBinding:binding});
     if((await ipc.binding()).policySha256!==p.binding.policy_sha256)fail();
-    const check=async()=>{for(const original of originals){const result=await ipc!.status(original.record.operationId,context);if(result.status!=='RECEIPT'||hash(encodeInstallReport(result.receipt))!==original.record.receiptSHA256)fail();}};
+    const check=async()=>{for(const original of originals){
+      const id=original.record.operationId,result=await ipc!.status(id,context);if(result.status!=='RECEIPT'||hash(encodeInstallReport(result.receipt))!==original.record.receiptSHA256)fail();
+      const chunks:Buffer[]=[];let cursor=0,eof=false;
+      for(let count=0;count<256&&!eof;count++){
+        const page=parseRBridgeCoreResultPage(await ipc!.result(id,cursor,32768,context),{operationId:id,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId},cursor,32768);
+        if(page.status!=='RESULT'||hash(encodeInstallReport(page.receipt))!==original.record.receiptSHA256||page.resultSha256!==original.record.resultSHA256)fail();
+        chunks.push(Buffer.from(page.dataBase64,'base64'));cursor=page.nextCursor;eof=page.eof;
+      }
+      const output=Buffer.concat(chunks);if(!eof||output.length!==original.record.resultBytes||hash(output)!==original.record.resultSHA256||output.toString('base64')!==original.record.resultBase64)fail();
+    }};
     await check();const result=await run(owner);await check();
     await verifyProtectedArtifact(runtimeRoot,runtimeManifest,p);await verifyInstalledReaderAuthority(authority);return result;
   }finally{await ipc?.close();await owner?.close();await relay.release();}
@@ -98,10 +119,12 @@ export async function runArchivedMcpProducer(authority:InstalledReaderAuthority,
   const originals=artifactReceipts(p,artifactFixture).map(row=>row.record),root=join(validateArtifactIsolationHome(p,isolatedHome),'.local/state/rbridge/execution-v2');
   return withArchivedOwner(authority,runtimeManifest,isolatedHome,artifactFixture,github,async()=>{
     const clients:Array<Awaited<ReturnType<typeof createInstalledMcpReadClient>>>=[];
+    const negative:Array<Awaited<ReturnType<typeof createInstalledMcpFixtureSession>>>=[];
     try{
       for(const era of ['legacy','modern'] as const)clients.push(await createInstalledMcpReadClient(authority,runtimeManifest,era,root));
+      for(const era of ['legacy','modern'] as const)negative.push(await createInstalledMcpFixtureSession(authority,runtimeManifest,era,root));
       return await produceMcpArtifactCases({binding:{runtimeUid:p.binding.uid,principalId:p.binding.principal_id,targetInstanceId:p.binding.target_instance_id},
-        source_sha:p.runtime.source_sha,policy_sha256:p.binding.policy_sha256,originals,clients,deadline_ms:Math.min(p.budget.acceptance_ms,180000)});
-    }finally{for(const client of clients.reverse())await client.close();}
+        source_sha:p.runtime.source_sha,policy_sha256:p.binding.policy_sha256,originals,clients,negativeClients:negative.map(s=>s.client),deadline_ms:Math.min(p.budget.acceptance_ms,180000)});
+    }finally{try{for(const session of negative.reverse())await session.close();}finally{for(const client of clients.reverse())await client.close();}}
   });
 }

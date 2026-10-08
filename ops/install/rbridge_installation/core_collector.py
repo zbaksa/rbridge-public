@@ -76,11 +76,13 @@ def compare_core_producer_output(profile,output,artifact_fixture,context):
             or output['producer_source_sha']!=profile.runtime.source_sha or output['binding_sha256']!=report_sha256(binding)
             or output['context_sha256']!=context or output['originals_unchanged'] is not True
             or encode_report(output['original_receipts'])!=encode_report(originals)
-            or type(output['cases']) is not list or len(output['cases'])!=16):_fail('CORE_COLLECTOR_OUTPUT_INVALID')
+            or type(output['cases']) is not list or len(output['cases'])!=26):_fail('CORE_COLLECTOR_OUTPUT_INVALID')
     expected_ids=[('C02','health'),('C02','file'),('C03','missing'),('C03','blocked'),('C04','large'),
         ('C05','digest-substitution'),('C06','foreign-author'),('C07','expired-closed-replay'),('C08','fresh-expired'),('C08','collision'),
         ('C04','large-missing'),('C04','large-conflicting'),('C04','large-mixed'),('C04','large-corrupt'),
-        ('C06','rehashed-foreign-scope'),('C06','rehashed-foreign-policy')]
+        ('C06','rehashed-foreign-scope'),('C06','rehashed-foreign-policy'),('C03','uncertain'),('C03','terminated'),
+        ('C03','legacy-blocked'),('C03','legacy-uncertain'),('C03','raw-expired-rejection'),
+        ('C05','request-digest'),('C05','output-digest'),('C06','foreign-repository'),('C06','foreign-issue'),('C06','foreign-request')]
     fixtures=[]
     for case,(case_id,suffix) in zip(output['cases'],expected_ids):
         fields={'fixture_id','case_id','transport','provenance','capture','expected','expected_verdict_json','expected_verdict_sha256','expected_verdict_canonical_sha256'}
@@ -92,11 +94,13 @@ def compare_core_producer_output(profile,output,artifact_fixture,context):
         if type(capture) is not dict or type(expected) is not dict or type(raw) is not str:_fail('CORE_COLLECTOR_CASE_INVALID')
         base={k:v for k,v in capture.items() if k!='capture_sha256'}
         if (capture.get('scope')!='FIXTURE_AUTHORITY_ONLY' or capture.get('complete') is not True
-                or capture.get('repository')!=profile.binding.repository or capture.get('viewer')!=profile.binding.author
+                or capture.get('repository')!=('foreign-fixture/rbridge-control' if suffix=='foreign-repository' else profile.binding.repository)
+                or capture.get('viewer')!=profile.binding.author
                 or capture.get('context_sha256')!=context or capture.get('capture_sha256')!=report_sha256(base)
                 or expected.get('capture_sha256')!=capture['capture_sha256'] or expected.get('capture_context_sha256')!=context
                 or expected.get('producer_source_sha')!=profile.runtime.source_sha or expected.get('expected_source_sha')!=profile.runtime.source_sha
-                or expected.get('mode')!='CORE' or expected.get('repository')!=profile.binding.repository or expected.get('author')!=profile.binding.author
+                or expected.get('mode')!=('LEGACY' if suffix in ('legacy-blocked','legacy-uncertain','raw-expired-rejection') else 'CORE')
+                or expected.get('repository')!=profile.binding.repository or expected.get('author')!=profile.binding.author
                 or expected.get('runtime_uid')!=profile.binding.uid or expected.get('policy_sha256')!=profile.binding.policy_sha256
                 or hashlib.sha256(raw.encode()).hexdigest()!=case['expected_verdict_sha256']):_fail('CORE_COLLECTOR_CASE_CHANGED')
         verdict=_json(raw.encode(),profile.budget.carrier_bytes)

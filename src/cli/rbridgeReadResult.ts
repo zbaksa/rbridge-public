@@ -2,7 +2,8 @@ import {pathToFileURL} from 'node:url';
 import {parseRBridgeCarrierJson} from '../installation/carrierJson.js';
 import {readRBridgeGitHubCarrier} from '../installation/githubCarrierReader.js';
 import {createInstalledReaderRunner,createReferenceReaderRunner,qualifyRBridgeReaders,readRBridgeMcpOutput,readerFixtureInputJson,type ReaderFixture,type ReaderFixtureSet,type ReaderRegistry} from '../installation/readerQualification.js';
-import {createInstalledMcpReadClient,qualifyInstalledReaderRuntime,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from '../installation/rbridge-installation-client.js';
+import {createInstalledMcpReadClient,createInstalledMcpFixtureSession,qualifyInstalledReaderRuntime,type InstalledReaderAuthority,type McpReadClient,type McpReaderScope} from '../installation/rbridge-installation-client.js';
+import {MCP_NEGATIVE_VARIANTS,type McpNegativeVariant} from '../installation/mcpNegativeCases.js';
 import {parseRBridgeInstallProfile,type ArtifactManifest} from '../installation/types.js';
 import type {CarrierCapture,ReaderExpectation} from '../installation/rbridge-installation-reader.js';
 import {runArchivedReaderFixture,runArchivedCoreProducer,runArchivedMcpProducer} from '../installation/archivedReaderFixture.js';
@@ -70,11 +71,21 @@ export async function runRBridgeReadResult(input:unknown){
     }
     fields(row,['schema','operation','registry','fixtures'],row.operation==='QUALIFY_INSTALLED'?['profile','toolkit_manifest','runtime_manifest']:[]);
     const cases=object(row.fixtures).cases;if(!Array.isArray(cases)||cases.length>512)fail();const fixtures:ReaderFixtureSet={cases:[]};
-    const built:ReaderFixture[]=[];
+    const built:ReaderFixture[]=[],liveClients=new Map<string,Awaited<ReturnType<typeof createInstalledMcpReadClient>>>(),fixtureSessions=new Map<string,Awaited<ReturnType<typeof createInstalledMcpFixtureSession>>>();
     for(const value of cases){const f=object(value);if(f.transport==='GITHUB'){fields(f,['fixture_id','case_id','provenance','expected_verdict_sha256','transport','capture','expected'],['replayed_at']);built.push(f as unknown as ReaderFixture);}
       else if(f.transport==='MCP'){
-        fields(f,['fixture_id','case_id','provenance','expected_verdict_sha256','transport','expected'],authority?['era','isolated_root']:['transcript']);let client:McpReadClient;
-        if(authority){if(!['legacy','modern'].includes(String(f.era))||(f.isolated_root!==undefined&&typeof f.isolated_root!=='string'))fail();const live=await createInstalledMcpReadClient(authority,row.runtime_manifest as ArtifactManifest,f.era as 'legacy'|'modern',f.isolated_root);client=live;closing.push(()=>live.close());}
+        fields(f,['fixture_id','case_id','provenance','expected_verdict_sha256','transport','expected'],authority?['era','isolated_root','fixture_variant']:['transcript']);let client:McpReadClient;
+        if(authority){
+          if(!['legacy','modern'].includes(String(f.era))||(f.isolated_root!==undefined&&typeof f.isolated_root!=='string'))fail();
+          const era=f.era as 'legacy'|'modern',key=era+'|'+String(f.isolated_root??'LIVE');
+          if(f.fixture_variant!==undefined){
+            if(f.provenance!=='SOURCE_PRODUCER'||typeof f.isolated_root!=='string'||!MCP_NEGATIVE_VARIANTS.includes(f.fixture_variant as McpNegativeVariant))fail();
+            let session=fixtureSessions.get(key);if(!session){session=await createInstalledMcpFixtureSession(authority,row.runtime_manifest as ArtifactManifest,era,f.isolated_root);fixtureSessions.set(key,session);closing.push(()=>session!.close());}
+            client=session.forCase(f.fixture_variant as McpNegativeVariant,f.expected as McpReaderScope);
+          }else{
+            let live=liveClients.get(key);if(!live){live=await createInstalledMcpReadClient(authority,row.runtime_manifest as ArtifactManifest,era,f.isolated_root);liveClients.set(key,live);closing.push(()=>live!.close());}client=live;
+          }
+        }
         else client=createTranscriptMcpClient(f.transcript);
         built.push({fixture_id:f.fixture_id as string,case_id:f.case_id as 'C09',provenance:f.provenance as 'SOURCE_PRODUCER',expected_verdict_sha256:f.expected_verdict_sha256 as string,transport:'MCP',expected:f.expected as McpReaderScope,client});
       }else fail();

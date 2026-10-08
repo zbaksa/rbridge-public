@@ -12,6 +12,7 @@ import {installHash} from './gateContext.js';
 import type {McpReadClient,McpReaderScope} from './rbridge-installation-client.js';
 import type {McpQueryEvidence} from './readerQualification.js';
 import {encodeInstallReport} from './types.js';
+import {createMcpNegativeCases} from './mcpNegativeCases.js';
 
 const SOURCE='b5881fd8367b4249e82683f1f884f2392cb696d4';
 const sha=(value:string|Uint8Array)=>createHash('sha256').update(value).digest('hex');
@@ -20,7 +21,7 @@ function object(value:unknown){if(!value||typeof value!=='object'||Array.isArray
 type Original=ReturnType<typeof captureArtifactOperation>;
 export interface McpArtifactCaseInput{
   binding:RBridgeDeploymentBinding;source_sha:string;policy_sha256:string;
-  originals:readonly Original[];clients:readonly McpReadClient[];deadline_ms:number;
+  originals:readonly Original[];clients:readonly McpReadClient[];negativeClients?:readonly McpReadClient[];deadline_ms:number;
 }
 interface ProducerCase{
   fixture_id:string;case_id:'C09';transport:'MCP';provenance:'SOURCE_PRODUCER';era:'legacy'|'modern';expected:McpReaderScope;
@@ -89,6 +90,40 @@ export async function produceMcpArtifactCases(input:McpArtifactCaseInput){
       negotiated_protocol_version:client.negotiated_protocol_version,protocol_era:client.protocol_era,responses});
     cases.push({fixture_id:'mcp-producer-'+era,case_id:'C09',transport:'MCP',provenance:'SOURCE_PRODUCER',era,expected,
       expected_verdict_json:raw,expected_verdict_sha256:sha(raw),expected_verdict_canonical_sha256:installHash(verdict),sdk_transcript_json:transcript});
+  }
+  if(input.negativeClients!==undefined){
+    if(!Array.isArray(input.negativeClients)||input.negativeClients.length!==2)fail('MCP_FIXTURE_NEGATIVE_CLIENTS_INVALID');
+    for(const [index,client] of input.negativeClients.entries()){
+      const era=index===0?'legacy' as const:'modern' as const;
+      if(client.protocol_era!==era||client.sdk_package_version!=='2.3.0'||(era==='modern'?client.negotiated_protocol_version!=='2026-07-28':!['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(client.negotiated_protocol_version)))fail('MCP_FIXTURE_SDK_INVALID');
+      for(const recipe of createMcpNegativeCases(binding,input.policy_sha256,originals[0]!.receipt,input.deadline_ms)){
+        const evidence:McpQueryEvidence[]=[],responses:unknown[]=[];
+        for(const query of recipe.queries){
+          const remaining=deadline-performance.now();if(signal.aborted||remaining<=0)fail('MCP_FIXTURE_DEADLINE');let timer:ReturnType<typeof setTimeout>|undefined;
+          try{
+            const frame=object(await Promise.race([client.callTool({name:query.name,arguments:query.arguments},{signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('MCP_FIXTURE_DEADLINE')),remaining);})]));
+            if(Object.keys(frame).some(k=>!['content','structuredContent','isError','_meta'].includes(k))||!Object.hasOwn(frame,'structuredContent')
+              ||(query.isError?frame.isError!==true:Object.hasOwn(frame,'isError')&&frame.isError!==false)||!Array.isArray(frame.content)||frame.content.length!==1)fail('MCP_FIXTURE_FRAME_INVALID');
+            if(Object.hasOwn(frame,'_meta')){
+              const meta=object(frame._meta),info=object(meta['io.modelcontextprotocol/serverInfo']);
+              if(Object.keys(meta).length!==1||Object.keys(info).sort().join(',')!=='name,version'||info.name!=='rbridge'||info.version!=='0.1.0-dev')fail('MCP_FIXTURE_FRAME_INVALID');
+            }
+            const content=object(frame.content[0]);if(Object.keys(content).sort().join(',')!=='text,type'||content.type!=='text'||typeof content.text!=='string')fail('MCP_FIXTURE_FRAME_INVALID');
+            if(installHash(parseRBridgeCarrierJson(Buffer.from(content.text),131072))!==installHash(query.row)||installHash(frame.structuredContent)!==installHash(query.row))fail('MCP_FIXTURE_RESPONSE_CHANGED');
+            evidence.push({name:query.name,arguments_json:JSON.stringify(query.arguments),response_json:content.text,response_sha256:sha(content.text)});
+            responses.push({name:query.name,arguments:structuredClone(query.arguments),response:structuredClone(frame)});
+            if(encodeInstallReport({evidence,responses}).length>67108864)fail('MCP_FIXTURE_EVIDENCE_LIMIT');
+          }finally{clearTimeout(timer);}
+        }
+        const valid=['NOT_FOUND','NOT_READY','TERMINAL'].includes(recipe.verdict.status);
+        const verdict={scope:'REFERENCE_MCP_READ',query_evidence:evidence,status:recipe.verdict.status,reason_codes:recipe.verdict.reason_codes,
+          ...('receipt'in recipe.verdict?{receipt:recipe.verdict.receipt}:{}),...(valid?{response_sha256:evidence.map(q=>q.response_sha256),sdk_package_version:client.sdk_package_version,
+            negotiated_protocol_version:client.negotiated_protocol_version,protocol_era:era}:{})};
+        const raw=JSON.stringify(verdict),transcript=JSON.stringify({sdk_package_version:client.sdk_package_version,negotiated_protocol_version:client.negotiated_protocol_version,protocol_era:era,responses});
+        cases.push({fixture_id:'mcp-producer-'+era+'-'+recipe.variant,case_id:'C09',transport:'MCP',provenance:'SOURCE_PRODUCER',era,expected:recipe.expected,
+          expected_verdict_json:raw,expected_verdict_sha256:sha(raw),expected_verdict_canonical_sha256:installHash(verdict),sdk_transcript_json:transcript});
+      }
+    }
   }
   if(!before.equals(encodeInstallReport(input.originals)))fail('MCP_FIXTURE_ORIGINAL_CHANGED');
   const report={schema:'RBRIDGE_ISOLATED_MCP_CASES_V1',scope:'ISOLATED_MCP_SOURCE_DATA_ONLY',producer_source_sha:SOURCE,
