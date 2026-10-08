@@ -11,6 +11,7 @@ import {RBRIDGE_ENABLED_ACTIONS} from '../../src/domain/rbridgeCoreProtocol.js';
 import {parseRBridgeInstallProfile} from '../../src/installation/types.js';
 import {installHash} from '../../src/installation/gateContext.js';
 import type {RBridgeExecutionReceiptV1} from '../../src/domain/rbridgeExecutionContract.js';
+import {createMcpNegativeFixtureServer} from '../../src/installation/mcpNegativeFixture.js';
 
 const source=JSON.parse(readFileSync(new URL('../fixtures/rbridge-artifact-preimages.json',import.meta.url),'utf8'));
 const profile=parseRBridgeInstallProfile(source.profile),originals=source.artifact.receipts;
@@ -21,9 +22,9 @@ async function producer(){
   expect(module?.produceMcpArtifactCases,'fixed MCP producer is absent').toBeTypeOf('function');
   return module!.produceMcpArtifactCases;
 }
-async function sdk(era:'legacy'|'modern'){
+async function sdk(era:'legacy'|'modern',negative=false){
   const [wire,serverWire]=InMemoryTransport.createLinkedPair();
-  const handle=serveStdio(()=>createRBridgeMcpSafeServer({binding:{authenticatedSubject:profile.binding.mcp_subject,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId},
+  const handle=serveStdio(()=>negative?createMcpNegativeFixtureServer(binding,profile.binding.policy_sha256,JSON.parse(originals[0].receiptJSON)):createRBridgeMcpSafeServer({binding:{authenticatedSubject:profile.binding.mcp_subject,principalId:binding.principalId,targetInstanceId:binding.targetInstanceId},
     bindingProvider:async()=>({schema:'RBRIDGE_CORE_BINDING_V1',journalSchema:'RBRIDGE_EXECUTION_JOURNAL_V1',...binding,policySha256:profile.binding.policy_sha256,enabledActions:RBRIDGE_ENABLED_ACTIONS}),
     core:{async submit(){throw new Error('FIXTURE_MUST_NOT_SUBMIT');},async requestCancel(){throw new Error('FIXTURE_MUST_NOT_CANCEL');},
       async status(id){const row=originals.find((r:{operationId:string})=>r.operationId===id);if(!row)throw new Error('UNKNOWN_FIXTURE_ID');return {status:'RECEIPT',receipt:JSON.parse(row.receiptJSON) as RBridgeExecutionReceiptV1};},
@@ -37,12 +38,13 @@ const input=(clients:readonly McpReadClient[])=>({binding,source_sha:profile.run
 
 describe('fixed MCP original-artifact producer Source data',()=>{
   it('captures both real SDK negotiations and derives exact read verdicts without invoking the reader',async()=>{
-    const produce=await producer(),legacy=await sdk('legacy'),modern=await sdk('modern'),before=JSON.stringify(originals);
+    const produce=await producer(),legacy=await sdk('legacy'),modern=await sdk('modern'),negativeLegacy=await sdk('legacy',true),negativeModern=await sdk('modern',true),before=JSON.stringify(originals);
     try{
-      const report=await produce(input([legacy.client,modern.client]));
+      const report=await produce({...input([legacy.client,modern.client]),negativeClients:[negativeLegacy.client,negativeModern.client]});
       expect(report.scope).toBe('ISOLATED_MCP_SOURCE_DATA_ONLY');
-      expect(report.cases.map(c=>[c.case_id,c.era,c.expected.operationId])).toEqual([['C09','legacy','artifact-health'],['C09','modern','artifact-read']]);
-      for(const [index,c] of report.cases.entries()){
+      expect(report.cases).toHaveLength(24);
+      expect(report.cases.slice(0,2).map(c=>[c.case_id,c.era,c.expected.operationId])).toEqual([['C09','legacy','artifact-health'],['C09','modern','artifact-read']]);
+      for(const [index,c] of report.cases.slice(0,2).entries()){
         const verdict=JSON.parse(c.expected_verdict_json);
         expect(verdict.status).toBe('RESULT');expect(verdict.scope).toBe('REFERENCE_MCP_READ');
         expect(verdict.receipt.operationId).toBe(index===0?'artifact-health':'artifact-read');
@@ -78,8 +80,8 @@ describe('fixed MCP original-artifact producer Source data',()=>{
       ].join('\n'),fileURLToPath(new URL('../../ops/install',import.meta.url))],{
         input:JSON.stringify({profile,report,artifact:source.artifact}),encoding:'utf8',timeout:15000,maxBuffer:131072});
       expect(comparison.status,comparison.stderr).toBe(0);
-      expect(JSON.parse(comparison.stdout)).toEqual({scope:'ISOLATED_MCP_SOURCE_DATA_ONLY',cases:2,may_execute:false,rehashed_refusals:6});
-    }finally{await modern.close();await legacy.close();}
+      expect(JSON.parse(comparison.stdout)).toEqual({scope:'ISOLATED_MCP_SOURCE_DATA_ONLY',cases:24,may_execute:false,rehashed_refusals:6});
+    }finally{await negativeModern.close();await negativeLegacy.close();await modern.close();await legacy.close();}
   });
   it('rejects drifted live output even when receipt and synthetic Source metadata still match',async()=>{
     const produce=await producer(),legacy=await sdk('legacy'),modern=await sdk('modern');
