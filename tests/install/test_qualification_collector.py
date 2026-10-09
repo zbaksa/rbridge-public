@@ -86,6 +86,7 @@ class QualificationCollectorTests(unittest.TestCase):
         # dedicated comparison exists; the first failure must be semantic.
         compare=getattr(self.c,'_same_evidence',lambda a,b:encode_report(a)==encode_report(b))
         original={'observations':{'artifact':{'original_raw':'SOURCE_DATA_ONLY'}},'canary_base64':'eA==',
+            'canary_observation':{'schema':'SOURCE_DATA_ONLY','identity':['1','2'],'ancestors':[{'identity':['3','4']}]},
             'import_closure':{'schema':'RBRIDGE_PYTHON_CLOSURE_BYTES_V1','status':'PASS','manifest_sha256':'a'*64,
                 'profile_sha256':report_sha256(self.p),'execution_qualified':False,'service_action_authorized':False,
                 'imports':[{'module':'qualification_collector','path':'/protected/qualification_collector.py'}],
@@ -94,11 +95,13 @@ class QualificationCollectorTests(unittest.TestCase):
             {'module':'later_reviewed_owner_module','path':'/protected/later_reviewed_owner_module.py'})
         current['import_closure']['mapped_files'].append('/protected/another-pinned-stdlib-file')
         self.assertTrue(compare(original,current));self.assertEqual(len(original['import_closure']['imports']),1)
-        for field in ('pin','artifact','canary','permission'):
+        for field in ('pin','artifact','canary','canary_identity','canary_ancestor','permission'):
             changed=copy.deepcopy(current)
             if field=='pin':changed['import_closure']['manifest_sha256']='b'*64
             elif field=='artifact':changed['observations']['artifact']['original_raw']='changed source preimage'
             elif field=='canary':changed['canary_base64']='eQ=='
+            elif field=='canary_identity':changed['canary_observation']['identity']=['1','5']
+            elif field=='canary_ancestor':changed['canary_observation']['ancestors'][0]['identity']=['3','5']
             else:changed['import_closure']['service_action_authorized']=True
             with self.subTest(field=field):self.assertFalse(compare(original,changed))
 

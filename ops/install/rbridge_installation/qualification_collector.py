@@ -18,7 +18,6 @@ from .bootstrap_collector import verify_root_bootstrap_observation
 from .bootstrap_execution_collector import verify_root_bootstrap_execution
 from .bootstrap_fixture_collector import _module
 from .copy_ledger_collector import _context as _root_context,_FixtureDirectory
-from .host_backend import _protected_bytes
 from .models import InstallationError,encode_report,report_sha256
 from .owned_process import assert_owned_helpers_settled
 from .privileged_collector import PrivilegedFixtureOrigins,ORIGIN_FIELDS as PRIVILEGED_FIELDS,verify_root_privileged_observation
@@ -28,6 +27,7 @@ from .reader_adoption_collector import verify_root_reader_adoption_observation
 from .reader_collector import verify_root_reader_observation
 from .readonly_helper import _json
 from .source_ci_collector import verify_root_source_ci_observation
+from .canary_data import read_profile_canary
 
 
 class QualificationCollectorError(InstallationError):pass
@@ -121,7 +121,7 @@ def _observe(p,base,root,runtime_manifest,toolkit_manifest,origins,request):
     contexts={r.trusted_context_sha256 for r in p.readers if r.transport=='GITHUB'}
     if len(contexts)!=1:_fail('QUALIFICATION_COLLECTOR_READER_CONTEXT_INCOMPLETE')
     helper=next(e for e in toolkit_manifest.entries if e.path=='dist/server/cli/rbridgeInstallationAudit.js')
-    canary=_protected_bytes(p.paths.canary_path,4096)
+    canary,canary_observation=read_profile_canary(p)
     if not canary or hashlib.sha256(canary).hexdigest()!=p.service.canary_sha256:_fail('QUALIFICATION_COLLECTOR_CANARY_CHANGED')
     canary.decode('utf-8',errors='strict');closure=verify_import_closure(root,p,request);assert_owned_helpers_settled()
     evidence={'schema':'RBRIDGE_QUALIFICATION_MATERIAL_EVIDENCE_V1','profile':p,'base_profile':base,
@@ -129,6 +129,7 @@ def _observe(p,base,root,runtime_manifest,toolkit_manifest,origins,request):
         'source_ci_locator':{'run_id':origins.source.run_id,'job_id':origins.source.job_id},
         'readers_sha256':report_sha256(rows['readers']['readers']),'reader_context_sha256':next(iter(contexts)),
         'helper_sha256':helper.sha256,'canary_base64':base64.b64encode(canary).decode(),
+        'canary_observation':canary_observation,
         'owner_review':'NOT_COLLECTED','installation_authority':False,'service_action_authorized':False}
     if len(encode_report(evidence))>p.budget.carrier_bytes:_fail('QUALIFICATION_COLLECTOR_EVIDENCE_BYTE_LIMIT')
     return evidence
@@ -211,7 +212,9 @@ def preserve_root_qualification_material(profile,token,qualification_request):
     """Preserve historical origin after our switch; never repeat its fake-unit case."""
     original,base,p,runtime_manifest,toolkit_manifest=_registered(profile,token,qualification_request)
     p,root=_context(p,qualification_request);_materials(p,root,runtime_manifest,toolkit_manifest,qualification_request)
-    value,digest=_retained(p,token);canary=_protected_bytes(p.paths.canary_path,4096)
+    value,digest=_retained(p,token)
+    if type(value.get('canary_observation')) is not dict:_fail('QUALIFICATION_COLLECTOR_CANARY_OBSERVATION_MISSING')
+    canary,_canary_observation=read_profile_canary(p,previous_observation=value['canary_observation'])
     if base64.b64encode(canary).decode()!=value['canary_base64']:_fail('QUALIFICATION_COLLECTOR_CANARY_CHANGED')
     module,payload=_module(p,root,runtime_manifest,toolkit_manifest,qualification_request)
     publication=value['observations']['bootstrap_execution']['evidence']['publication']

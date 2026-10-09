@@ -13,6 +13,7 @@ from .artifact import _identity
 from .models import encode_report, report_sha256
 from .protected_copy import ProtectedParent, FilesystemAuthority, FILE_FLAGS
 from .readonly_helper import _json, parse_helper_ready
+from .canary_data import observe_profile_canary, observe_fixture_canary
 
 
 def _fail(reason): raise AcceptanceError(reason)
@@ -73,32 +74,9 @@ def _create_fixture_canary(path,data):
     return _OwnedCanary(path,data,False)
 
 
-class _ObservedCanary(_OwnedCanary):
-    """Retain existing protected bytes; never create, overwrite or chmod."""
-    def __init__(self,path,data,production):
-        if type(data) is not bytes or not 0<len(data)<=4096:_fail('ACCEPTANCE_CANARY_INVALID')
-        try:data.decode('utf-8',errors='strict')
-        except UnicodeError:_fail('ACCEPTANCE_CANARY_INVALID')
-        self.path=Path(path);self.fd=None;self.guard=None;self.owner=os.getuid();self.sha256=hashlib.sha256(data).hexdigest()
-        try:
-            self.guard=ProtectedParent(FilesystemAuthority(self.owner,1027,self.path.parent,'RUNTIME',production))
-            if production:
-                for _parent,_name,_child,row in self.guard.links:
-                    if not (row.st_mode&0o001 or row.st_gid==1027 and row.st_mode&0o010):
-                        _fail('ACCEPTANCE_CANARY_PARENT_UNREADABLE')
-            self.fd=os.open(self.path.name,FILE_FLAGS,dir_fd=self.guard.fd);row=os.fstat(self.fd)
-            self.mode=stat.S_IMODE(row.st_mode);self.identity=_identity(row)
-            if (not stat.S_ISREG(row.st_mode) or row.st_uid!=self.owner or row.st_nlink!=1
-                    or row.st_mode&0o6022 or not 0<row.st_size<=4096
-                    or production and not (row.st_mode&0o004 or row.st_gid==1027 and row.st_mode&0o040)):
-                _fail('ACCEPTANCE_CANARY_UNPROTECTED')
-            self.readback()
-        except (OSError,ValueError):self.close();_fail('ACCEPTANCE_CANARY_OBSERVATION_UNCERTAIN')
-
-
 def _observe_fixture_canary(path,data):
     """Current-user Source descriptor mechanics, no physical Root origin."""
-    return _ObservedCanary(path,data,False)
+    return observe_fixture_canary(path,data)
 
 
 def retain_acceptance_restart_snapshot(lease,evidence):
@@ -320,7 +298,7 @@ class QualifiedAcceptanceBackend:
         if self.canary is not None:_fail('ACCEPTANCE_CANARY_ALREADY_CREATED')
         context.prepared.evidence.write('accept-canary-observe-intent',{'path':self.profile.paths.canary_path,
             'sha256':self.profile.service.canary_sha256,'bytes':len(context.canary_bytes)})
-        self.canary=_ObservedCanary(self.profile.paths.canary_path,context.canary_bytes,True)
+        self.canary=observe_profile_canary(self.profile,context.canary_bytes)
         return self.canary.readback()
     def submit_once(self,context,request):
         self._validate(context)

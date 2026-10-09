@@ -22,7 +22,6 @@ from .artifact import ArtifactEntry,ArtifactManifest,validate_manifest,_identity
 from .artifact_collector import _closure
 from .bootstrap_fixture_collector import _module
 from .copy_ledger_collector import _context as _root_context,_FixtureDirectory
-from .host_backend import _protected_bytes
 from .models import InstallationError,encode_report,report_sha256
 from .owned_process import assert_owned_helpers_settled
 from .profile import parse_profile
@@ -30,6 +29,7 @@ from .protected_copy import PublishedArtifact,FILE_FLAGS,DIR_FLAGS,ProtectedPare
 from .qualification import _QualifiedBundle,_bundle_pin,_qualified,verify_qualification_bundle,_source,_artifact,_readers,_privileged
 from .qualification_issuer import _registered as _issuer_registered,_evidence
 from .readonly_helper import _json
+from .canary_data import read_profile_canary
 
 
 class QualificationCustodyError(InstallationError):pass
@@ -208,7 +208,8 @@ def _material_bundle(p,root,evidence,request):
     _readers(p,rows['readers']['readers']);_privileged(parse_profile(value['base_profile']),rows['privileged']['qualification'])
     pins=evidence['preparation_pins'];helper=next(e for e in toolkit_manifest.entries if e.path=='dist/server/cli/rbridgeInstallationAudit.js')
     if helper.kind!='FILE' or helper.sha256!=pins['helper_sha256']:_fail('QUALIFICATION_CUSTODY_HELPER_CHANGED')
-    canary=_protected_bytes(p.paths.canary_path,4096)
+    if type(value.get('canary_observation')) is not dict:_fail('QUALIFICATION_CUSTODY_CANARY_OBSERVATION_MISSING')
+    canary,_canary_observation=read_profile_canary(p,previous_observation=value['canary_observation'])
     if base64.b64encode(canary).decode()!=value['canary_base64']:_fail('QUALIFICATION_CUSTODY_CANARY_CHANGED')
     module,payload=_module(p,root,runtime_manifest,toolkit_manifest,request)
     publication=value['observations']['bootstrap_execution']['evidence']['publication']
