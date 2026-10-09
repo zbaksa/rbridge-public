@@ -64,6 +64,21 @@ class OwnedProcessTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertRaises(ValueError,self.validate,parent,[parent,self.node,self.mcp],self.specs)
 
+    def test_session_census_ignores_same_identity_that_becomes_zombie_during_row_capture(self):
+        from rbridge_installation import owned_process as owned
+        live = {'pid':31337,'state':'R','ppid':1,'session':31337,'start_ticks':'123456'}
+        zombie = {**live,'state':'Z'}
+        status = b'Uid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nGroups:\t0\n'
+        def kernel(path, limit=65536):
+            if path.endswith('/status'): return status
+            if path.endswith('/cmdline'): return b''
+            raise AssertionError(path)
+        with patch.object(owned,'_assert_kernel_namespace',lambda:None), \
+             patch.object(owned.os,'listdir',return_value=['31337']), \
+             patch.object(owned,'_stat',side_effect=[live,zombie]), \
+             patch.object(owned,'_kernel_bytes',side_effect=kernel):
+            self.assertEqual(owned._session_rows(31337,10**12),[])
+
     def test_nonroot_or_incoherent_namespace_blocks_before_process_launch(self):
         with patch('rbridge_installation.owned_process.subprocess.Popen') as launch:
             if os.getuid() != 0:
