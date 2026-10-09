@@ -235,7 +235,7 @@ class QualifiedGitHubReadBackend:
 
     def _qualify(self):
         try:
-            digest = hashlib.sha256(_protected_bytes(self.tool.path, 16777216)).hexdigest()
+            digest = hashlib.sha256(_protected_bytes(self.tool.path, 268435456)).hexdigest()
             if digest != self.tool.sha256:
                 raise LookupError('LOOKUP_TOOL_BYTES_MISMATCH')
         except (OSError, InstallationError):
