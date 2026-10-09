@@ -89,7 +89,17 @@ def _row(pid, token):
         result[field.lower()] = [int(v) for v in match[1].split()]
     if len(result['uid']) != 4 or len(result['gid']) != 4: _fail('OWNED_HELPER_KERNEL_UNCLASSIFIED')
     argv = _kernel_bytes('/proc/' + str(pid) + '/cmdline', 65536)
-    if not argv or not argv.endswith(b'\0'): _fail('OWNED_HELPER_KERNEL_UNCLASSIFIED')
+    if not argv:
+        # A short-lived owned helper may become a zombie between the live
+        # stat token above and cmdline capture.  An empty cmdline is accepted
+        # only when a fresh stat proves the same process identity transitioned
+        # to Z; every other empty/invalid command line remains unclassified.
+        current = _stat(pid)
+        if current['start_ticks'] == token['start_ticks'] and current['state'] == 'Z':
+            raise FileNotFoundError('/proc/' + str(pid) + '/cmdline')
+        if current != token: _fail('OWNED_HELPER_KERNEL_CHANGED')
+        _fail('OWNED_HELPER_KERNEL_UNCLASSIFIED')
+    if not argv.endswith(b'\0'): _fail('OWNED_HELPER_KERNEL_UNCLASSIFIED')
     result.update(pid=pid, start_ticks=token['start_ticks'], ppid=token['ppid'], session=token['session'],
         exe=os.readlink('/proc/' + str(pid) + '/exe'), argv=argv[:-1].decode('utf-8',errors='strict').split('\0'))
     if _stat(pid) != token: _fail('OWNED_HELPER_KERNEL_CHANGED')
