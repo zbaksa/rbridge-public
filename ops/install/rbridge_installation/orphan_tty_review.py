@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import select
+import stat
 import sys
 import termios
 
@@ -55,12 +56,19 @@ def collect_root_tty_review_data(observation,claim):
     fd=None
     try:
         fd=os.open('/dev/tty',os.O_RDWR|os.O_NOCTTY|os.O_CLOEXEC)
-        path=os.ttyname(fd)
-        if (not os.isatty(fd) or os.ttyname(0)!=path or
-                os.ttyname(1)!=path or os.ttyname(2)!=path or
-                os.tcgetpgrp(fd)!=os.getpgrp() or
-                not (termios.tcgetattr(fd)[3]&termios.ICANON) or
-                os.stat(path,follow_symlinks=False).st_uid!=1027):
+        # Linux libc ttyname(/dev/tty) may literally return "/dev/tty",
+        # while stdin/stdout/stderr resolve to "/dev/pts/N". A pathname
+        # comparison against /dev/tty would reject an actual foreground
+        # owner terminal. Verify all stdio streams refer to the SAME real
+        # pts device and that its owner is the expected nonroot operator.
+        path=os.ttyname(0)
+        pts=os.stat(path,follow_symlinks=False)
+        if (not stat.S_ISCHR(os.fstat(fd).st_mode)
+                or not re.fullmatch(r'/dev/pts/[0-9]{1,10}',path)
+                or os.ttyname(1)!=path or os.ttyname(2)!=path
+                or not stat.S_ISCHR(pts.st_mode) or pts.st_uid!=1027
+                or os.tcgetpgrp(fd)!=os.getpgrp()
+                or not (termios.tcgetattr(fd)[3]&termios.ICANON)):
             _fail('ORPHAN_TTY_FOREGROUND_UNQUALIFIED')
         nonce=secrets.token_hex(16)
         challenge=(_PREFIX+nonce.encode('ascii')+b'\n')
