@@ -17,6 +17,7 @@ class OrphanRootCustodyTests(unittest.TestCase):
             READONLY_EXE_SHA,READONLY_ARGV_SHA)
         from rbridge_installation.orphan_intent_review_packet import build_orphan_review_packet
         from rbridge_installation.models import encode_report,report_sha256
+        self.make_record=_record
         self.build=build_root_custody_bundle
         self.verify=verify_root_custody_bytes
         self.encode=encode_report
@@ -79,11 +80,11 @@ class OrphanRootCustodyTests(unittest.TestCase):
         raw=self.encode(v)
         receipt=self.verify(raw)
         self.assertLessEqual(len(raw),self.max_bytes)
-        for k in ('observation','owner_claim','tty_review',
-                  'kernel_census','preimage','record'):
-            self.assertEqual(v[k],getattr(self,k if k!='kernel_census'
-                                         else 'census',None)
-                             if k!='record' else self.record)
+        for key,expected in (
+            ('observation',self.observation),('owner_claim',self.claim),
+            ('tty_review',self.tty),('kernel_census',self.census),
+            ('preimage',self.preimage),('record',self.record)):
+            self.assertEqual(v[key],expected)
         self.assertEqual(receipt['status'],'RETAINED_DATA_VERIFIED_ONLY')
         self.assertEqual(receipt['bundle_sha256'],hashlib.sha256(raw).hexdigest())
         self.assertEqual(receipt['record_sha256'],self.hash(self.record))
@@ -92,6 +93,18 @@ class OrphanRootCustodyTests(unittest.TestCase):
                   'may_resume_qualification','may_change_production'):
             self.assertIs(v[k],False)
             self.assertIs(receipt[k],False)
+
+    def test_64bit_nanosecond_timestamps_keep_exact_decimal_identity(self):
+        original=(123,456,0o100600,0,0,1,789,
+                  1791635488123456789,1791635488987654321)
+        record=self.make_record(self.preimage,'toolkit-'+'1'*40,original)
+        self.assertEqual(record['original_intent_identity'],
+                         [str(x) for x in original])
+        bundle=self.build(record,self.observation,self.claim,
+                          self.tty,self.census,self.preimage)
+        raw=self.encode(bundle)
+        self.assertEqual(self.verify(raw)['status'],'RETAINED_DATA_VERIFIED_ONLY')
+        self.assertEqual(self.encode(record).count(b'1791635488123456789'),1)
 
     def test_each_retained_input_is_detectably_tampered(self):
         for name,key,bad in (
