@@ -50,7 +50,7 @@ class OrphanCustodyQualificationReviewTests(unittest.TestCase):
             'status':'ATTENDED_DATA_ONLY',
             'review_packet_sha256':report_sha256(packet),
             'challenge_sha256':'c'*64,
-            'local_tty_present':True,'owner_authenticated':False,
+            'local_tty_present':True,'tty_device_uid':1027,'owner_authenticated':False,
             'original_process_outcome':'UNKNOWN','root_disposition_written':False,
             'may_settle':False,'may_launch':False,
             'may_resume_qualification':False,'may_change_production':False}

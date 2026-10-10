@@ -43,7 +43,7 @@ class OrphanDispositionPreimageTests(unittest.TestCase):
             'schema':'RBRIDGE_ORPHAN_ROOT_TTY_REVIEW_DATA_V1',
             'status':'ATTENDED_DATA_ONLY',
             'review_packet_sha256':self.hash(packet),
-            'challenge_sha256':'c'*64,'local_tty_present':True,
+            'challenge_sha256':'c'*64,'local_tty_present':True,'tty_device_uid':1027,
             'owner_authenticated':False,'original_process_outcome':'UNKNOWN',
             'root_disposition_written':False,'may_settle':False,
             'may_launch':False,'may_resume_qualification':False,
@@ -84,10 +84,24 @@ class OrphanDispositionPreimageTests(unittest.TestCase):
                 obs=copy.deepcopy(self.observation);obs[key]=value
                 with self.assertRaises(ValueError):self.create(obs=obs)
 
+    def test_sudo_root_pts_uid0_is_attended_data_without_auth(self):
+        tty=copy.deepcopy(self.tty)
+        tty['tty_device_uid']=0
+        receipt=self.create(tty=tty)
+        self.assertEqual(receipt['status'],'INTENT_ONLY_UNRESOLVED_REVIEWED')
+        self.assertEqual(receipt['historical_execution'],'UNKNOWN')
+        self.assertIs(receipt['owner_authenticated'],False)
+        self.assertIs(receipt['may_resume_qualification'],False)
+        self.assertIs(receipt['may_change_production'],False)
+
     def test_forged_tty_refused(self):
         for key,value in [('status','OWNER_APPROVED'),
                           ('owner_authenticated',True),
                           ('local_tty_present',False),
+                          ('tty_device_uid',True),
+                          ('tty_device_uid',False),
+                          ('tty_device_uid',1028),
+                          ('tty_device_uid',-1),
                           ('original_process_outcome','SUCCESS'),
                           ('may_resume_qualification',True),
                           ('review_packet_sha256','0'*64)]:

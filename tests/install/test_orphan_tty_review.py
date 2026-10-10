@@ -105,9 +105,19 @@ class OrphanTTYReviewTests(unittest.TestCase):
         observed=self._simulate_real_root_foreground()
         self.assertEqual(observed['status'],'ATTENDED_DATA_ONLY')
         self.assertIs(observed['local_tty_present'],True)
+        self.assertEqual(observed['tty_device_uid'],1027)
         for k in ('owner_authenticated','may_settle','may_launch',
                   'may_resume_qualification','may_change_production'):
             self.assertIs(observed[k],False)
+
+    def test_sudo_owned_foreground_pts_is_data_only_not_owner_identity(self):
+        observed=self._simulate_real_root_foreground(tty_owner=0)
+        self.assertEqual(observed['status'],'ATTENDED_DATA_ONLY')
+        self.assertEqual(observed['tty_device_uid'],0)
+        self.assertIs(observed['local_tty_present'],True)
+        for key in ('owner_authenticated','may_settle','may_launch',
+                    'may_resume_qualification','may_change_production'):
+            self.assertIs(observed[key],False)
 
     def test_foreground_tty_cannot_be_mixed_or_spoofed(self):
         cases=(
@@ -116,8 +126,8 @@ class OrphanTTYReviewTests(unittest.TestCase):
             {'tty_paths':{0:'/dev/tty',1:'/dev/tty',2:'/dev/tty'}},
             {'tty_paths':{0:'/dev/pts/../pts/5',
                           1:'/dev/pts/../pts/5',2:'/dev/pts/../pts/5'}},
-            {'tty_owner':0},
             {'tty_owner':1028},
+            {'tty_owner':-1},
             {'foreground':False},
             {'tty_kind':stat.S_IFREG},
         )

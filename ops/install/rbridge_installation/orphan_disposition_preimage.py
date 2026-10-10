@@ -13,7 +13,8 @@ def _fail(reason):raise OrphanRootDispositionError(reason)
 _NAME='helper-0b84e8af62a287a283eabcd4eef1cdb7'
 _INTENT='844d2d20e5f8c88257d3544158308637c524d55c78ffcaeee1b1b18c45e0a276'
 _TTY_KEYS={'schema','status','review_packet_sha256','challenge_sha256',
-           'local_tty_present','owner_authenticated','original_process_outcome',
+           'local_tty_present','tty_device_uid',
+           'owner_authenticated','original_process_outcome',
            'root_disposition_written','may_settle','may_launch',
            'may_resume_qualification','may_change_production'}
 _SCAN_KEYS={'schema','status','boot_id','samples','may_resume_qualification',
@@ -36,6 +37,8 @@ def disposition_preimage(observation,owner_claim,tty_review,kernel_census):
             or tty_review['review_packet_sha256']!=report_sha256(packet)
             or not _sha(tty_review['challenge_sha256'])
             or tty_review['local_tty_present'] is not True
+            or type(tty_review['tty_device_uid']) is not int
+            or tty_review['tty_device_uid'] not in (0,1027)
             or tty_review['owner_authenticated'] is not False
             or tty_review['original_process_outcome']!='UNKNOWN'
             or tty_review['root_disposition_written'] is not False
