@@ -52,7 +52,7 @@ class OrphanRootCustodyTests(unittest.TestCase):
             'status':'ATTENDED_DATA_ONLY',
             'review_packet_sha256':self.hash(packet),
             'challenge_sha256':'c'*64,
-            'local_tty_present':True,
+            'local_tty_present':True,'tty_device_uid':1027,
             'owner_authenticated':False,
             'original_process_outcome':'UNKNOWN',
             'root_disposition_written':False,
