@@ -65,6 +65,9 @@ class ProposedReadOnlyRootLeaseTests(unittest.TestCase):
         check=self.validate_fixture(lease,'MAINTENANCE_REGISTRY','ORPHAN')
         self.assertEqual(self.mod._live[lease]['state'],'REGISTRY_OBSERVED')
         self.assertIs(check['old_journal_settled'],False)
+        self.assertIs(check['operational_admission_authorized'],False)
+        self.assertEqual(check['status'],
+                         'SOURCE_ONLY_PROPOSED_ORIGINAL_ORPHAN_READONLY_AUDIT')
         with self.assertRaises(ValueError):
             self.validate_fixture(lease,'MAINTENANCE_REGISTRY','ORPHAN')
         args=list(self.argv[1:])
