@@ -84,11 +84,14 @@ class OrphanCustodyQualificationReviewTests(unittest.TestCase):
         self.assertEqual(review['status'],'ADMISSION_BLOCKED_PENDING_LIVE_ROOT_ORIGIN')
         self.assertEqual(len(review['requirements_missing']),5)
         self.assertEqual(review['historical_execution'],'UNKNOWN')
+        self.assertEqual(review['source_release_binding'],'UNVERIFIED_DATA_MATCH_ONLY')
+        self.assertIs(review['source_provenance_verified'],False)
         for key in ('owner_authenticated','may_settle','may_launch',
                     'may_resume_qualification','may_change_production'):
             self.assertIs(review[key],False)
-        self.assertEqual(self.compare(self.raw,self.request,review)['status'],
-                         'DATA_MATCH_BLOCKED')
+        compared=self.compare(self.raw,self.request,review)
+        self.assertEqual(compared['status'],'DATA_MATCH_BLOCKED')
+        self.assertIs(compared['source_provenance_verified'],False)
 
     def test_hash_only_old_record_not_accepted_as_custody(self):
         with self.assertRaises(ValueError):
@@ -108,6 +111,71 @@ class OrphanCustodyQualificationReviewTests(unittest.TestCase):
                 with self.assertRaises(ValueError):self.review(raw,request)
         req={**self.request,'root_source_sha':'e9ffb8411c8ac3c9a0807b71863f0cbad6d918a1'}
         with self.assertRaises(ValueError):self.review(self.raw,req)
+
+    def test_same_tree_release_data_can_match_without_source_attestation(self):
+        # A single packaged release has a distinct Git SHA from its parent.
+        # Matching *data* is allowed, but root origin remains NOT VERIFIED.
+        for candidate in (
+            '79f665bae06590a1163cba7e31876f5486a7fb2a',
+            'ce572da219b4ca7b4ff7f54ff9b4c76a3975fe77',
+            'e9ffb8411c8ac3c9a0807b71863f0cbad6d918a1'):
+            with self.subTest(source=candidate):
+                bundle=copy.deepcopy(self.bundle)
+                bundle['record']['root_source_release']='toolkit-'+candidate
+                raw=self.encode(bundle)
+                request={**self.request,'root_source_sha':candidate,
+                         'custody_bundle_sha256':hashlib.sha256(raw).hexdigest()}
+                result=self.review(raw,request)
+                self.assertEqual(result['status'],
+                                 'ADMISSION_BLOCKED_PENDING_LIVE_ROOT_ORIGIN')
+                self.assertEqual(result['source_release_binding'],
+                                 'UNVERIFIED_DATA_MATCH_ONLY')
+                self.assertIs(result['source_provenance_verified'],False)
+                for key in ('may_settle','may_launch',
+                            'may_resume_qualification','may_change_production'):
+                    self.assertIs(result[key],False)
+                compare=self.compare(raw,request,result)
+                self.assertIs(compare['source_provenance_verified'],False)
+                self.assertIs(compare['may_launch'],False)
+
+    def test_untrusted_release_binding_is_not_authority(self):
+        # A fabricated but internally consistent release string can NEVER
+        # constitute physical Root provenance or helper admission.
+        arbitrary='1'*40
+        bundle=copy.deepcopy(self.bundle)
+        bundle['record']['root_source_release']='toolkit-'+arbitrary
+        raw=self.encode(bundle)
+        request={**self.request,'root_source_sha':arbitrary,
+                 'custody_bundle_sha256':hashlib.sha256(raw).hexdigest()}
+        response=self.review(raw,request)
+        self.assertIs(response['source_provenance_verified'],False)
+        self.assertIn('VERIFIED_PUBLISHED_ROOT_SOURCE_AND_PROTECTED_EVIDENCE',
+                      response['requirements_missing'])
+        self.assertIs(response['owner_authenticated'],False)
+        self.assertIs(response['may_resume_qualification'],False)
+        for k in ('source_provenance_verified','may_launch',
+                  'may_change_production','owner_authenticated'):
+            forged={**response,k:True}
+            with self.subTest(key=k),self.assertRaises(ValueError):
+                self.compare(raw,request,forged)
+
+    def test_reject_structurally_invalid_or_mismatched_release(self):
+        for candidate in (None,123,True,'','abc','0'*39,'0'*41,
+                          'G'*40,'a'*39+'z','toolkit-'+'0'*40,
+                          'e9ffb8411c8ac3c9a0807b71863f0cbad6d918a1'):
+            with self.subTest(candidate=str(candidate)):
+                request={**self.request,'root_source_sha':candidate}
+                with self.assertRaises(ValueError):
+                    self.review(self.raw,request)
+        # Even if the attacker recalculates all the ordinary DATA hashes,
+        # a request naming a different release fails closed.
+        bundle=copy.deepcopy(self.bundle)
+        bundle['record']['root_source_release']='toolkit-'+'a'*40
+        raw=self.encode(bundle)
+        request={**self.request,'custody_bundle_sha256':
+                 hashlib.sha256(raw).hexdigest()}
+        with self.assertRaises(ValueError):
+            self.review(raw,request)
 
     def test_changed_or_unavailable_source_evidence_is_refused(self):
         for name,key,val in (
@@ -150,6 +218,7 @@ class OrphanCustodyQualificationReviewTests(unittest.TestCase):
         good=self.review(self.raw,self.request)
         for key,val in (
             ('status','PASS'),('may_launch',True),
+            ('source_provenance_verified',True),
             ('owner_authenticated',True),
             ('may_resume_qualification',True),
             ('requirements_missing',[])):
