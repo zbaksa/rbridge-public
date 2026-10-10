@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from _loader import toolkit
 
@@ -152,6 +153,46 @@ class OwnerReleaseCryptographicDataTests(unittest.TestCase):
                         (_PUBLIC,'not bytes')):
             with self.assertRaises(ValueError):self.native(b'\x72',pub,sig)
         with self.assertRaises(ValueError):self.native(b'x'*8193,_PUBLIC,_RFC_SIG)
+
+    def test_root_crypto_rejects_ambient_provider_and_loader_overrides(self):
+        from rbridge_installation import orphan_owner_signed_release_review as mod
+        flags=SimpleNamespace(isolated=1,no_site=1,dont_write_bytecode=1)
+        bad_names=('OPENSSL_CONF','OPENSSL_CONF_INCLUDE','OPENSSL_MODULES',
+                   'OPENSSL_ENGINES','LD_LIBRARY_PATH','LD_PRELOAD',
+                   'LD_AUDIT','LD_ORIGIN_PATH','PYTHONPATH','PYTHONHOME',
+                   'PYTHONINSPECT','PYTHONSTARTUP')
+        for name in bad_names:
+            with self.subTest(name=name):
+                with patch.object(mod.os,'getuid',return_value=0), \
+                     patch.object(mod.os,'geteuid',return_value=0), \
+                     patch.object(mod.os,'getgid',return_value=0), \
+                     patch.object(mod.os,'getegid',return_value=0), \
+                     patch.object(mod.os,'getcwd',return_value='/'), \
+                     patch.object(mod.sys,'flags',flags), \
+                     patch.dict(mod.os.environ,{name:'/tmp/untrusted'},clear=False):
+                    with self.assertRaisesRegex(
+                            ValueError,'ORPHAN_OWNER_NATIVE_ROOT_CONTEXT_UNQUALIFIED'):
+                        mod._native_ed25519_verify(b'\x72',_PUBLIC,_RFC_SIG)
+
+    def test_root_crypto_rejects_mixed_ids_and_unisolated_python(self):
+        from rbridge_installation import orphan_owner_signed_release_review as mod
+        safe=SimpleNamespace(isolated=1,no_site=1,dont_write_bytecode=1)
+        unsafe=SimpleNamespace(isolated=0,no_site=1,dont_write_bytecode=1)
+        for uid,euid,gid,egid,flags,cwd in (
+            (1027,0,1027,0,safe,'/'),
+            (0,0,0,0,unsafe,'/'),
+            (0,0,0,0,safe,'/tmp'),
+            (0,0,0,1027,safe,'/')):
+            with self.subTest(ids=(uid,euid,gid,egid),cwd=cwd):
+                with patch.object(mod.os,'getuid',return_value=uid), \
+                     patch.object(mod.os,'geteuid',return_value=euid), \
+                     patch.object(mod.os,'getgid',return_value=gid), \
+                     patch.object(mod.os,'getegid',return_value=egid), \
+                     patch.object(mod.os,'getcwd',return_value=cwd), \
+                     patch.object(mod.sys,'flags',flags):
+                    with self.assertRaisesRegex(
+                            ValueError,'ORPHAN_OWNER_NATIVE_ROOT_CONTEXT_UNQUALIFIED'):
+                        mod._native_ed25519_verify(b'\x72',_PUBLIC,_RFC_SIG)
 
 if __name__=='__main__':
     unittest.main()

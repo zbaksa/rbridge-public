@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 
 from .models import InstallationError,encode_report
 
@@ -98,6 +99,21 @@ def _native_ed25519_verify(message,public_key,signature):
             or type(signature) is not bytes
             or len(message)>_MAX or len(public_key)!=32 or len(signature)!=64):
         _fail('ORPHAN_OWNER_ED25519_INPUT_INVALID')
+    # Before native loading, forbid an unqualified Root context. OpenSSL 3
+    # may honor ambient provider/config variables. A root-owned libcrypto
+    # file is not enough if untrusted environment can load other providers.
+    identities=(os.getuid(),os.geteuid(),os.getgid(),os.getegid())
+    if 0 in identities:
+        unsafe=('OPENSSL_CONF','OPENSSL_CONF_INCLUDE','OPENSSL_MODULES',
+                'OPENSSL_ENGINES','LD_LIBRARY_PATH','LD_PRELOAD','LD_AUDIT',
+                'LD_ORIGIN_PATH','PYTHONPATH','PYTHONHOME','PYTHONINSPECT',
+                'PYTHONSTARTUP')
+        if (identities!=(0,0,0,0)
+                or not sys.flags.isolated or not sys.flags.no_site
+                or not sys.flags.dont_write_bytecode
+                or os.getcwd()!='/'
+                or any(name in os.environ for name in unsafe)):
+            _fail('ORPHAN_OWNER_NATIVE_ROOT_CONTEXT_UNQUALIFIED')
     try:
         for name in ('/','/usr','/usr/lib','/usr/lib/x86_64-linux-gnu'):
             s=os.lstat(name)
