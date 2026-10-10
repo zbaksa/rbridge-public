@@ -1,5 +1,6 @@
 """One signed owner-approved, process-local, single read-only systemctl audit.
 
+SOURCE-ONLY: existing operational guards are NOT connected to this proposal.
 No service start/stop/restart, journal settlement, old-file repair, installation,
 pointer switch, extra helper, generic provider callback or production cutover.
 The only possible exception is the known incomplete helper during one exact,
