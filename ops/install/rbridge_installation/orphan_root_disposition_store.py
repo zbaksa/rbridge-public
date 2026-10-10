@@ -12,7 +12,7 @@ import stat
 import sys
 
 from .artifact import _identity
-from .helper_journal import _boot_id
+from .helper_journal import _boot_id,_read
 from .models import InstallationError,encode_report,report_sha256
 from .orphan_disposition_preimage import disposition_preimage
 from .orphan_intent_review import inspect_readonly_orphan_intent
@@ -123,6 +123,10 @@ def append_root_orphan_review(owner_claim):
             _fail('ORPHAN_ROOT_STORE_LOCK_METADATA')
         try:fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except OSError:_fail('ORPHAN_ROOT_STORE_LOCK_HELD')
+        original_bytes,original_read=_read(journal_fd,'intent.json',0)
+        if (hashlib.sha256(original_bytes).hexdigest()!=INTENT_SHA
+                or _signature(original_read)!=original_signature):
+            _fail('ORPHAN_ROOT_STORE_INTENT_BYTES_CHANGED')
         review=collect_root_tty_review_data(observation,owner_claim)
         census=collect_root_kernel_census()
         preimage=disposition_preimage(observation,owner_claim,review,census)
