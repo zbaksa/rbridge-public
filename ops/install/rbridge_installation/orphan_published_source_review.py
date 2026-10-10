@@ -83,6 +83,9 @@ def describe_exact_manifest_data(manifest,raw):
     """Record matching source bytes without claiming trusted Root provenance."""
     if type(manifest) is not ArtifactManifest or type(raw) is not bytes:
         _fail('ORPHAN_SOURCE_MANIFEST_UNQUALIFIED')
+    validate_manifest(manifest)
+    if encode_report(manifest)!=raw:
+        _fail('ORPHAN_SOURCE_MANIFEST_NONCANONICAL')
     return {'schema':'RBRIDGE_ORPHAN_SOURCE_MANIFEST_DATA_V1',
             'status':'MANIFEST_DATA_MATCH_ONLY',
             'source_sha':manifest.source_sha,
