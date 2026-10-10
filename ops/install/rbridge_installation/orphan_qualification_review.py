@@ -2,6 +2,8 @@
 
 The input is self-consistent canonical DATA, not Root provenance, authenticated
 owner consent, an admission capability or permission to repeat qualification.
+The source-release equality comparison is explicitly UNTRUSTED data matching:
+it cannot attest which protected executable ran on a real host.
 A successful comparison ALWAYS returns BLOCKED.
 """
 import json
@@ -15,7 +17,6 @@ def _fail(reason):raise OrphanCustodyAdmissionError(reason)
 
 _JOURNAL='helper-0b84e8af62a287a283eabcd4eef1cdb7'
 _INTENT='844d2d20e5f8c88257d3544158308637c524d55c78ffcaeee1b1b18c45e0a276'
-_ROOT_SOURCE='9c474517e492044c463cd0a4de5abd47fb983fdd'
 _REQUEST_KEYS={'schema','scope','action','journal_name','intent_sha256',
                'custody_bundle_sha256','root_source_sha',
                'proposed_driver_sha256','nonce','service_actions',
@@ -33,7 +34,6 @@ def review_custody_qualification_request(custody_bytes,request):
     if (verified['status']!='RETAINED_DATA_VERIFIED_ONLY'
             or record['journal_name']!=_JOURNAL
             or record['intent_sha256']!=_INTENT
-            or record['root_source_release']!='toolkit-'+_ROOT_SOURCE
             or record['historical_result']!='UNKNOWN'
             or record['owner_authenticated'] is not False
             or record['journal_settled'] is not False):
@@ -45,7 +45,8 @@ def review_custody_qualification_request(custody_bytes,request):
             or request['journal_name']!=_JOURNAL
             or request['intent_sha256']!=_INTENT
             or request['custody_bundle_sha256']!=verified['bundle_sha256']
-            or request['root_source_sha']!=_ROOT_SOURCE
+            or not _sha(request['root_source_sha'],40)
+            or record['root_source_release']!='toolkit-'+request['root_source_sha']
             or not _sha(request['proposed_driver_sha256'])
             or not _sha(request['nonce'],32)
             or request['nonce']=='0'*32
@@ -60,6 +61,8 @@ def review_custody_qualification_request(custody_bytes,request):
         'custody_bundle_sha256':verified['bundle_sha256'],
         'record_sha256':verified['record_sha256'],
         'request_sha256':report_sha256(request),
+        'source_release_binding':'UNVERIFIED_DATA_MATCH_ONLY',
+        'source_provenance_verified':False,
         'requirements_missing':[
             'VERIFIED_PUBLISHED_ROOT_SOURCE_AND_PROTECTED_EVIDENCE',
             'INDEPENDENT_AUTHENTICATED_OWNER_RECEIPT',
@@ -79,6 +82,7 @@ def compare_custody_qualification_request(custody_bytes,request,comparison):
         _fail('ORPHAN_CUSTODY_ADMISSION_COMPARISON_CHANGED')
     return {'status':'DATA_MATCH_BLOCKED',
             'comparison_sha256':report_sha256(expected),
+            'source_provenance_verified':False,
             'owner_authenticated':False,
             'may_launch':False,
             'may_resume_qualification':False,
