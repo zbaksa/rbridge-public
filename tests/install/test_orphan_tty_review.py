@@ -90,7 +90,7 @@ class OrphanTTYReviewTests(unittest.TestCase):
              patch.object(mod.termios,'tcgetattr',
                           return_value=[0,0,0,mod.termios.ICANON,0,0,[]]), \
              patch.object(mod.secrets,'token_hex',return_value='a'*32), \
-             patch.object(mod.os,'write',return_value=160), \
+             patch.object(mod.os,'write',return_value=164), \
              patch.object(mod.select,'select',
                           return_value=([99],[],[])), \
              patch.object(mod.os,'read',return_value=readback), \
