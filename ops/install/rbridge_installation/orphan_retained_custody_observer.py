@@ -28,7 +28,7 @@ def _hash(text,length):
     return type(text) is str and re.fullmatch('[0-9a-f]{'+str(length)+'}',text) is not None
 
 def compare_retained_custody_data(raw,expected_sha,writer_source,
-                                  original_intent_bytes,original_identity,
+                                  original_intent_sha256,original_identity,
                                   journal_children):
     """Strict in-memory DATA comparison; caller-provided facts are untrusted.
 
@@ -36,8 +36,7 @@ def compare_retained_custody_data(raw,expected_sha,writer_source,
     """
     if (type(raw) is not bytes or not _hash(expected_sha,64)
             or not _hash(writer_source,40)
-            or type(original_intent_bytes) is not bytes
-            or not 1<=len(original_intent_bytes)<=262144
+            or not _hash(original_intent_sha256,64)
             or type(original_identity) is not tuple
             or len(original_identity)!=9
             or any(type(n) is not int or n<0 for n in original_identity)
@@ -47,7 +46,7 @@ def compare_retained_custody_data(raw,expected_sha,writer_source,
     result=verify_root_custody_bytes(raw)
     if (result['status']!='RETAINED_DATA_VERIFIED_ONLY'
             or result['bundle_sha256']!=expected_sha
-            or hashlib.sha256(original_intent_bytes).hexdigest()!=INTENT_SHA):
+            or original_intent_sha256!=INTENT_SHA):
         _fail('ORPHAN_RETAINED_CUSTODY_DIGEST_CHANGED')
     bundle=json.loads(raw)
     record=bundle['record']
@@ -134,7 +133,7 @@ def observe_protected_retained_custody(expected_sha,writer_source):
         if _signature(identity)!=_signature(os.stat('intent.json',dir_fd=journal_fd,follow_symlinks=False)):
             _fail('ORPHAN_RETAINED_INTENT_CHANGED')
         comparison=compare_retained_custody_data(raw,expected_sha,writer_source,
-            intent,_signature(identity),members)
+            hashlib.sha256(intent).hexdigest(),_signature(identity),members)
         _check_journal(journal_fd,journal_before,lock_fd,lock_before,_signature(identity))
         maintenance.check();store.check()
         if (_signature(os.fstat(leaf_fd))!=_signature(before)
