@@ -107,7 +107,7 @@ class OwnerEnrollmentDataOnlyTests(unittest.TestCase):
                           st_uid=0,st_gid=0,st_nlink=2,st_size=4096,
                           st_mtime_ns=100,st_ctime_ns=200)
         y=SimpleNamespace(st_dev=1,st_ino=9,st_mode=stat.S_IFDIR|0o700,
-                          st_uid=0,st_gid=0,st_nlink=2,st_size=4128,
+                          st_uid=0,st_gid=0,st_nlink=3,st_size=4128,
                           st_mtime_ns=110,st_ctime_ns=210)
         self.assertEqual(self.mod._protected_directory_id(x),
                          self.mod._protected_directory_id(y))
