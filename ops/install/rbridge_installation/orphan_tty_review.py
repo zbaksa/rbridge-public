@@ -60,13 +60,17 @@ def collect_root_tty_review_data(observation,claim):
         # while stdin/stdout/stderr resolve to "/dev/pts/N". A pathname
         # comparison against /dev/tty would reject an actual foreground
         # owner terminal. Verify all stdio streams refer to the SAME real
-        # pts device and that its owner is the expected nonroot operator.
+        # pts device. sudo "use_pty" may allocate a separate root-owned
+        # /dev/pts/N, even with the true operator at the keyboard.
+        # Only Root attendance DATA is proven for uid 0; it never
+        # authenticates a human signer or authorizes an operation.
         path=os.ttyname(0)
         pts=os.stat(path,follow_symlinks=False)
         if (not stat.S_ISCHR(os.fstat(fd).st_mode)
                 or not re.fullmatch(r'/dev/pts/[0-9]{1,10}',path)
                 or os.ttyname(1)!=path or os.ttyname(2)!=path
-                or not stat.S_ISCHR(pts.st_mode) or pts.st_uid!=1027
+                or not stat.S_ISCHR(pts.st_mode)
+                or pts.st_uid not in (0,1027)
                 or os.tcgetpgrp(fd)!=os.getpgrp()
                 or not (termios.tcgetattr(fd)[3]&termios.ICANON)):
             _fail('ORPHAN_TTY_FOREGROUND_UNQUALIFIED')
@@ -86,6 +90,7 @@ def collect_root_tty_review_data(observation,claim):
                 'review_packet_sha256':report_sha256(packet),
                 'challenge_sha256':outcome['challenge_sha256'],
                 'local_tty_present':True,
+                'tty_device_uid':pts.st_uid,
                 'owner_authenticated':False,
                 'original_process_outcome':'UNKNOWN',
                 'root_disposition_written':False,
