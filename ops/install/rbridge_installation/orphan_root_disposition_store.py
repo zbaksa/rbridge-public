@@ -15,6 +15,7 @@ from .artifact import _identity
 from .helper_journal import _boot_id,_read
 from .models import InstallationError,encode_report,report_sha256
 from .orphan_disposition_preimage import disposition_preimage
+from .orphan_root_custody import build_root_custody_bundle,verify_root_custody_bytes
 from .orphan_intent_review import inspect_readonly_orphan_intent
 from .orphan_kernel_census import collect_root_kernel_census
 from .orphan_tty_review import collect_root_tty_review_data
@@ -88,7 +89,7 @@ def _record(preimage,origin,original):
     if (type(origin) is not str
             or re.fullmatch('toolkit-[0-9a-f]{40}',origin) is None
             or type(original) is not tuple or len(original)!=9
-            or any(type(x) is not int for x in original)):
+            or any(type(x) is not int or x<0 for x in original)):
         _fail('ORPHAN_ROOT_STORE_ORIGIN_INVALID')
     return {
         'schema':'RBRIDGE_ROOT_ORPHAN_INTENT_EVIDENCE_V1',
@@ -97,7 +98,7 @@ def _record(preimage,origin,original):
         'journal_name':JOURNAL,'intent_sha256':INTENT_SHA,
         'preimage_sha256':report_sha256(preimage),
         'root_source_release':origin,
-        'original_intent_identity':list(original),
+        'original_intent_identity':[str(x) for x in original],
         'historical_execution':'UNKNOWN','historical_result':'UNKNOWN',
         'owner_authenticated':False,'journal_settled':False,
         'may_settle':False,'may_launch':False,
@@ -141,7 +142,9 @@ def append_root_orphan_review(owner_claim):
                 !=original_signature or _boot_id()!=census['boot_id']):
             _fail('ORPHAN_ROOT_STORE_INTENT_OR_BOOT_CHANGED')
         record=_record(preimage,origin,original_signature)
-        payload=encode_report(record)
+        bundle=build_root_custody_bundle(record,observation,owner_claim,
+                                         review,census,preimage)
+        payload=encode_report(bundle)
         if len(payload)>16384:_fail('ORPHAN_ROOT_STORE_BYTE_LIMIT')
         digest=hashlib.sha256(payload).hexdigest()
         leaf='orphan-intent-'+digest+'.json'
@@ -173,6 +176,10 @@ def append_root_orphan_review(owner_claim):
                     or readback!=payload or _signature(row)!=_signature(named)
                     or sorted(os.listdir(store.fd))!=[leaf]):
                 _fail('ORPHAN_ROOT_STORE_READBACK')
+            custody=verify_root_custody_bytes(readback)
+            if (custody['bundle_sha256']!=digest
+                    or custody['record_sha256']!=report_sha256(record)):
+                _fail('ORPHAN_ROOT_STORE_CUSTODY_READBACK')
             maintenance.check();store.check()
             _check_journal(journal_fd,directory_before,lock_fd,lock_before,original_signature)
             if (_signature(os.stat('intent.json',dir_fd=journal_fd,follow_symlinks=False))
@@ -180,9 +187,12 @@ def append_root_orphan_review(owner_claim):
                 _fail('ORPHAN_ROOT_STORE_INTENT_CHANGED')
         finally:
             if handle is not None:os.close(handle)
-        return {'schema':'RBRIDGE_ROOT_ORPHAN_STORE_RECEIPT_V1',
+        return {'schema':'RBRIDGE_ROOT_ORPHAN_STORE_RECEIPT_V2',
                 'status':'ROOT_DATA_ONLY_STORED',
-                'record_sha256':digest,'file_name':leaf,
+                'custody_status':custody['status'],
+                'bundle_sha256':digest,
+                'record_sha256':custody['record_sha256'],
+                'file_name':leaf,
                 'original_intent_unchanged':True,'historical_execution':'UNKNOWN',
                 'owner_authenticated':False,'may_settle':False,'may_launch':False,
                 'may_resume_qualification':False,'may_change_production':False}
