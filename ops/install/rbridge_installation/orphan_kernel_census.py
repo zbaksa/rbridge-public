@@ -38,6 +38,27 @@ def classify_process_snapshot(rows):
             candidate.append(row['pid'])
     return {'count':len(rows),'candidates':sorted(candidate)}
 
+def _confirmed_kernel_thread(pid,token):
+    """Only kernel PF_KTHREAD with empty cmdline may lack /proc/PID/exe."""
+    from .host_backend import _kernel_bytes
+    from .owned_process import _stat
+    if not (token['ppid']==2 or pid==2 and token['ppid']==0):
+        return False
+    raw=_kernel_bytes('/proc/'+str(pid)+'/stat',65536)
+    end=raw.rfind(b') ')
+    if (end<0 or raw.split(b' ',1)[0]!=str(pid).encode()):
+        _fail('ORPHAN_CENSUS_KTHREAD_UNCLASSIFIED')
+    fields=raw[end+2:].split()
+    if len(fields)<20 or re.fullmatch(rb'[0-9]+',fields[6]) is None:
+        _fail('ORPHAN_CENSUS_KTHREAD_UNCLASSIFIED')
+    if int(fields[6])&0x00200000==0:
+        return False
+    if _kernel_bytes('/proc/'+str(pid)+'/cmdline',65536):
+        return False
+    if _stat(pid)!=token:
+        _fail('ORPHAN_CENSUS_KTHREAD_RACE')
+    return True
+
 def _scan(sequence,boot,deadline):
     from .helper_journal import _boot_id
     from .owned_process import _stat
@@ -59,9 +80,8 @@ def _scan(sequence,boot,deadline):
         try:
             exe=os.readlink('/proc/'+item+'/exe')
         except FileNotFoundError:
-            # Kernel threads have no userspace executable; never admit
-            # unknown ordinary userspace processes through this exception.
-            if token['ppid']==2:continue
+            if _confirmed_kernel_thread(pid,token):
+                continue
             _fail('ORPHAN_CENSUS_EXE_UNAVAILABLE')
         except (OSError,ValueError):
             _fail('ORPHAN_CENSUS_EXE_UNAVAILABLE')
