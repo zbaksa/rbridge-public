@@ -7,8 +7,6 @@ A separately protected Root factory must collect and attest those facts
 before they can become trusted. Every result denies helper/production rights.
 """
 import hashlib
-import os
-import pickle
 import re
 import secrets
 import time
@@ -128,8 +126,12 @@ class SingleUseReviewChallengeData:
         result=verify_signed_release_review_data(
             signed_payload,signature,public_key)
         if (result['status']!='SIGNATURE_VALID_ONLY_UNTRUSTED_KEY'
+                or result['signer_key_authenticated'] is not False
                 or result['owner_authenticated'] is not False
-                or result['may_launch'] is not False):
+                or result['source_provenance_verified'] is not False
+                or any(result.get(k) is not False for k in
+                       ('may_settle','may_launch','may_resume_qualification',
+                        'may_change_production'))):
             _fail('ORPHAN_REVIEW_CHALLENGE_CRYPTO_UNQUALIFIED')
         return {
             'schema':'RBRIDGE_ORPHAN_ONE_USE_REVIEW_DATA_RESULT_V1',
