@@ -261,11 +261,20 @@ def _current_root_helper(parent_fd,name):
     journal._check();observation();journal._check();return True
 
 
-def begin_root_helper(pin,args,input_bytes,child_specs):
-    """Serialize only journal creation. Unfinished predecessors block Popen."""
+def begin_root_helper(pin,args,input_bytes,child_specs,*,orphan_lease=None):
+    """Serialize only journal creation. Unfinished predecessors block Popen.
+
+    A future single-workflow lease must pass both operative guards. The
+    present gate has no issuer and rejects every candidate before admission.
+    """
     from .host_backend import _assert_kernel_namespace
     if os.getuid()!=0 or os.geteuid()!=0:_fail('HELPER_JOURNAL_ROOT_REQUIRED')
     _assert_kernel_namespace()
+    if orphan_lease is not None:
+        from .orphan_dual_guard_gate import (
+            ORPHAN_NAME,require_qualified_orphan_lease)
+        require_qualified_orphan_lease(
+            orphan_lease,guard='HELPER_JOURNAL',journal_name=ORPHAN_NAME)
     guard=ProtectedParent(FilesystemAuthority(0,1027,Path('/var/lib/rbridge-maintenance'),'RUNTIME'))
     journal=None;locked=False
     try:

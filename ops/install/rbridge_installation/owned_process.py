@@ -122,7 +122,8 @@ def _session_rows(session, deadline):
 
 
 def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
-                      child_specs=(), guard=None, ready=None, started=None, heartbeat=None):
+                      child_specs=(), guard=None, ready=None, started=None, heartbeat=None,
+                      *, orphan_lease=None):
     """Private fixed launch primitive; no shell, ambient credentials or name kills.
 
     Returned output is accompanied by launch/settlement facts. Missing namespace,
@@ -130,6 +131,11 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
     """
     if os.getuid() != 0 or os.geteuid() != 0: _fail('OWNED_HELPER_ROOT_REQUIRED')
     _assert_kernel_namespace()
+    if orphan_lease is not None:
+        from .orphan_dual_guard_gate import (
+            ORPHAN_NAME,require_qualified_orphan_lease)
+        require_qualified_orphan_lease(
+            orphan_lease,guard='HELPER_JOURNAL',journal_name=ORPHAN_NAME)
     if not hasattr(os,'pidfd_open') or not hasattr(signal,'pidfd_send_signal'): _fail('OWNED_HELPER_PIDFD_UNAVAILABLE')
     if (type(args) not in (tuple,list) or any(type(a) is not str or '\0' in a for a in args)
             or type(input_bytes) is not bytes or len(input_bytes)>67108864
@@ -143,7 +149,11 @@ def run_owned_process(pin, args, timeout_ms, limit, input_bytes=b'', env=None,
     from .helper_journal import begin_root_helper
     selector=selectors.DefaultSelector();journal=None
     try:
-        journal=begin_root_helper(pin,args,input_bytes,child_specs)
+        if orphan_lease is None:
+            journal=begin_root_helper(pin,args,input_bytes,child_specs)
+        else:
+            journal=begin_root_helper(
+                pin,args,input_bytes,child_specs,orphan_lease=orphan_lease)
         # A full guard may itself use fixed observations. It ran before our
         # durable INTENT; do not nest a launch while our identity is uncertain.
         if hashlib.sha256(_protected_bytes(pin.path,268435456)).hexdigest()!=pin.sha256:

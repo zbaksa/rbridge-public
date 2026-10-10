@@ -23,7 +23,15 @@ class RegistryError(InstallationError):pass
 def _fail(reason):raise RegistryError(reason)
 
 
-def assert_no_unfinished_transactions(parent_fd,current=None,production=True):
+def assert_no_unfinished_transactions(parent_fd,current=None,production=True,*,orphan_lease=None):
+    # The cold history guard remains strictly unchanged without a lease.
+    # No live Root issuer exists yet, so EVERY candidate is denied before
+    # examining any ledger or waiving an incomplete original helper journal.
+    if orphan_lease is not None:
+        from .orphan_dual_guard_gate import (
+            ORPHAN_NAME,require_qualified_orphan_lease)
+        require_qualified_orphan_lease(
+            orphan_lease,guard='MAINTENANCE_REGISTRY',journal_name=ORPHAN_NAME)
     owner=0 if production else os.getuid();guard=None;deadline=time.monotonic()+60;total=0
     if production:
         from .host_backend import _assert_kernel_namespace
