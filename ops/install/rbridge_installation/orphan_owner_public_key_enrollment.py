@@ -20,7 +20,7 @@ class OrphanOwnerEnrollmentError(InstallationError): pass
 def _fail(reason): raise OrphanOwnerEnrollmentError(reason)
 
 _ROOT=Path('/root')
-_STORE=' .rbridge-owner-trust-r1'.strip()
+_STORE='.rbridge-owner-trust-r1'
 _LEAF='ed25519-public-key.bin'
 _CONFIRM='ENROLL-ED25519-PUBLIC-KEY '
 
@@ -47,6 +47,10 @@ def review_public_key_enrollment_data(public_key,expected_sha256):
 def _stat_identity(s):
     return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,
             s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+
+def _protected_directory_id(s):
+    # Parent directory mtime/ctime are expected to change upon mkdir.
+    return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink)
 
 def _read_direct_owner_tty(fingerprint):
     """An attended foreground Root TTY confirms fingerprint, NOT identity."""
@@ -115,7 +119,7 @@ def enroll_owner_public_key_create_once(public_key,expected_sha256):
         else:_fail('ORPHAN_OWNER_ENROLL_ALREADY_EXISTS')
         # Approval is entered ONLY on the foreground controlling TTY.
         _read_direct_owner_tty(expected_sha256)
-        if _stat_identity(os.fstat(parent))!=_stat_identity(before):
+        if _protected_directory_id(os.fstat(parent))!=_protected_directory_id(before):
             _fail('ORPHAN_OWNER_ENROLL_ROOT_PARENT_CHANGED')
         try:
             os.stat(_STORE,dir_fd=parent,follow_symlinks=False)
@@ -150,7 +154,8 @@ def enroll_owner_public_key_create_once(public_key,expected_sha256):
                 or not hmac.compare_digest(
                     hashlib.sha256(readback).hexdigest(),expected_sha256)
                 or os.listdir(store)!=[_LEAF]
-                or _stat_identity(os.fstat(parent))!=_stat_identity(before)):
+                or _protected_directory_id(os.fstat(parent))
+                   !=_protected_directory_id(before)):
             _fail('ORPHAN_OWNER_ENROLL_READBACK_FAILED')
         os.fsync(store)
         os.fsync(parent)
