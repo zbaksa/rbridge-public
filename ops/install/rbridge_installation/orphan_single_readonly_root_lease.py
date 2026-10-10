@@ -129,7 +129,8 @@ def _validate_live_lease(lease,*,guard,journal_name,
                           else 'CONSUMED')
         return {
             'schema':'RBRIDGE_SINGLE_ROOT_READONLY_LEASE_GUARD_RESULT_V1',
-            'status':'ONE_ORIGINAL_ORPHAN_READONLY_AUDIT_ONLY',
+            'status':'SOURCE_ONLY_PROPOSED_ORIGINAL_ORPHAN_READONLY_AUDIT',
+            'operational_admission_authorized':False,
             'journal_name':ORPHAN_NAME,
             'guard':guard,'phase':phase,
             'old_journal_settled':False,
