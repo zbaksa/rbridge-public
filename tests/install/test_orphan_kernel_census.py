@@ -1,15 +1,18 @@
 """Two fresh kernel snapshots never prove the missing historical PID."""
 import copy
 import unittest
+from unittest.mock import patch
 from _loader import toolkit
 
 class OrphanKernelCensusTests(unittest.TestCase):
     def setUp(self):
         toolkit()
         from rbridge_installation.orphan_kernel_census import (
-            classify_process_snapshot,collect_root_kernel_census)
+            classify_process_snapshot,collect_root_kernel_census,
+            _confirmed_kernel_thread)
         self.classify=classify_process_snapshot
         self.collect=collect_root_kernel_census
+        self.kthread=_confirmed_kernel_thread
         self.row={'pid':109,'state':'S','ppid':1,'session':109,
                   'start_ticks':'98765','exe':'/usr/bin/python3'}
 
@@ -49,6 +52,28 @@ class OrphanKernelCensusTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.classify([altered])
         del altered['start_ticks']
         with self.assertRaises(ValueError):self.classify([altered])
+
+    def test_kthreadd_requires_kernel_flag_and_empty_commandline(self):
+        from rbridge_installation import host_backend,owned_process
+        token={'pid':2,'state':'S','ppid':0,'session':2,
+               'start_ticks':'98765'}
+        fields=[b'S',b'0',b'2',b'2',b'0',b'0',b'2097152']+[b'0']*12+[b'98765']
+        def check(flag,cmd=b'',prefix=b'2'):
+            values=list(fields);values[6]=str(flag).encode()
+            raw=prefix+b' (kthreadd) '+b' '.join(values)+b'\n'
+            def read(path,limit=65536):
+                if path.endswith('/stat'):return raw
+                if path.endswith('/cmdline'):return cmd
+                raise AssertionError(path)
+            with patch.object(host_backend,'_kernel_bytes',side_effect=read), \
+                 patch.object(owned_process,'_stat',return_value=token):
+                return self.kthread(2,token)
+        self.assertIs(check(0x00200000),True)
+        self.assertIs(check(0),False)
+        self.assertIs(check(0x00200000,b'fake-userspace'),False)
+        with self.assertRaisesRegex(ValueError,'ORPHAN_CENSUS_KTHREAD_UNCLASSIFIED'):
+            check(0x00200000,prefix=b'3')
+        self.assertIs(self.kthread(109,{'ppid':1}),False)
 
     def test_no_source_fixture_can_issue_root_kernel_origin(self):
         import os
