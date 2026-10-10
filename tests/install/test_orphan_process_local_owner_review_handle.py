@@ -100,7 +100,7 @@ class RootLocalOwnerReviewHandleTests(unittest.TestCase):
                 self.mod._ProcessLocalApprovedReview(self.mod._ISSUE_SEAL))
 
     def test_wrong_source_driver_or_custody_consumes_even_on_failure(self):
-        for kind in ('source_sha','custody_sha256','driver_sha256'):
+        for kind in ('source_sha','custody_sha256','qualification_driver_sha256'):
             with self.subTest(kind=kind):
                 self.mod._issued_reviews[self.reviewer]=self.snapshot
                 kw=dict(source_sha=self.source,custody_sha256=self.custody,
