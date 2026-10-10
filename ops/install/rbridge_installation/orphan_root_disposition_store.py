@@ -56,12 +56,12 @@ def _root_context():
     _assert_kernel_namespace()
     return root.name
 
-def _check_journal(journal_fd,before,lock_fd,lock_before):
+def _check_journal(journal_fd,before,lock_fd,lock_before,original_signature):
     now=os.fstat(journal_fd)
     if (_signature(now)!=_signature(before)
             or sorted(os.listdir(journal_fd))!=['intent.json','journal.lock']
             or _signature(os.stat('intent.json',dir_fd=journal_fd,follow_symlinks=False))
-            !=_signature(os.stat('intent.json',dir_fd=journal_fd,follow_symlinks=False))
+            !=original_signature
             or _signature(os.stat('journal.lock',dir_fd=journal_fd,follow_symlinks=False))
             !=_signature(lock_before)
             or _signature(os.fstat(lock_fd))!=_signature(lock_before)):
@@ -127,7 +127,7 @@ def append_root_orphan_review(owner_claim):
         census=collect_root_kernel_census()
         preimage=disposition_preimage(observation,owner_claim,review,census)
         maintenance.check()
-        _check_journal(journal_fd,directory_before,lock_fd,lock_before)
+        _check_journal(journal_fd,directory_before,lock_fd,lock_before,original_signature)
         if (_signature(os.stat('intent.json',dir_fd=journal_fd,follow_symlinks=False))
                 !=original_signature or _boot_id()!=census['boot_id']):
             _fail('ORPHAN_ROOT_STORE_INTENT_OR_BOOT_CHANGED')
@@ -165,7 +165,7 @@ def append_root_orphan_review(owner_claim):
                     or sorted(os.listdir(store.fd))!=[leaf]):
                 _fail('ORPHAN_ROOT_STORE_READBACK')
             maintenance.check();store.check()
-            _check_journal(journal_fd,directory_before,lock_fd,lock_before)
+            _check_journal(journal_fd,directory_before,lock_fd,lock_before,original_signature)
             if (_signature(os.stat('intent.json',dir_fd=journal_fd,follow_symlinks=False))
                     !=original_signature):
                 _fail('ORPHAN_ROOT_STORE_INTENT_CHANGED')
