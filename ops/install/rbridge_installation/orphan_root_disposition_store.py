@@ -45,12 +45,17 @@ def _root_context():
     if (root.parent!=Path('/usr/local/libexec/rbridge/releases')
             or re.fullmatch('toolkit-[0-9a-f]{40}',root.name) is None):
         _fail('ORPHAN_ROOT_STORE_CODE_ORIGIN_UNQUALIFIED')
-    for p in (root,root/'ops',root/'ops/install',
-              root/'ops/install/rbridge_installation',
-              Path(__file__).absolute()):
+    paths=(Path('/'),Path('/usr'),Path('/usr/local'),
+           Path('/usr/local/libexec'),Path('/usr/local/libexec/rbridge'),
+           Path('/usr/local/libexec/rbridge/releases'),root,
+           root/'ops',root/'ops/install',
+           root/'ops/install/rbridge_installation',
+           Path(__file__).absolute())
+    for index,p in enumerate(paths):
         row=os.lstat(p)
-        if (row.st_uid!=0 or row.st_gid!=0 or row.st_mode&0o022
-                or stat.S_ISLNK(row.st_mode)):
+        kind=stat.S_ISREG if index==len(paths)-1 else stat.S_ISDIR
+        if (not kind(row.st_mode) or row.st_uid!=0 or row.st_gid!=0
+                or row.st_mode&0o022 or stat.S_ISLNK(row.st_mode)):
             _fail('ORPHAN_ROOT_STORE_CODE_ORIGIN_UNQUALIFIED')
     from .host_backend import _assert_kernel_namespace
     _assert_kernel_namespace()
