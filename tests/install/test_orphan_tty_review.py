@@ -124,7 +124,7 @@ class OrphanTTYReviewTests(unittest.TestCase):
         for kwargs in cases:
             with self.subTest(kwargs=kwargs):
                 with self.assertRaisesRegex(
-                        ValueError,'ORPHAN_TTY_FOREGROUND_UNQUALIFIED'):
+                        ValueError,'ORPHAN_TTY_UNQUALIFIED'):
                     self._simulate_real_root_foreground(**kwargs)
 
 if __name__=='__main__':
