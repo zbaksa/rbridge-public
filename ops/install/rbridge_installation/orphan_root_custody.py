@@ -45,7 +45,9 @@ def _record_matches_preimage(record,preimage):
             or re.fullmatch('toolkit-[0-9a-f]{40}',record['root_source_release']) is None
             or type(record['original_intent_identity']) is not list
             or len(record['original_intent_identity'])!=9
-            or any(type(x) is not int or x<0 or x>9007199254740991
+            or any(type(x) is not str
+                   or re.fullmatch('0|[1-9][0-9]{0,19}',x) is None
+                   or int(x)>18446744073709551615
                    for x in record['original_intent_identity'])
             or record['historical_execution']!='UNKNOWN'
             or record['historical_result']!='UNKNOWN'
