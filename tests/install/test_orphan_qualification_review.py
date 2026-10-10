@@ -15,7 +15,7 @@ class OrphanQualificationReviewTests(unittest.TestCase):
         self.digest=report_sha256
         self.name='helper-0b84e8af62a287a283eabcd4eef1cdb7'
         self.intent='844d2d20e5f8c88257d3544158308637c524d55c78ffcaeee1b1b18c45e0a276'
-        self.source='2de2e17cf0cec83940ddfb04ee20e29f3c26262a'
+        self.source='e9ffb8411c8ac3c9a0807b71863f0cbad6d918a1'
         self.record={
             'schema':'RBRIDGE_ROOT_ORPHAN_INTENT_EVIDENCE_V1',
             'status':'ROOT_RECORD_ONLY_INTENT_UNRESOLVED',
@@ -96,6 +96,17 @@ class OrphanQualificationReviewTests(unittest.TestCase):
         other=copy.deepcopy(self.record);other['preimage_sha256']='b'*64
         with self.assertRaises(ValueError):
             self.review(other,self.request)
+
+    def test_obsolete_stage2d_source_pins_are_rejected(self):
+        legacy='2de2e17cf0cec83940ddfb04ee20e29f3c26262a'
+        old_record=copy.deepcopy(self.record)
+        old_record['root_source_release']='toolkit-'+legacy
+        with self.assertRaisesRegex(ValueError,'ORPHAN_ADMISSION_RECORD_UNQUALIFIED'):
+            self.review(old_record,self.request)
+        old_request=copy.deepcopy(self.request)
+        old_request['root_source_sha']=legacy
+        with self.assertRaisesRegex(ValueError,'ORPHAN_ADMISSION_REQUEST_UNQUALIFIED'):
+            self.review(self.record,old_request)
 
     def test_modified_comparison_cannot_grant_authority(self):
         value=self.review(self.record,self.request)
