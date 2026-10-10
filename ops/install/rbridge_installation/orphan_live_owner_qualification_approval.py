@@ -16,6 +16,7 @@ import stat
 import sys
 import threading
 import time
+import weakref
 
 from .models import InstallationError, encode_report
 from .orphan_dual_guard_gate import ORPHAN_NAME, ORPHAN_INTENT_SHA256
@@ -119,6 +120,90 @@ def verify_qualification_signature_data(raw,signature,public_key,expected):
         'lease_issued':False,'may_settle':False,'may_launch':False,
         'may_resume_qualification':False,'may_change_production':False,
     }
+
+
+# These handles are intentionally non-serializable and exist only inside the
+# Root interpreter that issued and cryptographically verified the challenge.
+# Neither handle is an operational helper/production capability.
+_ISSUE_SEAL=object()
+_issued_reviews=weakref.WeakKeyDictionary()
+_approved_reviews=weakref.WeakKeyDictionary()
+
+class _ProcessLocalOwnerReview:
+    __slots__=('__weakref__',)
+    def __init__(self,seal=None):
+        if seal is not _ISSUE_SEAL:_fail('ORPHAN_LIVE_REVIEW_CANNOT_BE_CONSTRUCTED')
+    def __copy__(self):_fail('ORPHAN_LIVE_REVIEW_NONTRANSFERABLE')
+    def __deepcopy__(self,memo):_fail('ORPHAN_LIVE_REVIEW_NONTRANSFERABLE')
+    def __reduce_ex__(self,protocol):_fail('ORPHAN_LIVE_REVIEW_NONTRANSFERABLE')
+
+class _ProcessLocalApprovedReview:
+    __slots__=('__weakref__',)
+    def __init__(self,seal=None):
+        if seal is not _ISSUE_SEAL:_fail('ORPHAN_LIVE_APPROVAL_CANNOT_BE_CONSTRUCTED')
+    def __copy__(self):_fail('ORPHAN_LIVE_APPROVAL_NONTRANSFERABLE')
+    def __deepcopy__(self,memo):_fail('ORPHAN_LIVE_APPROVAL_NONTRANSFERABLE')
+    def __reduce_ex__(self,protocol):_fail('ORPHAN_LIVE_APPROVAL_NONTRANSFERABLE')
+
+def describe_process_local_approval(handle):
+    """Expose only DATA; this summary can never substitute for the handle."""
+    if type(handle) is not _ProcessLocalApprovedReview or handle not in _approved_reviews:
+        _fail('ORPHAN_LIVE_APPROVAL_HANDLE_INVALID')
+    snapshot=_approved_reviews[handle]
+    return {
+        'schema':'RBRIDGE_ROOT_P2A_PROCESS_LOCAL_OWNER_REVIEW_DATA_V1',
+        'status':'PROCESS_LOCAL_SIGNED_REVIEW_NOT_QUALIFICATION_AUTHORITY',
+        'source_sha':snapshot['source_sha'],
+        'custody_sha256':snapshot['custody_sha256'],
+        'approval_sha256':snapshot['approval_sha256'],
+        'root_pid':snapshot['facts'][1],
+        'owner_signature_checked':True,
+        'owner_identity_independently_authenticated':False,
+        'lease_issued':False,'may_settle':False,'may_launch':False,
+        'may_resume_qualification':False,'may_change_production':False}
+
+def consume_process_local_signed_review(
+        handle,source_sha,custody_sha256,qualification_driver_sha256):
+    """One-use same Root PID/thread/boot consume of physically verified review.
+
+    It creates a second private approval handle for a future tightly scoped
+    Root issuer. It does NOT create helper/production authority.
+    """
+    if type(handle) is not _ProcessLocalOwnerReview or handle not in _issued_reviews:
+        _fail('ORPHAN_LIVE_REVIEW_HANDLE_INVALID')
+    # Consume even when the attempt fails. No exception can restore it.
+    snapshot=_issued_reviews.pop(handle)
+    if (not _hex(source_sha,40)
+            or not _hex(custody_sha256,64)
+            or not _hex(qualification_driver_sha256,64)
+            or snapshot['source_sha']!=source_sha
+            or snapshot['custody_sha256']!=custody_sha256
+            or snapshot['driver_sha256']!=qualification_driver_sha256
+            or time.monotonic()>snapshot['expires_mono']
+            or _root_process_facts()!=snapshot['facts']
+            or _exact_root_context()!='toolkit-'+source_sha):
+        _fail('ORPHAN_LIVE_REVIEW_ORIGIN_OR_TIME_CHANGED')
+    from .orphan_published_source_review import inspect_published_toolkit_readonly
+    from .orphan_retained_custody_observer import observe_protected_retained_custody
+    from .orphan_owner_key_origin import _read_protected_owner_key
+    root_source=inspect_published_toolkit_readonly(
+        source_sha,snapshot['tree_sha'],snapshot['manifest_file_sha256'])
+    if (root_source['status']!='PHYSICAL_ROOT_TOOLKIT_BYTES_MATCH_UNTRUSTED_PINS'
+            or root_source['manifest_logical_sha256']!=snapshot['manifest_logical_sha256']):
+        _fail('ORPHAN_LIVE_REVIEW_SOURCE_CHANGED')
+    custody=observe_protected_retained_custody(
+        custody_sha256,snapshot['writer_source_sha'])
+    if custody['status']!='ROOT_PHYSICAL_CUSTODY_AND_ORIGINAL_INTENT_MATCH_DATA_ONLY':
+        _fail('ORPHAN_LIVE_REVIEW_CUSTODY_CHANGED')
+    public=_read_protected_owner_key(snapshot['owner_key_sha256'])
+    if hashlib.sha256(public).hexdigest()!=snapshot['owner_key_sha256']:
+        _fail('ORPHAN_LIVE_REVIEW_OWNER_KEY_CHANGED')
+    if (_root_process_facts()!=snapshot['facts']
+            or time.monotonic()>snapshot['expires_mono']):
+        _fail('ORPHAN_LIVE_REVIEW_EXPIRED_AFTER_PHYSICAL_CHECK')
+    approved=_ProcessLocalApprovedReview(_ISSUE_SEAL)
+    _approved_reviews[approved]=snapshot
+    return approved
 
 def _root_process_facts():
     from .host_backend import _assert_kernel_namespace
@@ -242,18 +327,22 @@ def collect_live_root_owner_qualification_signature(
         if (_root_process_facts()!=before
                 or time.monotonic()-born>TTL_SECONDS):
             _fail('ORPHAN_LIVE_PROCESS_CHANGED_AFTER_VERIFY')
-        # The signature does not authorize any operation. It only supplies
-        # a bounded proof for a FUTURE live, one-use qualification issuer.
-        return {**result,
-            'schema':'RBRIDGE_ROOT_P2A_LIVE_OWNER_SIGNATURE_REVIEW_V1',
-            'status':'ROOT_KEY_POSSESSION_AND_LIVE_PROCESS_REVIEW_DATA_ONLY',
-            'root_process_observed':True,
-            'root_source_bytes_checked':True,
-            'root_custody_bytes_checked':True,
-            'root_enrolled_public_key_checked':True,
-            'single_challenge_consumed':True,
-            'owner_identity_independently_authenticated':False,
-            'lease_issued':False,'may_settle':False,'may_launch':False,
-            'may_resume_qualification':False,'may_change_production':False}
+        # A serializable success receipt must never cross into guard
+        # authorization. Retain proof only in this exact Root interpreter.
+        snapshot={
+            'facts':before,
+            'expires_mono':born+TTL_SECONDS,
+            'source_sha':source_sha,'tree_sha':tree_sha,
+            'manifest_file_sha256':manifest_file_sha256,
+            'manifest_logical_sha256':manifest_logical_sha256,
+            'custody_sha256':custody_sha256,
+            'writer_source_sha':writer_source_sha,
+            'owner_key_sha256':owner_key_sha256,
+            'driver_sha256':qualification_driver_sha256,
+            'approval_sha256':result['challenge_sha256'],
+        }
+        review=_ProcessLocalOwnerReview(_ISSUE_SEAL)
+        _issued_reviews[review]=snapshot
+        return review
     finally:
         if fd is not None:os.close(fd)
