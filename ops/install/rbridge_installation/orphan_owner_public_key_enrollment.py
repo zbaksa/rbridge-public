@@ -50,7 +50,7 @@ def _stat_identity(s):
 
 def _protected_directory_id(s):
     # Parent directory mtime/ctime are expected to change upon mkdir.
-    return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink)
+    return (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid)
 
 def _read_direct_owner_tty(fingerprint):
     """An attended foreground Root TTY confirms fingerprint, NOT identity."""
