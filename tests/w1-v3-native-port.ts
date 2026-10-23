@@ -135,8 +135,8 @@ test('handler mutation cannot replace the admitted original correlation',async()
   await assert.rejects(()=>h.link.sendEffectResult(admitted,modified),/AGENT_RESPONSE_CORRELATION_MISMATCH/);assert.equal(h.posted.length,1);
 });
 for(const transition of ['HELLO','RECONNECT'] as const)test('late handler result is fenced after '+transition,async()=>{
-  const browser=deferred();let done=false,reason='';let h!:ReturnType<typeof setup>;
-  h=setup({handler:async command=>{await browser.promise;try{await h.link.sendEffectResult(command,vector.result);}catch(error){reason=String(error);}finally{done=true;}}});
+  const browser=deferred();let done=false,reason='';
+  const h:ReturnType<typeof setup>=setup({handler:async command=>{await browser.promise;try{await h.link.sendEffectResult(command,vector.result);}catch(error){reason=String(error);}finally{done=true;}}});
   await h.negotiate();h.emit(vector.command);await until(()=>h.received.length>0||h.errors.length>0);assert.equal(h.received.length,1);
   if(transition==='RECONNECT'){h.ports[0]!.disconnected.emit();h.link.connect();}
   await h.negotiate();browser.resolve();await until(()=>done);
