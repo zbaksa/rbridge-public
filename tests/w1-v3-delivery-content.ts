@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {ChatgptContentRuntimeV1} from '../src/extension/contentRuntime.js';
+import {locateUniqueComposer,stageComposerText} from '../src/browser/chatgptDomAdapter.js';
 import * as chromeAdapters from '../src/extension/chromeAuthorityAdapters.js';
 import {sha256Hex,type ExactBrowserTargetV1} from '../src/domain/rbridgeEffectProtocol.js';
 import type {DeliverySurfaceV3,ChatgptDeliverySurfaceReaderV3} from '../src/browser/chatgptDeliveryAdapter.js';
@@ -72,5 +73,28 @@ await test('chrome_click_transmits_fixed_guarded_action',async()=>{
   const guard={documentId:'doc',documentUrl:pageUrl,baselineUserTurnIds:[],text:'exact Ž🙂'};
   const driver:BrowserContentDriverV1=new chromeAdapters.ChromeContentDriverV1(tabs);await driver.clickSend(20,guard);
   assert.equal(action,'SEND_CLICK_V3');assert.deepEqual(received,guard);
+});
+await test('v9_prosemirror_without_legacy_id_is_uniquely_recognized_and_staged',async()=>{
+  const page=new JSDOM('<main><form><div class="ProseMirror" contenteditable="true"></div><button data-testid="send-button" type="button">Send</button></form></main>',{url:pageUrl});
+  const editor=page.window.document.querySelector('.ProseMirror')!;
+  assert.equal(editor.hasAttribute('id'),false);assert.equal(editor.hasAttribute('role'),false);
+  assert.equal(locateUniqueComposer(page.window.document).status,'FOUND');
+  const first=stageComposerText(page.window.document,'Dobro, nastavi...');
+  assert.equal(first.status,'STAGED_VERIFIED');assert.equal(editor.textContent,'Dobro, nastavi...');
+  assert.equal(stageComposerText(page.window.document,'Dobro, nastavi...').status,'ALREADY_PRESENT_IDEMPOTENT');
+  page.window.close();
+});
+await test('v9_two_prosemirror_editors_fail_closed_without_mutating_either',async()=>{
+  const page=new JSDOM('<main><form><div class="ProseMirror" contenteditable="true"></div><div class="ProseMirror" contenteditable="true"></div><button data-testid="send-button" type="button">Send</button></form></main>',{url:pageUrl});
+  assert.equal(locateUniqueComposer(page.window.document).status,'AMBIGUOUS');
+  assert.throws(()=>stageComposerText(page.window.document,'Dobro, nastavi...'),/RBRIDGE_COMPOSER_AMBIGUOUS/);
+  assert.deepEqual([...page.window.document.querySelectorAll('.ProseMirror')].map(x=>x.textContent),['','']);
+  page.window.close();
+});
+await test('v9_legacy_and_prosemirror_selectors_do_not_count_one_editor_twice',async()=>{
+  const page=new JSDOM('<form><div id="prompt-textarea" role="textbox" class="ProseMirror" contenteditable="true"></div><button data-testid="send-button">Send</button></form>',{url:pageUrl});
+  assert.equal(locateUniqueComposer(page.window.document).count,1);
+  assert.equal(locateUniqueComposer(page.window.document).status,'FOUND');
+  page.window.close();
 });
 console.log(JSON.stringify({suite:'W1_V3_DELIVERY_CONTENT',passed,failed}));if(failed)process.exitCode=1;
