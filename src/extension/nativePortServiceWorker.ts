@@ -1,6 +1,7 @@
 import {negotiateHello,parseHello,type NegotiatedHelloV1,type RbridgeChatEventV1,type RbridgeChatHelloV1,validateEventEnvelope} from '../domain/rbridgeChatCore.js';
 import {parseRbridgeChatCommandResultV1,type RbridgeChatCommandResultV1,type RbridgeChatCommandV1} from '../domain/rbridgeChatCommand.js';
-import {routeServerToNative} from '../nativeHost/nativeHostProtocol.js';
+import {parseEffectResult,V3_CAPABILITIES,type RbridgeChatEffectCommandV1} from '../domain/rbridgeEffectProtocol.js';
+import {routeServerToNative,routeServerToNativeV3,snapshotNativeMessage} from '../nativeHost/nativeHostProtocol.js';
 
 export const RBRIDGE_NATIVE_HOST_NAME='com.cocwin.rbridge_chat_v1';
 
@@ -22,6 +23,8 @@ export interface ExtensionRuntimeNativeApiV1{
 export interface ExtensionNativeLinkHooksV1{
   onServerHello?:(hello:RbridgeChatHelloV1,negotiated:NegotiatedHelloV1)=>void|Promise<void>;
   onServerCommand?:(command:RbridgeChatCommandV1)=>void|Promise<void>;
+  /** Transport only; the caller still supplies its authenticated scope/effect store. */
+  onServerEffectCommand?:(command:RbridgeChatEffectCommandV1)=>void|Promise<void>;
   onDisconnected?:()=>void|Promise<void>;
   onProtocolError?:(error:Error)=>void|Promise<void>;
 }
@@ -32,6 +35,10 @@ export class ExtensionNativePortLinkV1{
   private port:ExtensionNativePortV1|null=null;
   private negotiated:NegotiatedHelloV1|null=null;
   private v3Authority=false;
+  private epoch=0;
+  private v3ValidationTail:Promise<void>=Promise.resolve();
+  private v3Pending=0;
+  private readonly effectContexts=new WeakMap<RbridgeChatEffectCommandV1,{port:ExtensionNativePortV1;negotiated:NegotiatedHelloV1;epoch:number;command:RbridgeChatEffectCommandV1}>();
   private readonly localHello:RbridgeChatHelloV1;
 
   constructor(
@@ -48,6 +55,7 @@ export class ExtensionNativePortLinkV1{
 
   connect():void{
     if(this.port)return;
+    this.epoch++;
     this.negotiated=null;
     this.v3Authority=false;
     const port=this.runtime.connectNative(RBRIDGE_NATIVE_HOST_NAME);
@@ -55,6 +63,7 @@ export class ExtensionNativePortLinkV1{
     port.onMessage.addListener(value=>{void this.handleInbound(port,value);});
     port.onDisconnect.addListener(()=>{
       if(this.port!==port)return;
+      this.epoch++;
       this.port=null;this.negotiated=null;this.v3Authority=false;
       this.invoke(()=>this.hooks.onDisconnected?.());
     });
@@ -62,6 +71,7 @@ export class ExtensionNativePortLinkV1{
   }
 
   disconnect():void{
+    this.epoch++;
     const port=this.port;this.port=null;this.negotiated=null;this.v3Authority=false;port?.disconnect();
   }
 
@@ -79,14 +89,72 @@ export class ExtensionNativePortLinkV1{
     port.postMessage(validated);
   }
 
+  async sendEffectResult(command:RbridgeChatEffectCommandV1,result:unknown):Promise<void>{
+    if(!this.port)throw new Error('RBRIDGE_NATIVE_PORT_DISCONNECTED');
+    if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+    this.requireV3(this.negotiated);
+    const context=this.effectContexts.get(command);
+    if(!context)throw new Error('RBRIDGE_EFFECT_COMMAND_NOT_RECEIVED');
+    const {port,negotiated,epoch}=context;
+    if(this.port!==port||this.epoch!==epoch||this.negotiated!==negotiated)throw new Error('RBRIDGE_PEER_CONNECTION_CHANGED');
+    const validated=await parseEffectResult(result,context.command,negotiated.maxMessageBytes);
+    if(this.port!==port||this.epoch!==epoch||this.negotiated!==negotiated)throw new Error('RBRIDGE_PEER_CONNECTION_CHANGED');
+    port.postMessage(validated);
+  }
+
+  private requireV3(negotiated:NegotiatedHelloV1):void{
+    if(negotiated.protocolMinor<1||V3_CAPABILITIES.some(cap=>!negotiated.capabilities.includes(cap)))throw new Error('RBRIDGE_V3_NOT_NEGOTIATED');
+  }
+
+  private receiveEffect(port:ExtensionNativePortV1,input:unknown,epoch:number):Promise<{pending:void|Promise<void>}|undefined>{
+    const negotiated=this.negotiated;
+    if(!negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+    this.requireV3(negotiated);
+    const handler=this.hooks.onServerEffectCommand;
+    if(typeof handler!=='function')throw new Error('RBRIDGE_V3_HANDLER_UNAVAILABLE');
+    if(this.v3Pending>=128)throw new Error('RBRIDGE_V3_BACKPRESSURE_EXCEEDED');
+    const inputSnapshot=snapshotNativeMessage(input,negotiated.maxMessageBytes);
+    this.v3Pending++;
+    const current=()=>this.port===port&&this.epoch===epoch&&this.negotiated===negotiated;
+    const work=this.v3ValidationTail.then(async()=>{
+      try{
+        if(!current())return;
+        const routed=await routeServerToNativeV3(inputSnapshot,negotiated.maxMessageBytes);
+        if(!current())return;
+        if(routed.kind!=='EFFECT_COMMAND')throw new Error('RBRIDGE_COMMAND_SCHEMA_DENIED');
+        this.effectContexts.set(routed.value,{port,negotiated,epoch,command:structuredClone(routed.value)});
+        // Reserve callback admission in arrival order, not browser completion.
+        return {pending:handler(routed.value)};
+      }catch(error){this.rejectProtocol(port,epoch,error);throw error;}
+      finally{this.v3Pending--;}
+    });
+    this.v3ValidationTail=work.then(()=>undefined,()=>undefined);
+    return work;
+  }
+
+  private rejectProtocol(port:ExtensionNativePortV1,epoch:number,error:unknown):void{
+    if(this.port!==port||this.epoch!==epoch)return;
+    this.negotiated=null;this.epoch++;
+    this.invoke(()=>this.hooks.onProtocolError?.(normalizeError(error)));
+  }
+
   private async handleInbound(port:ExtensionNativePortV1,value:unknown):Promise<void>{
     if(this.port!==port)return;
+    let epoch=this.epoch;
     try{
+      const schema=value&&typeof value==='object'?Object.getOwnPropertyDescriptor(value,'schema'):undefined;
+      if(schema&&!('value' in schema))throw new Error('RBRIDGE_NATIVE_INPUT_INVALID');
+      if(schema?.value==='RBRIDGE_CHAT_EFFECT_COMMAND_V1'){
+        const dispatched=await this.receiveEffect(port,value,epoch);
+        if(dispatched)await dispatched.pending;
+        return;
+      }
       const routed=routeServerToNative(value);
       if(routed.kind==='HELLO'){
         const negotiated=negotiateHello(this.localHello,routed.value);
         const v3=negotiated.protocolMinor>=1&&negotiated.capabilities.includes('CHAT_EFFECT_REQUEST_V1');
         if(this.v3Authority&&!v3)throw new Error('RBRIDGE_V3_DOWNGRADE_DENIED');
+        epoch=++this.epoch;
         this.v3Authority=this.v3Authority||v3;
         this.negotiated=negotiated;
         await this.hooks.onServerHello?.(routed.value,negotiated);
@@ -96,9 +164,7 @@ export class ExtensionNativePortLinkV1{
       if(this.negotiated.protocolMinor>=1&&this.negotiated.capabilities.includes('CHAT_EFFECT_REQUEST_V1')&&routed.value.action!=='READ_STATE'&&routed.value.action!=='DISCOVER_TARGET')throw new Error('RBRIDGE_V1_MUTATION_DISABLED');
       await this.hooks.onServerCommand?.(routed.value);
     }catch(error){
-      if(this.port!==port)return;
-      this.negotiated=null;
-      await this.hooks.onProtocolError?.(normalizeError(error));
+      this.rejectProtocol(port,epoch,error);
     }
   }
 
