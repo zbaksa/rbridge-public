@@ -91,6 +91,8 @@ function composerElements(document:Document):HTMLElement[]{
     '#prompt-textarea',
     'textarea',
     '[contenteditable="true"][role="textbox"]',
+    // ChatGPT ProseMirror can omit the legacy prompt id and textbox role.
+    '[contenteditable="true"].ProseMirror',
     '[contenteditable="true"][data-lexical-editor="true"]',
   ];
   const found:HTMLElement[]=[];
