@@ -41,6 +41,12 @@ jobs:
       - name: Verify portable V3 fixed peer and stdio CLI
         run: npm run test:v3:transport
 
+      - name: Verify current ChatGPT composer and guarded send
+        run: npm run test:v3:delivery
+
+      - name: Build and verify Chrome extension
+        run: npm run build:extension
+
       - name: Build Windows Native Host SEA
         run: npm run build:native-host:sea
 
@@ -65,5 +71,8 @@ jobs:
             dist-native-host/rbridge-native-host.exe
             dist-native-host/rbridge-native-host.metadata.json
             dist-native-host/install-native-host-windows.ps1
+            dist-extension/manifest.json
+            dist-extension/contentScript.js
+            dist-extension/serviceWorker.js
           if-no-files-found: error
           retention-days: 7
