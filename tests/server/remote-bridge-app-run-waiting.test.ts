@@ -121,7 +121,7 @@ describe('APP_RUN occupied-writer durable admission',()=>{
     raw.operation.payload.args=['changed'];
     tampered.body=JSON.stringify(raw);
     expect(await run(store,controller,async(_n,v)=>{published.push(v);},[tampered])).toMatchObject({blocked:1});
-    expect(published.at(-1)).toMatchObject({status:'BLOCKED',reason:'REQUEST_ID_COLLISION'});
+    expect(published.at(-1)).toMatchObject({status:'BLOCKED',reason:'REMOTE_BRIDGE_V2_REQUEST_EXPIRED'});
     expect((await store.get('bridge.keyb-v9-1'))?.phase).toBe('WAITING');
     expect(controller.submit).toHaveBeenCalledOnce();
   });
