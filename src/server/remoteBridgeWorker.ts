@@ -50,6 +50,26 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
   async function publishReplay(recordResult:unknown,issue:GitHubBridgeIssue,requestIdValue:string,digest:string,phase:string,summary:RemoteBridgeRunSummary){if(!recordResult||typeof recordResult!=='object'||Array.isArray(recordResult)){summary.errors++;return;}const result:Record<string,unknown>={...(recordResult as Record<string,unknown>),issueNumber:issue.number,reason:'REPLAY'};try{await options.github.publishResult(issue.number,result);if(phase==='TERMINAL')await options.store.markPublished(requestIdValue,digest);summary.published++;if(result.status==='BLOCKED')summary.blocked++;}catch{summary.errors++;}}
   async function reconcileV1(request:RemoteBridgeRequest,issue:GitHubBridgeIssue,digest:string,summary:RemoteBridgeRunSummary){let status:Record<string,unknown>;try{status=await options.controller.status(request.appId,request.jobId);}catch{summary.pending++;summary.errors++;return;}if(appExecutionPending(status)){summary.pending++;return;}if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,status,now()),summary);return;}try{await publishStored(request.requestId,digest,issue,completedV1(request,issue.number,digest,await options.controller.result(request.appId,request.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}}
   async function reconcileV2App(request:RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue:GitHubBridgeIssue,digest:string,summary:RemoteBridgeRunSummary){const operation=request.operation;let status:Record<string,unknown>;try{status=await options.controller.status(operation.appId,operation.jobId);}catch{summary.pending++;summary.errors++;return;}if(appExecutionPending(status)){summary.pending++;return;}if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,status,now()),summary);return;}try{await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,await options.controller.result(operation.appId,operation.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}}
+  // Persist WAITING before the controller can launch anything. Repeating the
+  // same app/job/payload is idempotent at the protected controller boundary.
+  async function submitWaitingV2App(request:RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue:GitHubBridgeIssue,digest:string,summary:RemoteBridgeRunSummary){
+    const operation=request.operation;
+    let status:Record<string,unknown>;
+    try{status=await options.controller.submit(operation.appId,operation.jobId,operation.payload);}
+    catch{summary.pending++;summary.errors++;return;}
+    if(status.state==='BLOCKED'&&status.reason==='application already has an active or uncertain writer'){
+      summary.pending++;
+      return;
+    }
+    await options.store.markSubmitted(request.requestId,digest);
+    if(appExecutionPending(status)){summary.pending++;return;}
+    if(status.state==='BLOCKED'){
+      await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,status,now()),summary);
+      return;
+    }
+    try{await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,await options.controller.result(operation.appId,operation.jobId),now()),summary);}
+    catch{summary.pending++;summary.errors++;}
+  }
   async function executeChunk(request:RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'CHUNK'}>}){if(!options.chunkStore)throw new Error('REMOTE_BRIDGE_STAGE2_CHUNK_NOT_CONFIGURED');const operation=request.operation,args=operation.args;if(operation.action==='PUT')return await options.chunkStore.putChunk({transferId:operation.transferId,index:args.index as number,count:args.count as number,dataBase64:args.dataBase64 as string,chunkSha256:args.chunkSha256 as string,objectSha256:args.objectSha256 as string,expiresAt:args.expiresAt as string});if(operation.action==='GET')return await options.chunkStore.getChunk(operation.transferId,args.index as number);return await options.chunkStore.finalizeTransfer(operation.transferId);}
   async function executeV2File(request:RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'FILE'}>},issue:GitHubBridgeIssue,digest:string,summary:RemoteBridgeRunSummary){try{if(!options.fileOps)throw new Error(REMOTE_BRIDGE_STAGE2_FILE_NOT_CONFIGURED);const value=await executeFileOperation(options.fileOps,request.operation);await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,value,now()),summary);}catch(error){const code=errorCode(error);if(code===REMOTE_BRIDGE_STAGE2_FILE_NOT_CONFIGURED||code.startsWith('REMOTE_BRIDGE_FILE_'))await publishStored(request.requestId,digest,issue,blockedV2(issue,request.requestId,digest,code,now()),summary);else{summary.pending++;summary.errors++;}}}
   async function executeV2Dispatch(request:RemoteBridgeRequestV2,issue:GitHubBridgeIssue,digest:string,summary:RemoteBridgeRunSummary){if(request.operation.kind==='FILE')return await executeV2File(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'FILE'}>},issue,digest,summary);return await executeV2Host(request,issue,digest,summary);}
@@ -146,6 +166,10 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
     if(claim.state==='REPLAY'&&(claim.record.phase==='TERMINAL'||claim.record.phase==='PUBLISHED')&&claim.record.result){
       await publishReplay(claim.record.result,issue,request.requestId,digest,claim.record.phase,summary);return;
     }
+    if(claim.state==='REPLAY'&&claim.record.phase==='WAITING'&&operation.kind==='APP_RUN'){
+      await submitWaitingV2App(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue,digest,summary);
+      return;
+    }
     if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){
       if(operation.kind==='APP_RUN'){await reconcileV2App(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue,digest,summary);return;}
       if(operation.kind==='FILE'){
@@ -157,15 +181,12 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
       summary.errors++;return;
     }
     if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}
-    await options.store.markSubmitted(request.requestId,digest);
     if(operation.kind==='APP_RUN'){
-      let status:Record<string,unknown>;
-      try{status=await options.controller.submit(operation.appId,operation.jobId,operation.payload);}catch{summary.pending++;summary.errors++;return;}
-      if(appExecutionPending(status)){summary.pending++;return;}
-      if(status.state==='BLOCKED'){await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,status,now()),summary);return;}
-      try{await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,await options.controller.result(operation.appId,operation.jobId),now()),summary);}catch{summary.pending++;summary.errors++;}
+      await options.store.markWaiting(request.requestId,digest);
+      await submitWaitingV2App(request as RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue,digest,summary);
       return;
     }
+    await options.store.markSubmitted(request.requestId,digest);
     await executeV2Dispatch(request,issue,digest,summary);
   }
 
