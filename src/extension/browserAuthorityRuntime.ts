@@ -1,7 +1,7 @@
 import {
   acquireWriteLeader,activateCapture,createSendTransaction,markClicked,markFailedBeforeClick,markSendReady,markSendUncertain,
-  markSentVerified,markWaitingResponse,persistSendIntent,prepareBinding,verifyBinding,
-  type BrowserBindingControlV1,type BrowserTargetObservationV1,type RbridgeChatBindingReceiptV1,type SendPurpose,
+  markSentVerified,markWaitingResponse,markResponseVerified,persistSendIntent,prepareBinding,verifyBinding,validateEventEnvelope,
+  type BrowserBindingControlV1,type BrowserTargetObservationV1,type RbridgeChatBindingReceiptV1,type RbridgeChatEventV1,type SendPurpose,
 } from '../domain/rbridgeChatCore.js';
 import {BrowserAuthorityStoreV1,type BrowserAuthoritySnapshotV1,type BrowserAuthorityStateV1} from './browserAuthorityStore.js';
 import type {DeliveryClickGuardV3} from '../browser/chatgptDeliveryAdapter.js';
@@ -238,6 +238,19 @@ export class BrowserAuthorityRuntimeV1{
     if(!tx)fail('RBRIDGE_SEND_ACTIVE_MISSING');
     const next=markWaitingResponse(tx);
     return await this.store.commit(current.revision,this.withSend(current,next),now);
+  }
+
+  async markCapturedResponseVerified(expected:BrowserAuthoritySnapshotV1,input:RbridgeChatEventV1,now=new Date()):Promise<BrowserAuthoritySnapshotV1>{
+    const basis=structuredClone(expected),event=await validateEventEnvelope(structuredClone(input)),tx=basis.activeSend;
+    if(!tx||!['SENT_VERIFIED','WAITING_RESPONSE'].includes(tx.state)||event.eventType!=='ASSISTANT_TURN_CAPTURED_V2')fail('RBRIDGE_CAPTURE_SEND_STATE_INVALID');
+    const receipt=event.payload.captureReceipt as Record<string,unknown>;
+    for(const key of ['sessionId','generation','attemptId','effectId']as const)if(event[key]!==tx[key]||receipt[key]!==tx[key])fail('RBRIDGE_CAPTURE_SEND_SCOPE_INVALID');
+    for(const key of ['challenge','conversationId','conversationGeneration','captureEpoch']as const)if(receipt[key]!==tx[key])fail('RBRIDGE_CAPTURE_SEND_SCOPE_INVALID');
+    const fence=await this.assertLiveSnapshot(basis,now);this.assertAdmission(fence);
+    const completed=await this.store.commit(basis.revision,this.withSend(basis,markResponseVerified(tx,now)),now);
+    // A returned storage write is not enough to acknowledge a completed SEND.
+    await this.assertSnapshot(completed);
+    return completed;
   }
 
   private async ensureLiveCapture(tabId:number,capture:NonNullable<BrowserAuthoritySnapshotV1['capture']>):Promise<void>{

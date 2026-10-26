@@ -22,9 +22,9 @@ export interface CaptureMessageApiV3{
   onMessage:{addListener(listener:(message:unknown,sender:unknown,respond:(reply:unknown)=>void)=>boolean|void):void};
 }
 interface Owner{extensionId:string;browserInstanceId:string;browserProfileId:string;ownerAppId:string;maxMessageBytes:number}
-interface RecordV3{notificationDigest:string;requestDigest:string;captureToken:string;assistantTurnId:string;event:RbridgeChatEventV1}
+interface RecordV3{notificationDigest:string;requestDigest:string;captureToken:string;assistantTurnId:string;event:RbridgeChatEventV1;siteAcquired?:true}
 interface Outbox{schema:'RBRIDGE_CAPTURE_OUTBOX_V3';owner:Owner;history:RbridgeChatEventV1[];records:RecordV3[];sha256:string}
-interface Authority{queue:Promise<void>;poisoned:boolean;seen:Outbox|null;sitePending:Map<string,Promise<CaptureAckV3>>;siteQuarantined:boolean}
+interface Authority{queue:Promise<void>;poisoned:boolean;seen:Outbox|null;sitePending:Map<string,Promise<CaptureAckV3>>;siteQuarantined:boolean;siteMutationFence:symbol}
 const authorities=new WeakMap<ChromeStorageAreaV1,Authority>();
 const KEY='rbridgeCaptureOutboxV3',LIMIT=8*1024*1024,MAX_EVENTS=4096;
 const SHA=/^[0-9a-f]{64}$/,ID=/^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -36,7 +36,7 @@ function id(value:unknown,max:number):string{if(typeof value!=='string'||!ID.tes
 function same(a:unknown,b:unknown):boolean{return canonicalJson(a)===canonicalJson(b);}
 function bytes(value:unknown):number{return encoder.encode(canonicalJson(value)).byteLength;}
 function authority(storage:ChromeStorageAreaV1):Authority{
-  let value=authorities.get(storage);if(!value){value={queue:Promise.resolve(),poisoned:false,seen:null,sitePending:new Map(),siteQuarantined:false};authorities.set(storage,value);}return value;
+  let value=authorities.get(storage);if(!value){value={queue:Promise.resolve(),poisoned:false,seen:null,sitePending:new Map(),siteQuarantined:false,siteMutationFence:Symbol()};authorities.set(storage,value);}return value;
 }
 export function captureTokenV3(request:CocwinRbridgeEffectRequestV1,captureEpoch:number):string{
   if(!SHA.test(request.requestDigest)||!Number.isSafeInteger(captureEpoch)||captureEpoch<1)fail();
@@ -97,7 +97,7 @@ export class RbridgeCaptureEgressV3{
   async acquireSite(captureLeaseToken:string,sender:ChromeCaptureSenderV3):Promise<CaptureAckV3>{
     const token=id(captureLeaseToken,192),source=parseSender(sender);
     if(!this.options.siteReader||!this.options.delivery)fail();
-    const context=await this.captureContext(source),{request,capture}=context;
+    const context=await this.captureContext(source,true),{request,capture}=context;
     if(token!=='capture:'+capture.sessionId+':'+String(capture.epoch))fail();
     const key=request.requestDigest+':'+String(capture.epoch),pending=this.shared.sitePending.get(key);
     if(pending)return snapshotEffectData(await pending);
@@ -108,24 +108,47 @@ export class RbridgeCaptureEgressV3{
     const {state,request,capture}=context,token=captureTokenV3(request,capture.epoch);
     const cached=await this.exclusive(async()=>{
       const current=await this.load(),records=current?.records.filter(record=>record.requestDigest===request.requestDigest&&record.captureToken===token)??[];
-      if(records.length>1)fail();if(records.length===1)return this.ack(records[0]!.event);
-      if((current?.history??this.history).some(event=>['CAPTURE_LOST','RESPONSE_CAPTURED','ASSISTANT_TURN_CAPTURED_V2','ASSISTANT_TURN_REJECTED_V2'].includes(event.eventType)&&event.effectId===request.effectId&&event.sessionId===request.sessionId&&event.generation===request.generation&&event.attemptId===request.attemptId))fail();
+      if(records.length>1)fail();if(records.length===1){if(records[0]!.siteAcquired!==true)fail();return this.ack(records[0]!.event);}
+      this.assertSiteSlotEmpty(current,request,token);
       return null;
     });
-    const admission=async()=>{const fence=await this.options.runtime.assertLiveSnapshot(state);return ()=>{this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();};};
-    if(cached){(await admission())();return cached;}
-    if(this.shared.siteQuarantined)fail();
+    const admission=async()=>{
+      const fence=await this.options.runtime.assertLiveSnapshot(state),slotFence=this.shared.siteMutationFence;
+      await this.exclusive(async()=>this.assertSiteSlotEmpty(await this.load(),request,token));
+      return ()=>{if(this.shared.siteMutationFence!==slotFence)fail();this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();};
+    };
+    if(cached)return await this.completeSiteCapture(context,cached);
+    if(this.shared.siteQuarantined||state.activeSend?.state==='RESPONSE_VERIFIED')fail();
     const delivery=await this.options.delivery!.observeExactDelivery(request);if(delivery.kind!=='MATCHED')fail();
     const acquired=await this.options.siteReader!.acquire(request,delivery,admission).catch(error=>{
       if(error instanceof Error&&error.message==='RBRIDGE_SITE_CAPTURE_TIMEOUT')this.shared.siteQuarantined=true;
       throw error;
     });
     (await admission())();
-    return await this.accept({schema:'RBRIDGE_CONTENT_CAPTURE_V3',captureToken:token,assistantTurnId:acquired.assistantTurnId,observation:acquired.observation},source);
+    const ack=await this.persistCapture({schema:'RBRIDGE_CONTENT_CAPTURE_V3',captureToken:token,assistantTurnId:acquired.assistantTurnId,observation:acquired.observation},source,true);
+    return await this.completeSiteCapture(context,ack);
   }
-  private async captureContext(source:ChromeCaptureSenderV3){
+  private assertSiteSlotEmpty(current:Outbox|null,request:CocwinRbridgeEffectRequestV1,token:string):void{
+    if(current?.records.some(record=>record.requestDigest===request.requestDigest&&record.captureToken===token))fail();
+    if((current?.history??this.history).some(event=>['CAPTURE_LOST','RESPONSE_CAPTURED','ASSISTANT_TURN_CAPTURED_V2','ASSISTANT_TURN_REJECTED_V2'].includes(event.eventType)&&event.effectId===request.effectId&&event.sessionId===request.sessionId&&event.generation===request.generation&&event.attemptId===request.attemptId))fail();
+  }
+  private async completeSiteCapture(context:Awaited<ReturnType<RbridgeCaptureEgressV3['captureContext']>>,ack:CaptureAckV3):Promise<CaptureAckV3>{
+    return await this.exclusive(async()=>{
+      const current=await this.load(),records=current?.records.filter(row=>row.requestDigest===context.request.requestDigest&&row.captureToken===captureTokenV3(context.request,context.capture.epoch))??[],record=records[0];
+      if(records.length!==1||record?.event.eventId!==ack.eventId||record.event.eventSha256!==ack.eventSha256)fail();
+      if(!record||record.siteAcquired!==true||record.requestDigest!==context.request.requestDigest||record.captureToken!==captureTokenV3(context.request,context.capture.epoch))fail();
+      if(record.event.eventType==='ASSISTANT_TURN_CAPTURED_V2'&&context.state.activeSend?.state!=='RESPONSE_VERIFIED'){
+        this.options.effects.assertMutationAvailable();
+        await this.options.runtime.markCapturedResponseVerified(context.state,record.event);
+      }else{
+        const fence=await this.options.runtime.assertLiveSnapshot(context.state);this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();
+      }
+      return this.ack(record.event);
+    });
+  }
+  private async captureContext(source:ChromeCaptureSenderV3,allowCompleted=false){
     const state=await this.options.runtime.state(),binding=state?.binding,tx=state?.activeSend,capture=state?.capture,leader=state?.leader;
-    if(!state||binding?.status!=='VERIFIED'||capture?.status!=='ACTIVE'||leader?.status!=='ACTIVE'||!tx||!['SENT_VERIFIED','WAITING_RESPONSE'].includes(tx.state))fail();
+    if(!state||binding?.status!=='VERIFIED'||capture?.status!=='ACTIVE'||leader?.status!=='ACTIVE'||!tx||!['SENT_VERIFIED','WAITING_RESPONSE',...(allowCompleted?['RESPONSE_VERIFIED']:[])].includes(tx.state))fail();
     if(source.id!==this.owner.extensionId||source.tabId!==binding.tabId||binding.browserInstanceId!==this.owner.browserInstanceId||binding.browserProfileId!==this.owner.browserProfileId)fail();
     const url=new URL(source.url);if(url.origin!==binding.origin||url.pathname!=='/g/'+binding.projectId+'/c/'+binding.conversationId||url.search||url.hash||url.username||url.password)fail();
     const request=await this.options.effects.requestForEffect(tx.effectId);
@@ -136,13 +159,17 @@ export class RbridgeCaptureEgressV3{
     if(tx.conversationId!==binding.conversationId||tx.conversationGeneration!==binding.conversationGeneration||tx.captureEpoch!==capture.epoch||tx.writeLeaderEpoch!==leader.epoch||binding.sessionId!==request.sessionId||binding.generation!==request.generation||capture.sessionId!==request.sessionId||capture.generation!==request.generation)fail();
     return {state,request,binding,capture};
   }
-  async accept(input:unknown,sender:ChromeCaptureSenderV3):Promise<CaptureAckV3>{
+  async accept(input:unknown,sender:ChromeCaptureSenderV3):Promise<CaptureAckV3>{return await this.persistCapture(input,sender,false);}
+  private async persistCapture(input:unknown,sender:ChromeCaptureSenderV3,siteAcquired:boolean):Promise<CaptureAckV3>{
     // Both snapshots precede the first await and queue reservation.
     const notification=parseContentCaptureNotificationV3(input),source=parseSender(sender);
+    // Invalidate a prepared Copy permit synchronously, before queue admission.
+    this.shared.siteMutationFence=Symbol();
     return await this.exclusive(async()=>{
       const {state,request,binding,capture}=await this.captureContext(source),payload=request.payload;
       if(notification.captureToken!==captureTokenV3(request,capture.epoch))fail();
-      const current=await this.load(),notificationDigest=await canonicalDigest(notification);
+      const current=await this.load();if(siteAcquired)this.assertSiteSlotEmpty(current,request,notification.captureToken);
+      const notificationDigest=await canonicalDigest(notification);
       const identity=await canonicalDigest({requestDigest:request.requestDigest,captureToken:notification.captureToken,assistantTurnId:notification.assistantTurnId});
       const prior=current?.records.find(record=>record.captureToken===notification.captureToken&&record.assistantTurnId===notification.assistantTurnId);
       if(prior){if(prior.notificationDigest!==notificationDigest||prior.requestDigest!==request.requestDigest)fail();const fence=await this.options.runtime.assertLiveSnapshot(state);this.options.runtime.assertAdmission(fence);this.options.effects.assertMutationAvailable();return this.ack(prior.event);}
@@ -179,7 +206,7 @@ export class RbridgeCaptureEgressV3{
         if(reason)nextEvent=await event('ASSISTANT_TURN_REJECTED_V2',{captureReceipt:{...receipt},reason});
       }
       await validateEventEnvelope(nextEvent);
-      const records=[...(current?.records??[]),{notificationDigest,requestDigest:request.requestDigest,captureToken:notification.captureToken,assistantTurnId:notification.assistantTurnId,event:nextEvent}];
+      const records=[...(current?.records??[]),{notificationDigest,requestDigest:request.requestDigest,captureToken:notification.captureToken,assistantTurnId:notification.assistantTurnId,event:nextEvent,...(siteAcquired?{siteAcquired:true as const}:{})}];
       const body={schema:'RBRIDGE_CAPTURE_OUTBOX_V3' as const,owner:this.owner,history:current?.history??this.history,records},next={...body,sha256:await canonicalDigest(body)};
       await this.write(next,state);
       return this.ack(nextEvent);
@@ -223,7 +250,7 @@ export class RbridgeCaptureEgressV3{
     const history=row.history as RbridgeChatEventV1[];await this.validateHistory(history);let previous=history.at(-1)?.eventSha256??null;
     const ids=new Set<string>(history.map(event=>event.eventId)),keys=new Set<string>();
     for(let i=0;i<row.records.length;i++){
-      const record=object(row.records[i]);exact(record,['notificationDigest','requestDigest','captureToken','assistantTurnId','event']);
+      const record=object(row.records[i]);exact(record,['notificationDigest','requestDigest','captureToken','assistantTurnId','event',...(Object.hasOwn(record,'siteAcquired')?['siteAcquired']:[])]);if(Object.hasOwn(record,'siteAcquired')&&record.siteAcquired!==true)fail();
       if(typeof record.notificationDigest!=='string'||!SHA.test(record.notificationDigest)||typeof record.requestDigest!=='string'||!SHA.test(record.requestDigest))fail();id(record.captureToken,192);id(record.assistantTurnId,256);
       const key=String(record.captureToken)+'/'+String(record.assistantTurnId),event=await validateEventEnvelope(record.event);
       if(event.sequence!==history.length+i+1||event.previousEventSha256!==previous||ids.has(event.eventId)||keys.has(key))fail();ids.add(event.eventId);keys.add(key);previous=event.eventSha256;
