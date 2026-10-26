@@ -3,10 +3,14 @@ param([Parameter(Mandatory=$true)][string]$SourceExe,[ValidateSet('All','Preserv
 $ErrorActionPreference='Stop'
 $Installer=Join-Path $PSScriptRoot 'install-native-host-windows.ps1'
 $SourceExe=(Resolve-Path -LiteralPath $SourceExe).Path
-$Root=Join-Path ([IO.Path]::GetTempPath()) ('rbridge-v3-install-qa-'+[Guid]::NewGuid().ToString('N'))
+$Root=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) ('rbridge-v3-install-qa-'+[Guid]::NewGuid().ToString('N'))
 $HostName='com.cocwin.rbridge_chat_v1'
 $Keys=@("HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName","HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName")
-$Saved=@();foreach($key in $Keys){$present=Test-Path -LiteralPath $key;$Saved+=@{Path=$key;Present=$present;Value=$(if($present){(Get-Item -LiteralPath $key).GetValue('')}else{$null})}}
+$Saved=@();foreach($key in $Keys){
+ $present=Test-Path -LiteralPath $key;$entry=@{Path=$key;Present=$present;HasDefault=$false;Value=$null;Kind=[Microsoft.Win32.RegistryValueKind]::String}
+ if($present){$reg=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key.Substring(6));try{if(@($reg.GetValueNames()) -contains ''){$entry.HasDefault=$true;$entry.Kind=$reg.GetValueKind('');$entry.Value=$reg.GetValue('', $null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}}finally{$reg.Dispose()}}
+ $Saved+=$entry
+}
 $Utf8=New-Object Text.UTF8Encoding($false)
 function Assert-QA([bool]$condition,[string]$code){if(-not $condition){throw $code}}
 function Hash-File([string]$path){return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
@@ -105,6 +109,9 @@ try{
  }
  [pscustomobject]@{schema='RBRIDGE_WINDOWS_V3_INSTALL_QA_V1';state='PASS';case=$Case;passed=$Passed;actualSSHConnections=0;ownerWindows='NOT_RUN'}|ConvertTo-Json -Compress
 }finally{
- foreach($item in $Saved){if($item.Present){New-Item -Path $item.Path -Force|Out-Null;Set-Item -Path $item.Path -Value $item.Value}else{if(Test-Path -LiteralPath $item.Path){Remove-Item -LiteralPath $item.Path -Recurse -Force}}}
+ foreach($item in $Saved){if($item.Present){
+  $reg=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($item.Path.Substring(6))
+  try{if($item.HasDefault){$reg.SetValue('',$item.Value,$item.Kind)}else{$reg.DeleteValue('',$false)}}finally{$reg.Dispose()}
+ }elseif(Test-Path -LiteralPath $item.Path){Remove-Item -LiteralPath $item.Path -Recurse -Force}}
  if(Test-Path -LiteralPath $Root){Remove-Item -LiteralPath $Root -Recurse -Force}
 }

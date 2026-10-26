@@ -50,3 +50,7 @@ Pre-flight: one task shares the loader snapshot digest with CLI receipt and inst
 
 - One review:0 Critical/3 Important/0 Minor. Required fixes: strict checker receipt scalar types; concurrent config-writer protection; full default registry state/named-property preservation. Five real Windows regressions cover these findings before the one fix pass; no re-review.
 - Own Windows diagnostic at543e69d: CLI4 PASS/2 FAIL because the test temporary path used a Windows8.3 alias rejected by unchanged realpath checks. Canonicalize the test root; do not weaken the loader. Production checker staging also needs a canonical owner path.
+
+- Review RED:13bfd65 Windows40347413220/job121657940223 confirmed exactly5 expected failures (digest-array,boolean-array,boolean-string,concurrent V3 overwrite,registry loss). Windows CLI6/6 also passed after canonicalizing its fixture.
+- One fix pass: strict receipt types; destination mutex/exclusive existing config/create-new missing config; registry CreateSubKey/typed default restore; canonical owner staging. Full final qualification pending.
+- Ruling: existing loader metadata/path race and power-loss/privileged-adversary hardening are unchanged, outside this bounded install fix; retain all existing gates. Wrong boundary would require separate broader work, not a fixture-derived activation claim.
