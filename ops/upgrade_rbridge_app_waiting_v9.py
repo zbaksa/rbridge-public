@@ -7,6 +7,7 @@ checks durable quiescence twice, then switches with automatic rollback.
 No credentials are printed, and other COCWIN/Games2D services are untouched.
 """
 import fcntl
+import hashlib
 import json
 import os
 import pathlib
@@ -18,6 +19,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 
 OLD = "008885e07394f20746f034cbd7fe52c6b520533d"
 NEW = "dcf3cb9ad8b43532c19fff849eab086b280915d9"
@@ -32,6 +34,9 @@ SERVICE = "rbridge.service"
 PATH = "/opt/ai-tool-fabric/runtime:/usr/local/bin:/usr/bin:/bin"
 OUTFILES = ("remoteBridgeStore.js", "remoteBridgeWorker.js")
 DIST = pathlib.Path("dist/server/server")
+ARCHIVE_COUNT = 153
+ARCHIVE_DIGEST = "74cd601e25ed581e21cb8f282890ce8b1311d93035243972c0514b79933120f1"
+BACKUP_DIR = pathlib.Path("/var/lib/rbridge-v9-backups")
 
 
 def require(ok, code):
@@ -94,6 +99,7 @@ def checked_file(p, max_bytes=160000):
 def quiescence():
     require(STATE.is_dir() and not STATE.is_symlink(), "STATE_ROOT_UNKNOWN")
     pending = []
+    archival = []
     for p in STATE.iterdir():
         if p.suffix != ".json":
             continue
@@ -106,7 +112,18 @@ def quiescence():
         require(phase in ("CLAIMED", "WAITING", "SUBMITTED", "TERMINAL", "PUBLISHED"),
                 "DURABLE_PHASE_UNKNOWN")
         if phase != "PUBLISHED":
-            pending.append((p.name, phase))
+            reqid, number, digest = row.get("requestId"), row.get("issueNumber"), row.get("requestSha256")
+            require(isinstance(reqid, str) and isinstance(number, int)
+                    and number > 0 and isinstance(digest, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", digest), "DURABLE_ARCHIVE_IDENTITY_INVALID")
+            archival.append((reqid, number, phase, digest))
+    # Only these 153 historically closed, externally audited GitHub request
+    # identities are exempt. Never mutate or promote their persisted phases.
+    require(len(archival) == ARCHIVE_COUNT, "UNRESOLVED_SET_COUNT_CHANGED:" + str(len(archival)))
+    canonical = "".join(f"{request_id}\t{number}\t{phase}\t{digest}\n"
+                        for request_id, number, phase, digest in sorted(archival))
+    require(hashlib.sha256(canonical.encode("utf8")).hexdigest() == ARCHIVE_DIGEST,
+            "UNRESOLVED_SET_SHA256_CHANGED")
     sessions = STATE / "sessions"
     session_states = {}
     if sessions.exists():
