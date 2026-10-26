@@ -8,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 
 const execFileAsync=promisify(execFile);
 const REQUEST_PREFIX='[COCWIN BRIDGE REQUEST] ';
-const IN_FLIGHT_PHASES=new Set(['CLAIMED','SUBMITTED','TERMINAL']);
+const IN_FLIGHT_PHASES=new Set(['CLAIMED','WAITING','SUBMITTED','TERMINAL']);
 const TERMINAL_SESSION_STATES=new Set(['SUCCEEDED','FAILED','TERMINATED']);
 const SESSION_STATES=new Set(['STARTING','RUNNING','TERMINATING','SUCCEEDED','FAILED','TERMINATED','UNCERTAIN']);
 const SESSION_ID_RE=/^[0-9a-f]{32}$/;
@@ -66,7 +66,7 @@ function parseDurableRecord(value:unknown):DurableRecord{
   if(typeof row.requestSha256!=='string'||!SHA_RE.test(row.requestSha256))fail('RBRIDGE_DURABLE_AUDIT_DIGEST_INVALID');
   if(!Number.isSafeInteger(row.issueNumber)||Number(row.issueNumber)<1)fail('RBRIDGE_DURABLE_AUDIT_ISSUE_NUMBER_INVALID');
   if(typeof row.jobId!=='string'||!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(row.jobId))fail('RBRIDGE_DURABLE_AUDIT_JOB_ID_INVALID');
-  if(typeof row.phase!=='string'||!['CLAIMED','SUBMITTED','TERMINAL','PUBLISHED'].includes(row.phase))fail('RBRIDGE_DURABLE_AUDIT_PHASE_INVALID');
+  if(typeof row.phase!=='string'||!['CLAIMED','WAITING','SUBMITTED','TERMINAL','PUBLISHED'].includes(row.phase))fail('RBRIDGE_DURABLE_AUDIT_PHASE_INVALID');
   if(!timestamp(row.createdAt))fail('RBRIDGE_DURABLE_AUDIT_CREATED_AT_INVALID');
   if(typeof row.updatedAt!=='string'||!Number.isFinite(Date.parse(row.updatedAt)))fail('RBRIDGE_DURABLE_AUDIT_UPDATED_AT_INVALID');
   if(row.scopeSha256!==undefined&&(typeof row.scopeSha256!=='string'||!/^[0-9a-f]{64}$/.test(row.scopeSha256)))fail('RBRIDGE_DURABLE_AUDIT_SCOPE_INVALID');
