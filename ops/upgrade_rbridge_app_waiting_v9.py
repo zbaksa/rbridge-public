@@ -155,6 +155,51 @@ def quiescence():
     return True
 
 
+def backup_live_metadata():
+    """Back up the existing runtime env plus durable request/session records.
+
+    This backup is evidence and rollback material. It is never blindly
+    restored over newer work, and transfer content is left untouched.
+    """
+    BACKUP_DIR.mkdir(mode=0o700, exist_ok=True)
+    info = BACKUP_DIR.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0
+            and stat.S_IMODE(info.st_mode) == 0o700, "BACKUP_ROOT_INVALID")
+    dest = BACKUP_DIR / (OLD + "--" + NEW + ".tar")
+    require(not dest.exists() and not dest.is_symlink(), "BACKUP_ALREADY_EXISTS")
+    temp = BACKUP_DIR / ("." + NEW + "." + str(os.getpid()) + ".partial")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            with tarfile.open(fileobj=stream, mode="w") as archive:
+                checked_file(ENVFILE, 131072)
+                archive.add(ENVFILE, arcname="runtime.env", recursive=False)
+                for p in sorted(STATE.iterdir()):
+                    if p.suffix != ".json":
+                        continue
+                    checked_file(p, 2097152)
+                    archive.add(p, arcname="requests/" + p.name, recursive=False)
+                sessions = STATE / "sessions"
+                if sessions.exists():
+                    require(sessions.is_dir() and not sessions.is_symlink(), "SESSIONS_BACKUP_UNSAFE")
+                    for p in sorted(sessions.rglob("*.json")):
+                        checked_file(p, 2097152)
+                        archive.add(p, arcname="sessions/" + str(p.relative_to(sessions)), recursive=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, dest)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+    with dest.open("rb") as f:
+        checksum = hashlib.file_digest(f, "sha256").hexdigest()
+    require(stat.S_IMODE(dest.stat().st_mode) == 0o600, "BACKUP_MODE_INVALID")
+    print("V9_BACKUP_SHA256=" + checksum, flush=True)
+    return dest
+
+
 def write_atomic(p, raw, mode=0o600):
     tmp = p.with_name("." + p.name + ".v9-" + str(os.getpid()))
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
@@ -225,6 +270,10 @@ def main():
             checked_file(installed)
             write_atomic(installed, compiled, 0o644)
             os.chown(installed, 0, 0)
+            expected_digest = hashlib.sha256(compiled).hexdigest()
+            require(hashlib.sha256(checked_file(installed)).hexdigest() == expected_digest,
+                    "STAGED_SHA256_MISMATCH:" + name)
+            print("V9_STAGED_SHA256:" + name + ":" + expected_digest, flush=True)
         os.rename(staged, new_dir)
         print("V9_RELEASE_STAGED_EXACT=" + NEW, flush=True)
 
@@ -235,6 +284,7 @@ def main():
         require(not active(), "STOP_NOT_CONFIRMED")
         quiescence()
         print("V9_QUIESCENCE_PASS", flush=True)
+        backup_live_metadata()
 
         linktmp = BASE / (".current-v9-" + str(os.getpid()))
         os.symlink(str(new_dir), linktmp)
@@ -251,15 +301,20 @@ def main():
     except Exception as exc:
         if stopped:
             try:
-                # An old binary must never resume over a new WAITING record.
-                quiescence()
                 if switched:
+                    # Never start the old phase parser over newly queued WAITING.
+                    if active():
+                        exec_safe(["/usr/bin/systemctl", "stop", SERVICE], timeout=40)
+                    quiescence()
                     roll = BASE / (".rollback-v9-" + str(os.getpid()))
                     os.symlink(str(old_dir), roll)
                     os.replace(roll, CURRENT)
+                # Before switching, restarting the original version is safe,
+                # even if its own in-flight records changed while stopping.
                 if envchanged:
                     write_atomic(ENVFILE, oldenv)
                 exec_safe(["/usr/bin/systemctl", "start", SERVICE], timeout=50)
+                require(active(), "ROLLBACK_START_NOT_ACTIVE")
                 print("V9_ROLLBACK_OLD_SERVICE_RESTORED", flush=True)
             except Exception as rollback:
                 print("V9_ROLLBACK_BLOCKED=" + str(rollback)[:160], flush=True)
