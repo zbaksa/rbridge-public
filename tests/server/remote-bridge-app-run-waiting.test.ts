@@ -3,6 +3,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {createRemoteBridgeStore} from '../../src/server/remoteBridgeStore.js';
+import {createControllerExecRemoteBridge} from '../../src/adapters/controllerExecRemoteBridge.js';
 import {createRemoteBridgeWorker} from '../../src/server/remoteBridgeWorker.js';
 
 const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner'} as const;
@@ -33,6 +34,29 @@ function run(store:ReturnType<typeof createRemoteBridgeStore>,controller:{
 }
 
 describe('APP_RUN occupied-writer durable admission',()=>{
+
+  it('holds a real adapter-classified controller busy rejection, then delivers unchanged job exactly once',async()=>{
+    const store=await durable(),published:unknown[]=[];
+    let busy=true;
+    const submit=vi.fn(async(_app:string,job:string)=>{
+      if(busy)throw new Error('APP_EXECUTION_BROKER_REJECTED:application already has an active or uncertain writer');
+      return success(job);
+    });
+    const adapter=createControllerExecRemoteBridge({client:{
+      submit,
+      status:vi.fn(async()=>({state:'SUCCEEDED'})),
+      result:vi.fn(async(_app:string,job:string)=>success(job)),
+    }});
+    const publish=async(_n:number,result:unknown)=>{published.push(result);};
+    expect(await run(store,adapter,publish)).toMatchObject({pending:1,blocked:0,published:0});
+    expect((await store.get('bridge.keyb-v9-1'))?.phase).toBe('WAITING');
+    busy=false;
+    expect(await run(store,adapter,publish)).toMatchObject({published:1,blocked:0});
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[0]?.[1]).toBe(submit.mock.calls[1]?.[1]);
+    expect(published[0]).toMatchObject({status:'PASS'});
+  });
+
   it('holds a second Games2D job in WAITING then executes it once after the first finishes, even past intake TTL',async()=>{
     const store=await durable(),published:unknown[]=[],submitted:string[]=[];
     const accepted=new Set<string>();let holder='dart-1';
