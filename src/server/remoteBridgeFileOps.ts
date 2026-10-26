@@ -21,6 +21,14 @@ function binary(value:unknown,expectedSha:unknown){if(typeof value!=='string'||!
 function inside(root:string,path:string){const rel=relative(root,path);return rel===''||(!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('..'+sep));}
 function fdPath(handle:FileHandle,name?:string){const base=join(PROC_FD,String(handle.fd));return name===undefined?base:join(base,name);}
 
+export function classifyFileTemporaryOpenError(error:unknown):never{
+  const code=(error as NodeJS.ErrnoException)?.code;
+  // Only an unsuccessful EXCLUSIVE TEMPORARY FILE OPEN can be mapped to a
+  // definitive no-effect error. Failures after open/rename stay uncertain.
+  if(code==='EROFS'||code==='EACCES'||code==='EPERM')fail('REMOTE_BRIDGE_FILE_WRITE_DENIED');
+  throw error;
+}
+
 export function createRemoteBridgeFileOps(config:RemoteBridgeFileOpsConfig){
   if(!Array.isArray(config.allowedRoots)||config.allowedRoots.length<1||config.allowedRoots.length>16)fail('REMOTE_BRIDGE_FILE_ROOTS_INVALID');
   const roots=[...new Set(config.allowedRoots.map(root=>lexical(root)))].sort((a,b)=>b.length-a.length);
@@ -35,7 +43,7 @@ export function createRemoteBridgeFileOps(config:RemoteBridgeFileOpsConfig){
   async function openParent(path:string){const x=rootFor(path),parent=dirname(x.path);await noSymlinks(parent,x.root);let handle:FileHandle;try{handle=await open(parent,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);}catch(error){if(errno(error)==='ELOOP')fail('REMOTE_BRIDGE_FILE_SYMLINK_DENIED');throw error;}try{await verifyHandle(handle,x.root);const name=basename(x.path);const child=fdPath(handle,name);try{const info=await lstat(child);if(info.isSymbolicLink())fail('REMOTE_BRIDGE_FILE_SYMLINK_DENIED');}catch(error){if(errno(error)!=='ENOENT')throw error;}return {...x,handle,name,child};}catch(error){await handle.close().catch(()=>undefined);throw error;}}
   async function readText(path:string){const opened=await openExisting(path,'file');try{if(opened.info.size>config.maxReadBytes)fail('REMOTE_BRIDGE_FILE_TOO_LARGE');const data=await opened.handle.readFile();if(data.byteLength>config.maxReadBytes)fail('REMOTE_BRIDGE_FILE_TOO_LARGE');if(data.includes(0))fail('REMOTE_BRIDGE_FILE_BINARY_REQUIRES_CHUNK');return data.toString('utf8');}finally{await opened.handle.close().catch(()=>undefined);}}
   async function readBinary(path:string){const opened=await openExisting(path,'file');try{if(opened.info.size>config.maxReadBytes)fail('REMOTE_BRIDGE_FILE_TOO_LARGE');const data=await opened.handle.readFile();if(data.byteLength>config.maxReadBytes)fail('REMOTE_BRIDGE_FILE_TOO_LARGE');return data;}finally{await opened.handle.close().catch(()=>undefined);}}
-  async function atomicWriteBytes(path:string,data:Buffer){if(data.byteLength>config.maxReadBytes)fail('REMOTE_BRIDGE_FILE_TOO_LARGE');const parent=await openParent(path);const tempName=`.remote-bridge-${randomUUID()}.tmp`,temp=fdPath(parent.handle,tempName);let handle:FileHandle|undefined;try{handle=await open(temp,'wx',0o600);await handle.writeFile(data);await handle.sync();await handle.close();handle=undefined;await rename(temp,parent.child);await parent.handle.sync();}finally{if(handle)await handle.close().catch(()=>{});await unlink(temp).catch(()=>{});await parent.handle.close().catch(()=>undefined);}}
+  async function atomicWriteBytes(path:string,data:Buffer){if(data.byteLength>config.maxReadBytes)fail('REMOTE_BRIDGE_FILE_TOO_LARGE');const parent=await openParent(path);const tempName=`.remote-bridge-${randomUUID()}.tmp`,temp=fdPath(parent.handle,tempName);let handle:FileHandle|undefined;try{try{handle=await open(temp,'wx',0o600);}catch(error){classifyFileTemporaryOpenError(error);}await handle.writeFile(data);await handle.sync();await handle.close();handle=undefined;await rename(temp,parent.child);await parent.handle.sync();}finally{if(handle)await handle.close().catch(()=>{});await unlink(temp).catch(()=>{});await parent.handle.close().catch(()=>undefined);}}
   async function atomicWrite(path:string,value:string){await atomicWriteBytes(path,Buffer.from(value));}
 
   async function searchDirectory(target:string,query:string){
