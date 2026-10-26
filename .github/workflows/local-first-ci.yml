@@ -4,7 +4,7 @@ on:
   push:
     branches: ['review/**', 'public/**']
   pull_request:
-    branches: [main]
+    branches: [main, review/rbridge-live-008885-baseline-20261026]
   workflow_dispatch:
 
 concurrency:
