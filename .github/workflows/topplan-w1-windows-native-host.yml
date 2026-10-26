@@ -47,6 +47,9 @@ jobs:
       - name: Build and verify Chrome extension
         run: npm run build:extension
 
+      - name: Verify provisioned V3 startup and separate bundle
+        run: npm run test:v3:startup && npm run test:v3:startup-bundle
+
       - name: Build Windows Native Host SEA
         run: npm run build:native-host:sea
 

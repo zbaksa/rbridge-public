@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
+import {V3_CAPABILITIES} from '../src/domain/rbridgeEffectProtocol.js';
+import type {QualifiedV3WorkerComposition} from '../src/extension/serviceWorkerCompositionV3.js';
+
+const fixture=JSON.parse(await readFile(new URL('../../tests/fixtures/rbridge-cocwin-contract-v3.json',import.meta.url),'utf8'));
+const request=fixture.vectors[1].command.request,target=request.payload.target;
+const extensionId='ebibbijpegoankenmggdnehpoadcophk',release='1'.repeat(40),key='rbridgeExtensionStartupV3';
+const document={schema:'RBRIDGE_EXTENSION_STARTUP_V3',extensionId,releaseSha:release,bootstrap:{schema:'RBRIDGE_EXTENSION_BOOTSTRAP_V1',browserInstanceId:target.browserInstanceId,browserProfileId:target.browserProfileId,nativeHostVersion:'fixture-native'},scope:{appId:request.appId,baseSha:request.baseSha,sessionId:request.sessionId,generation:request.generation},peer:{peerId:'fixture-server',releaseSha:'9'.repeat(40),browserInstanceId:'peer-browser',browserProfileId:'peer-profile',protocolMinor:1,maxMessageBytes:65536,capabilities:[...V3_CAPABILITIES]},initialHistory:[],siteAdapter:'CHATGPT_EXACT_COPY_V3'};
+const digest=(text:string)=>createHash('sha256').update(text,'utf8').digest('hex');
+type Start=(api:unknown,releaseSha:string,pin:string)=>Promise<QualifiedV3WorkerComposition>;
+const path='../src/extension/serviceWorkerStartupV3.js',module=await import(path).catch((e:unknown)=>{if((e as {code?:string}).code==='ERR_MODULE_NOT_FOUND')return {};throw e;});
+function startApi():Start{const fn=(module as {startProvisionedExtensionServiceWorkerV3?:Start}).startProvisionedExtensionServiceWorkerV3;assert.equal(typeof fn,'function','Missing provisioned V3 startup');return fn!;}
+function harness(raw:string|undefined=JSON.stringify(document)){
+ const data:Record<string,unknown>=raw===undefined?{}:{[key]:raw},order:string[]=[],out:unknown[]=[];let connected=0,accessError=false;
+ const listeners:((x:unknown)=>void)[]=[],disconnects:(()=>void)[]=[];
+ const port={postMessage:(v:unknown)=>{out.push(structuredClone(v));},disconnect:()=>{for(const f of disconnects)f();},onMessage:{addListener:(f:(x:unknown)=>void)=>listeners.push(f)},onDisconnect:{addListener:(f:()=>void)=>disconnects.push(f)}};
+ const local={get:async(k:string)=>{order.push('GET:'+k);return k in data?{[k]:structuredClone(data[k])}:{};},set:async(v:Record<string,unknown>)=>{order.push('SET');Object.assign(data,structuredClone(v));},setAccessLevel:async(options:unknown)=>{assert.deepEqual(options,{accessLevel:'TRUSTED_CONTEXTS'});order.push('TRUSTED');if(accessError)throw Error('ACCESS_DENIED');}};
+ const api={runtime:{id:extensionId,connectNative:(name:string)=>{assert.equal(name,'com.cocwin.rbridge_chat_v1');order.push('CONNECT');connected++;return port;}},storage:{local},tabs:{get:async()=>{throw Error('UNEXPECTED_TAB_READ');},query:async()=>[],sendMessage:async()=>{throw Error('UNEXPECTED_CONTENT_CALL');}},scripting:{executeScript:async()=>{throw Error('UNEXPECTED_SCRIPT_CALL');}}};
+ return {api,data,order,out,port,listeners,count:()=>connected,deny:()=>{accessError=true;}};
+}
+async function blocked(raw:unknown,pin?:string,patch?:(h:ReturnType<typeof harness>)=>void){const h=harness();h.data[key]=raw;patch?.(h);const before=structuredClone(h.data);await assert.rejects(()=>startApi()(h.api,release,pin??digest(typeof raw==='string'?raw:'invalid')));assert.equal(h.count(),0);assert.deepEqual(h.data,before);return h;}
+let passed=0,failed=0;async function test(name:string,fn:()=>Promise<void>){try{await fn();passed++;console.log('PASS V3_WORKER_STARTUP '+name);}catch(e){failed++;console.error('FAIL V3_WORKER_STARTUP '+name+': '+String(e));}}
+await test('pinned_configuration_connects_minor1_after_trusted_storage',async()=>{const raw=JSON.stringify(document),h=harness(raw),worker=await startApi()(h.api,release,digest(raw));try{assert.deepEqual(h.order.slice(0,2),['TRUSTED','GET:'+key]);assert.equal(h.count(),1);assert.equal(h.order.includes('SET'),false);assert.equal(worker.ready,false);const hello=h.out[0] as {schema:string;protocolMinor:number;releaseSha:string;browserProfileId:string};assert.equal(hello.schema,'RBRIDGE_CHAT_HELLO_V1');assert.equal(hello.protocolMinor,1);assert.equal(hello.releaseSha,release);assert.equal(hello.browserProfileId,target.browserProfileId);}finally{worker.link.disconnect();}});
+await test('the_native_hello_must_still_match_the_remote_pin',async()=>{const raw=JSON.stringify(document),h=harness(raw),worker=await startApi()(h.api,release,digest(raw));try{for(const f of h.listeners)f({schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1,protocolMinor:1,releaseSha:'8'.repeat(40),browserInstanceId:document.peer.browserInstanceId,browserProfileId:document.peer.browserProfileId,maxMessageBytes:65536,capabilities:[...V3_CAPABILITIES],nativeHostVersion:'fixture'});await new Promise(r=>setTimeout(r,20));assert.equal(worker.ready,false);}finally{worker.link.disconnect();}});
+await test('missing_storage_configuration_does_not_fall_back_to_legacy',async()=>{const h=harness();delete h.data[key];await assert.rejects(()=>startApi()(h.api,release,'a'.repeat(64)));assert.equal(h.count(),0);assert.equal(h.order.includes('SET'),false);});
+await test('digest_is_external_not_a_stored_claim',async()=>{await blocked(JSON.stringify({...document,configSha256:'a'.repeat(64)}));await blocked(JSON.stringify(document),'a'.repeat(64));});
+await test('exact_utf8_bytes_are_pinned_including_whitespace',async()=>{const raw=JSON.stringify(document);await blocked(raw+'\n',digest(raw));});
+await test('absent_invalid_release_or_pin_fails_before_any_storage_access',async()=>{for(const [sha,pin]of [[release,''],[release,'A'.repeat(64)],['bad','a'.repeat(64)]]){const h=harness();await assert.rejects(()=>startApi()(h.api,sha!,pin!));assert.deepEqual(h.order,[]);assert.equal(h.count(),0);}});
+await test('unavailable_trusted_storage_is_not_replaced_by_default_access',async()=>{const h=harness(),raw=JSON.stringify(document);delete (h.api.storage.local as Partial<typeof h.api.storage.local>).setAccessLevel;await assert.rejects(()=>startApi()(h.api,release,digest(raw)));assert.equal(h.count(),0);assert.deepEqual(h.order,[]);});
+await test('denied_trusted_access_never_reads_configuration',async()=>{const raw=JSON.stringify(document),h=await blocked(raw,undefined,h=>h.deny());assert.deepEqual(h.order,['TRUSTED']);});
+await test('malformed_and_non_string_documents_are_rejected',async()=>{for(const raw of [document,null,[],42,'{}','{bad','"text"'])await blocked(raw);});
+await test('oversize_configuration_never_connects',async()=>{await blocked(' '.repeat(65537));});
+await test('wrong_extension_release_schema_adapter_and_extra_fields_are_closed',async()=>{for(const patch of [{extensionId:'a'.repeat(32)},{releaseSha:'2'.repeat(40)},{schema:'V1'},{siteAdapter:'CONTENT_MESSAGE'},{extra:true}])await blocked(JSON.stringify({...document,...patch}));});
+await test('missing_explicit_history_is_not_synthesized',async()=>{const row={...document} as Record<string,unknown>;delete row.initialHistory;await blocked(JSON.stringify(row));});
+await test('invalid_scope_and_peer_are_rejected_before_connection',async()=>{for(const patch of [{scope:{...document.scope,appId:'../other'}},{peer:{...document.peer,protocolMinor:0}},{bootstrap:{...document.bootstrap,browserProfileId:''}}])await blocked(JSON.stringify({...document,...patch}));});
+await test('unowned_initial_history_cannot_rebuild_the_original_ledger',async()=>{await blocked(JSON.stringify({...document,initialHistory:[fixture.capturedEvent]}));});
+await test('corrupt_retained_history_is_preserved_and_blocks_startup',async()=>{await blocked(JSON.stringify(document),undefined,h=>{h.data.rbridgeCaptureOutboxV3={corrupt:true};});});
+console.log(JSON.stringify({suite:'W1_V3_WORKER_STARTUP',passed,failed,authentication:'SYNTHETIC_EXTERNAL_CONFIG_PIN',browserSends:0,ownerWindows:'NOT_RUN'}));if(failed)process.exitCode=1;

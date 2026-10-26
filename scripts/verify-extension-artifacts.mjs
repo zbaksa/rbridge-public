@@ -1,8 +1,10 @@
 import {createHash} from 'node:crypto';
 import {readFile,stat} from 'node:fs/promises';
 import {RBRIDGE_EXTENSION_ID,RBRIDGE_EXTENSION_PUBLIC_KEY_B64} from '../dist/src/extension/extensionManifest.js';
+import ts from 'typescript';
+import {extensionBuildProfile} from './extension-build-profile.mjs';
 
-const base=new URL('../dist-extension/',import.meta.url);
+const profile=extensionBuildProfile(),base=new URL('../'+profile.outDir+'/',import.meta.url);
 const fail=code=>{throw new Error(code);};
 const expectedSha=process.env.RBRIDGE_RELEASE_SHA??process.env.GITHUB_SHA??'';
 if(!/^[0-9a-f]{40}$/.test(expectedSha))fail('RBRIDGE_EXTENSION_VERIFY_RELEASE_SHA_REQUIRED');
@@ -35,8 +37,20 @@ for(const required of ['RBRIDGE_CONTENT_REQUEST_V1','RBRIDGE_CONTENT_CAPTURE_V1'
   if(!contentScript.includes(required))fail('RBRIDGE_CONTENT_BUNDLE_MISSING:'+required);
 }
 
-for(const forbidden of ['prompt-textarea','data-message-author-role','MutationObserver','document.querySelector','document.createElement']){
+if(profile.profile==='v1')for(const forbidden of ['prompt-textarea','data-message-author-role','MutationObserver','document.querySelector','document.createElement']){
   if(serviceWorker.includes(forbidden))fail('RBRIDGE_WORKER_BUNDLE_DOM_LEAK:'+forbidden);
+}else{
+  // V3 embeds two functions serialized by Chrome.scripting. DOM authority may
+  // appear inside those functions only, never in the worker or another closure.
+  const source=ts.createSourceFile('serviceWorker.js',serviceWorker,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+  const allowed=new Set(['probeExactAssistantPairV3','captureExactSiteCopyInMainWorldV3']);
+  const visit=(node,inInjection=false)=>{
+    if(ts.isFunctionDeclaration(node)&&node.name&&allowed.has(node.name.text))inInjection=true;
+    if(!inInjection&&((ts.isIdentifier(node)&&['document','window','MutationObserver'].includes(node.text))||(ts.isStringLiteral(node)&&['prompt-textarea','data-message-author-role'].some(value=>node.text.includes(value)))))fail('RBRIDGE_WORKER_BUNDLE_DOM_LEAK');
+    ts.forEachChild(node,child=>visit(child,inInjection));
+  };
+  visit(source);
+  if(!serviceWorker.includes(profile.v3ConfigSha256)||!serviceWorker.includes('RBRIDGE_EXTENSION_STARTUP_V3'))fail('RBRIDGE_WORKER_BUNDLE_V3_STARTUP_MISSING');
 }
 for(const required of ['RBRIDGE_CHAT_HELLO_V1','com.cocwin.rbridge_chat_v1',expectedSha]){
   if(!serviceWorker.includes(required))fail('RBRIDGE_WORKER_BUNDLE_MISSING:'+required);
@@ -46,6 +60,7 @@ console.log(JSON.stringify({
   schema:'RBRIDGE_EXTENSION_ARTIFACT_VERIFY_V1',
   status:'PASS',
   releaseSha:expectedSha,
+  profile:profile.profile,
   contentBytes:contentStat.size,
   workerBytes:workerStat.size,
   manifestVersion:manifest.version,
