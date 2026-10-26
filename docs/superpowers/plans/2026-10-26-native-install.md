@@ -30,9 +30,9 @@ Files: modify src/nativeHost/nativeHostConfig.ts, nativeHostCli.ts, scripts/inst
 
 Consumes existing loadNativeHostConfigV1/parseNativeHostConfigV1 and private Native V3 types. Produces loadNativeHostConfigDocumentV1(path): {config,sourceSha256}; CLI --check-config receipt; optional -V3ConfigFile installer parameter with no V3 rewrite.
 
-- [ ] Write child-process CLI checks for exact config-byte hash, valid V1/V3, invalid scope/pins/history/path/extra args, unchanged roots and no SSH sentinel.
-- [ ] Run TypeScript build and expected CLI RED through normal1027 Bridge. Run Windows baseline PreserveExisting case expecting QA085_EXISTING_V3_WAS_REMOVED, not an arbitrary failure.
-- [ ] Implement minimal same-snapshot Native config receipt/CLI and installer import/preservation only after their RED evidence.
+- [x] Write child-process CLI checks for exact config-byte hash, valid V1/V3, invalid scope/pins/history/path/extra args, unchanged roots and no SSH sentinel.
+- [x] Run TypeScript build and expected CLI RED through normal1027 Bridge. Run Windows baseline PreserveExisting case expecting QA085_EXISTING_V3_WAS_REMOVED, not an arbitrary failure.
+- [x] Implement minimal same-snapshot Native config receipt/CLI and installer import/preservation only after their RED evidence.
 - [ ] GREEN CLI, existing Native suites, TypeScript/lint/diff under1027; actual Windows SEA All installer cases including invalid-before-write, new V3, unchanged reinstall/history, changed rejection and V1 compatibility.
 - [ ] One fresh whole-branch review; one RED to GREEN fix pass for Important findings.
 - [ ] Exact candidate full Linux/Windows CI and qualified-head integration; persist receipts and unqualified live gates.
@@ -42,3 +42,8 @@ Consumes existing loadNativeHostConfigV1/parseNativeHostConfigV1 and private Nat
 Ruling: complete caller-provisioned config only; no new pin generator or production entry switch — shortest path that respects existing authority — live profile still requires its separate provisioning/acceptance.
 
 Pre-flight: one task shares the loader snapshot digest with CLI receipt and installer verification. The digest always names parsed bytes, never an independent reread.
+
+- #20795: normal1027 baseline TypeScript/28 Native transport PASS; new CLI1 PASS/6 RED (mode absent).
+- #20799: normal1027 config7/7, Native transport28/28, Native runtime runner, tsc/focused lint PASS.
+- Windows baseline run40342920960/job121642104880 at bea6655: actual SEA/installer reproduced exact QA085_EXISTING_V3_WAS_REMOVED; wrapper confirmed RED. This is not a fixed-installer PASS.
+- Ruling: CI publication is a source candidate only; the Windows fix cannot be executed in the Linux app environment. Publish for existing Windows CI before making its PASS claim; no owner activation.

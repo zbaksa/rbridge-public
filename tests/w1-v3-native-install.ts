@@ -11,7 +11,7 @@ const cli=fileURLToPath(new URL('../src/nativeHost/nativeHostCli.js',import.meta
 const extensionId='ebibbijpegoankenmggdnehpoadcophk';
 const root=await mkdtemp(join(tmpdir(),'rbridge-native-install-'));
 const configPath=join(root,'candidate.json'),eventRoot=join(root,'events'),sentinel=join(root,'ssh-was-started'),sshPath=join(root,process.platform==='win32'?'probe.cmd':'probe.sh');
-await writeFile(sshPath,process.platform==='win32'?'@echo invoked>'+sentinel+'\r\n':'#!/bin/sh\nprintf invoked > '+JSON.stringify(sentinel)+'\n',{mode:0o700});
+await writeFile(sshPath,process.platform==='win32'?'@echo invoked>'+sentinel+'\r\n':'#!/bin/sh\nprintf invoked > '+("'"+sentinel.replaceAll("'","'\\''")+"'")+'\n',{mode:0o700});
 const base={schema:'RBRIDGE_NATIVE_HOST_CONFIG_V1',expectedExtensionId:extensionId,eventStoreRoot:eventRoot,ssh:{sshPath,host:'fixture.invalid',port:22,user:'rbridge',identityFile:join(root,'identity'),knownHostsFile:join(root,'known-hosts')}};
 const v3={scope:{appId:'cocwin',baseSha:'a'.repeat(40),sessionId:'exta-'+'1'.repeat(32),generation:'22222222-2222-4222-8222-222222222222'},peerPins:{peerId:'fixture-peer',releaseSha:'9'.repeat(40),browserInstanceId:'fixture-browser',browserProfileId:'fixture-profile',protocolMinor:1,maxMessageBytes:65536,capabilities:[...V3_CAPABILITIES]},initialHistory:{sequence:0,eventSha256:null}};
 const exists=async(path:string)=>stat(path).then(()=>true,()=>false);

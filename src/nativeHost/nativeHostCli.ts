@@ -1,5 +1,6 @@
 import {dirname,join} from 'node:path';
 import {startNativeHostMainV1,type NativeHostMainIoV1} from './nativeHostMain.js';
+import {loadNativeHostConfigDocumentV1} from './nativeHostConfig.js';
 
 function codeOf(value:unknown):string{
   const message=value instanceof Error?value.message:String(value);
@@ -18,8 +19,15 @@ const io:NativeHostMainIoV1={
   setExitCode(code){process.exitCode=code;},
 };
 
-void startNativeHostMainV1(
-  process.argv.slice(2),
+const invocation=process.argv.slice(2);
+if(invocation[0]==='--check-config'){
+  void (async()=>{
+    if(invocation.length!==2)throw Error('RBRIDGE_NATIVE_CONFIG_CHECK_ARGS_INVALID');
+    const {config,sourceSha256}=await loadNativeHostConfigDocumentV1(invocation[1]!);
+    process.stdout.write(JSON.stringify({schema:'RBRIDGE_NATIVE_CONFIG_CHECK_V1',status:'PASS',sourceSha256,expectedExtensionId:config.expectedExtensionId,eventStoreRoot:config.eventStoreRoot,v3Configured:config.v3!==undefined,activated:false})+'\n');
+  })().catch(error=>{process.stderr.write('RBRIDGE_NATIVE_CONFIG_CHECK='+codeOf(error)+'\n');process.exitCode=78;});
+}else void startNativeHostMainV1(
+  invocation,
   {RBRIDGE_NATIVE_HOST_CONFIG:configPath},
   io,
 ).catch(error=>{

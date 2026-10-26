@@ -50,17 +50,13 @@ jobs:
       - name: Build Windows Native Host SEA
         run: npm run build:native-host:sea
 
-      - name: Reproduce existing V3 config loss on base installer
+      - name: Verify read-only config check and V3 installer
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          try {
-            & scripts/test-native-v3-install-windows.ps1 -SourceExe dist-native-host/rbridge-native-host.exe -Case PreserveExisting
-            throw "EXPECTED_INSTALLER_REGRESSION_NOT_OBSERVED"
-          } catch {
-            if ($_.Exception.Message -notlike "*QA085_EXISTING_V3_WAS_REMOVED*") { throw }
-            Write-Output "RBRIDGE_V3_INSTALL_BASELINE_RED_CONFIRMED"
-          }
+          node dist/tests/w1-v3-native-install.js
+          if ($LASTEXITCODE -ne 0) { throw "NATIVE_CONFIG_CHECK_TEST_FAILED" }
+          & scripts/test-native-v3-install-windows.ps1 -SourceExe dist-native-host/rbridge-native-host.exe
 
       - name: Stage installer
         shell: pwsh
