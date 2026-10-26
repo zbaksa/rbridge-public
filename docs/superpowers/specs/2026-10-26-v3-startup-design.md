@@ -8,4 +8,6 @@ The build-time digest is an integrity/trust input from an external provisioner, 
 
 Build profiles v1(default) and v3 use separate dist-extension and dist-extension-v3 outputs. V3 requires its pin; unknown profiles and a V3 pin in a V1 build are errors. Preserve manifest permissions and extension identity. V3 bundles contain only the existing two serialized DOM acquisition functions; artifact verification allows DOM identifiers/selectors only inside those named injection functions. Execute the actual built worker in a document-free VM to prove startup, exact pinned HELLO and closed missing/tampered data; no real AI send.
 
+Bundle QA copies source and build inputs into its own temporary project and links only the existing dependency directory. Both success and an injected post-build failure must leave the caller's entire V1/V3 output trees unchanged. Cleanup is in finally. Synthetic QA pins never replace an owner-pinned artifact. This lexical AST check is a useful packaging boundary, not a general JavaScript security proof.
+
 Use existing isolated worktree, regression-first normal RBridge1027 testing, one fresh component review, full exact-head Linux and Windows CI, and exact tested-source integration. Chrome storage semantics follow https://developer.chrome.com/docs/extensions/reference/api/storage .
