@@ -78,7 +78,9 @@ export class ExtensionNativePortLinkV1{
   async sendEvent(event:unknown):Promise<void>{
     const port=this.port;if(!port)throw new Error('RBRIDGE_NATIVE_PORT_DISCONNECTED');
     if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+    const negotiated=this.negotiated,epoch=this.epoch;
     const validated:RbridgeChatEventV1=await validateEventEnvelope(event);
+    if(this.port!==port||this.negotiated!==negotiated||this.epoch!==epoch)throw new Error('RBRIDGE_PEER_CONNECTION_CHANGED');
     port.postMessage(validated);
   }
 
@@ -87,6 +89,17 @@ export class ExtensionNativePortLinkV1{
     if(!this.negotiated)throw new Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
     const validated:RbridgeChatCommandResultV1=parseRbridgeChatCommandResultV1(result);
     port.postMessage(validated);
+  }
+
+  admittedEffect(command:RbridgeChatEffectCommandV1):{command:RbridgeChatEffectCommandV1;assertCurrent:()=>void}{
+    const context=this.effectContexts.get(command);
+    if(!context)throw new Error('RBRIDGE_EFFECT_COMMAND_NOT_RECEIVED');
+    const assertCurrent=()=>{
+      if(this.port!==context.port||this.epoch!==context.epoch||this.negotiated!==context.negotiated)throw new Error('RBRIDGE_PEER_CONNECTION_CHANGED');
+      this.requireV3(context.negotiated);
+    };
+    assertCurrent();
+    return {command:structuredClone(context.command),assertCurrent};
   }
 
   async sendEffectResult(command:RbridgeChatEffectCommandV1,result:unknown):Promise<void>{
