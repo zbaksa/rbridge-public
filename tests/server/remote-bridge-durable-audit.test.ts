@@ -57,6 +57,19 @@ describe('V1 durable-state cutover audit',()=>{
     expect(out).toMatchObject({cutoverGate:'PASS',unresolvedRecords:2,unresolvedClosedTrusted:2});
   });
 
+  it('treats durable WAITING as unresolved and blocks cutover while its trusted issue is open',async()=>{
+    const dir=await root();
+    await durable(dir,{requestId:'req-15',issueNumber:15,phase:'WAITING',scope:true});
+    const out=await auditRemoteBridgeDurableState({
+      stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({15:{state:'open'}}),
+    });
+    expect(out).toMatchObject({
+      auditStatus:'PASS',cutoverGate:'BLOCKED',unresolvedRecords:1,
+      unresolvedOpenTrusted:1,phases:{WAITING:1},
+    });
+    expect(out.openTrusted[0]).toMatchObject({requestId:'req-15',phase:'WAITING'});
+  });
+
   it('blocks identity mismatches instead of trusting issue state alone',async()=>{
     const dir=await root();await durable(dir,{requestId:'req-5',issueNumber:5,phase:'SUBMITTED'});
     const out=await auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({5:{state:'closed',author:'other'}})});
