@@ -57,7 +57,18 @@ def exec_safe(argv, *, cwd=None, uid=None, timeout=180):
 
 
 def active():
-    return exec_safe(["/usr/bin/systemctl", "is-active", SERVICE], timeout=12) == "active"
+    p = subprocess.run(["/usr/bin/systemctl", "is-active", SERVICE],
+                       env={"PATH": PATH, "LANG": "C.UTF-8"},
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       text=True, timeout=12)
+    state = p.stdout.strip()
+    if p.returncode == 0 and state == "active":
+        return True
+    if p.returncode != 0 and state in ("inactive", "failed", "deactivating"):
+        return False
+    raise RuntimeError("SERVICE_STATE_UNKNOWN")
+
+
 
 
 def symlink_target():
