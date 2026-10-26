@@ -47,3 +47,6 @@ Pre-flight: one task shares the loader snapshot digest with CLI receipt and inst
 - #20799: normal1027 config7/7, Native transport28/28, Native runtime runner, tsc/focused lint PASS.
 - Windows baseline run40342920960/job121642104880 at bea6655: actual SEA/installer reproduced exact QA085_EXISTING_V3_WAS_REMOVED; wrapper confirmed RED. This is not a fixed-installer PASS.
 - Ruling: CI publication is a source candidate only; the Windows fix cannot be executed in the Linux app environment. Publish for existing Windows CI before making its PASS claim; no owner activation.
+
+- One review:0 Critical/3 Important/0 Minor. Required fixes: strict checker receipt scalar types; concurrent config-writer protection; full default registry state/named-property preservation. Five real Windows regressions cover these findings before the one fix pass; no re-review.
+- Own Windows diagnostic at543e69d: CLI4 PASS/2 FAIL because the test temporary path used a Windows8.3 alias rejected by unchanged realpath checks. Canonicalize the test root; do not weaken the loader. Production checker staging also needs a canonical owner path.

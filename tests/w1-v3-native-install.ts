@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtemp,writeFile,rm,stat,symlink,chmod} from 'node:fs/promises';
+import {mkdtemp,writeFile,rm,stat,symlink,chmod,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -9,7 +9,7 @@ import {V3_CAPABILITIES} from '../src/domain/rbridgeEffectProtocol.js';
 
 const cli=fileURLToPath(new URL('../src/nativeHost/nativeHostCli.js',import.meta.url));
 const extensionId='ebibbijpegoankenmggdnehpoadcophk';
-const root=await mkdtemp(join(tmpdir(),'rbridge-native-install-'));
+const root=await realpath(await mkdtemp(join(tmpdir(),'rbridge-native-install-')));
 const configPath=join(root,'candidate.json'),eventRoot=join(root,'events'),sentinel=join(root,'ssh-was-started'),sshPath=join(root,process.platform==='win32'?'probe.cmd':'probe.sh');
 await writeFile(sshPath,process.platform==='win32'?'@echo invoked>'+sentinel+'\r\n':'#!/bin/sh\nprintf invoked > '+("'"+sentinel.replaceAll("'","'\\''")+"'")+'\n',{mode:0o700});
 const base={schema:'RBRIDGE_NATIVE_HOST_CONFIG_V1',expectedExtensionId:extensionId,eventStoreRoot:eventRoot,ssh:{sshPath,host:'fixture.invalid',port:22,user:'rbridge',identityFile:join(root,'identity'),knownHostsFile:join(root,'known-hosts')}};
