@@ -3,7 +3,7 @@ import {mkdtemp,mkdir,readFile,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
-import {createRemoteBridgeFileOps} from '../../src/server/remoteBridgeFileOps.js';
+import {classifyFileTemporaryOpenError,createRemoteBridgeFileOps} from '../../src/server/remoteBridgeFileOps.js';
 type ListResult={entries:Array<{name:string;type:string}>};
 type StatResult={type:string;size:number};
 type ReadResult={text:string};
@@ -19,6 +19,19 @@ async function fixture(){
   const fileOps=createRemoteBridgeFileOps({allowedRoots:[root],maxReadBytes:64,maxSearchResults:2});
   return {base,root,outside,fileOps};
 }
+
+describe('pre-effect FILE write permission failures',()=>{
+  it('turns EROFS, EACCES and EPERM into an immediate BLOCKED-class reason',()=>{
+    for(const code of ['EROFS','EACCES','EPERM']){
+      expect(()=>classifyFileTemporaryOpenError(Object.assign(new Error('temp open denied'),{code})))
+        .toThrow('REMOTE_BRIDGE_FILE_WRITE_DENIED');
+    }
+  });
+  it('never hides ambiguous errors such as EIO or failures after the temp-file open',()=>{
+    const error=Object.assign(new Error('I/O uncertain'),{code:'EIO'});
+    expect(()=>classifyFileTemporaryOpenError(error)).toThrow(error);
+  });
+});
 
 describe('remote bridge safe FILE operations',()=>{
   it('lists, stats, reads and reads many only below an allowed root',async()=>{
