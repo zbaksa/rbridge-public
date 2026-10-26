@@ -1,6 +1,6 @@
 import {constants} from 'node:fs';
 import {lstat,open,realpath,readFile} from 'node:fs/promises';
-import {isAbsolute,join,resolve} from 'node:path';
+import {join,posix,resolve} from 'node:path';
 import {userInfo} from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {canonicalJson,parseV3Scope} from '../domain/rbridgeEffectProtocol.js';
@@ -13,6 +13,27 @@ function fail(code:string):never{throw Error(code);}
 function fields(value:unknown,keys:readonly string[]):Record<string,unknown>{
   if(!value||typeof value!=='object'||Array.isArray(value))fail('RBRIDGE_PEER_CLI_FIELDS_INVALID');const row=value as Record<string,unknown>;
   if(Object.keys(row).length!==keys.length||keys.some(k=>!Object.hasOwn(row,k)))fail('RBRIDGE_PEER_CLI_FIELDS_INVALID');return row;
+}
+export interface RbridgeChatPeerInstallV3 {
+  readonly schema:'RBRIDGE_CHAT_FIXED_PEER_INSTALL_V3'|'RBRIDGE_CHAT_FIXED_PEER_INSTALL_V3_1';
+  readonly releaseSha:string;readonly releaseCwd:string;readonly storeRoot:string;readonly launchCwd:string;
+}
+function absolutePosix(value:unknown):value is string{
+  return typeof value==='string'&&value!=='/'&&value.length<=4096&&posix.isAbsolute(value)&&posix.resolve(value)===value&&!/[\0\r\n]/.test(value);
+}
+/** Private root-owned installation data; V3 retains its original release-cwd rule. */
+export function parseRbridgeChatPeerInstallV3(input:unknown):RbridgeChatPeerInstallV3{
+  if(!input||typeof input!=='object'||Array.isArray(input))fail('RBRIDGE_PEER_INSTALL_CONFIG_INVALID');
+  const schema=(input as Record<string,unknown>).schema;
+  if(schema!=='RBRIDGE_CHAT_FIXED_PEER_INSTALL_V3'&&schema!=='RBRIDGE_CHAT_FIXED_PEER_INSTALL_V3_1')fail('RBRIDGE_PEER_INSTALL_CONFIG_INVALID');
+  const row=fields(input,schema==='RBRIDGE_CHAT_FIXED_PEER_INSTALL_V3_1'?['schema','releaseSha','releaseCwd','storeRoot','launchCwd']:['schema','releaseSha','releaseCwd','storeRoot']);
+  const {releaseSha,releaseCwd,storeRoot}=row,launchCwd=schema==='RBRIDGE_CHAT_FIXED_PEER_INSTALL_V3'?releaseCwd:row.launchCwd;
+  if(typeof releaseSha!=='string'||!/^[a-f0-9]{40}$/.test(releaseSha)||typeof releaseCwd!=='string'||releaseCwd!=='/var/lib/rbridge/runtime/releases/'+releaseSha||!absolutePosix(storeRoot)||!absolutePosix(launchCwd))fail('RBRIDGE_PEER_INSTALL_CONFIG_INVALID');
+  return Object.freeze({schema,releaseSha,releaseCwd,storeRoot,launchCwd});
+}
+export function assertRbridgeChatPeerInvocationV3(config:RbridgeChatPeerInstallV3,cwd:string,entry:string):void{
+  if(cwd!==config.launchCwd)fail('RBRIDGE_PEER_INSTALL_RELEASE_MISMATCH');
+  if(entry!==posix.join(config.releaseCwd,'dist','src','server','rbridgeChatPeerCli.js'))fail('RBRIDGE_PEER_INSTALL_ENTRYPOINT_MISMATCH');
 }
 function decode(arg:unknown):unknown{
   if(typeof arg!=='string'||!arg||Buffer.byteLength(arg)>8192)fail('RBRIDGE_PEER_CLI_ARGUMENT_INVALID');const bytes=Buffer.from(arg,'base64');if(bytes.toString('base64')!==arg)fail('RBRIDGE_PEER_CLI_BASE64_INVALID');
@@ -33,13 +54,11 @@ export async function executeRbridgeChatPeerCli(store:RbridgeChatPeerStoreV3,arg
 async function installedStore():Promise<RbridgeChatPeerStoreV3>{
   if(process.platform!=='linux'||process.getuid?.()===0||userInfo().username!=='rbridge')fail('RBRIDGE_PEER_INSTALL_IDENTITY_REQUIRED');
   let file;try{file=await open(CONFIG,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);}catch{fail('RBRIDGE_PEER_INSTALL_CONFIG_UNAVAILABLE');}
-  let config:Record<string,unknown>;
-  try{const metadata=await file.stat();if(!metadata.isFile()||metadata.uid!==0||metadata.nlink!==1||(metadata.mode&0o022)||metadata.size<2||metadata.size>4096||await realpath(CONFIG)!==CONFIG)fail('RBRIDGE_PEER_INSTALL_CONFIG_UNTRUSTED');config=fields(JSON.parse(await file.readFile('utf8')),['schema','releaseSha','releaseCwd','storeRoot']);}finally{await file.close();}
-  if(config.schema!=='RBRIDGE_CHAT_FIXED_PEER_INSTALL_V3'||typeof config.releaseSha!=='string'||! /^[a-f0-9]{40}$/.test(config.releaseSha)||config.releaseCwd!=='/var/lib/rbridge/runtime/releases/'+config.releaseSha||typeof config.storeRoot!=='string'||!isAbsolute(config.storeRoot)||resolve(config.storeRoot)!==config.storeRoot||/[\0\r\n]/.test(config.storeRoot))fail('RBRIDGE_PEER_INSTALL_CONFIG_INVALID');
-  for(const path of [config.releaseCwd as string,join(config.releaseCwd as string,'dist'),join(config.releaseCwd as string,'dist','src'),join(config.releaseCwd as string,'dist','src','server')]){const st=await lstat(path);if(!st.isDirectory()||st.isSymbolicLink()||st.uid!==0||(st.mode&0o022)||await realpath(path)!==path)fail('RBRIDGE_PEER_INSTALL_RELEASE_UNTRUSTED');}
-  if(await realpath(process.cwd())!==config.releaseCwd)fail('RBRIDGE_PEER_INSTALL_RELEASE_MISMATCH');
-  if((await readFile(join(config.releaseCwd as string,'SOURCE_SHA'),'utf8')).trim()!==config.releaseSha)fail('RBRIDGE_PEER_INSTALL_SOURCE_MISMATCH');
-  const entry=await realpath(process.argv[1]??'');if(entry!==join(config.releaseCwd as string,'dist','src','server','rbridgeChatPeerCli.js'))fail('RBRIDGE_PEER_INSTALL_ENTRYPOINT_MISMATCH');
+  let config:RbridgeChatPeerInstallV3;
+  try{const metadata=await file.stat();if(!metadata.isFile()||metadata.uid!==0||metadata.nlink!==1||(metadata.mode&0o022)||metadata.size<2||metadata.size>4096||await realpath(CONFIG)!==CONFIG)fail('RBRIDGE_PEER_INSTALL_CONFIG_UNTRUSTED');config=parseRbridgeChatPeerInstallV3(JSON.parse(await file.readFile('utf8')));}finally{await file.close();}
+  for(const path of [config.releaseCwd,join(config.releaseCwd,'dist'),join(config.releaseCwd,'dist','src'),join(config.releaseCwd,'dist','src','server')]){const st=await lstat(path);if(!st.isDirectory()||st.isSymbolicLink()||st.uid!==0||(st.mode&0o022)||await realpath(path)!==path)fail('RBRIDGE_PEER_INSTALL_RELEASE_UNTRUSTED');}
+  const entry=await realpath(process.argv[1]??'');assertRbridgeChatPeerInvocationV3(config,await realpath(process.cwd()),entry);
+  if((await readFile(join(config.releaseCwd,'SOURCE_SHA'),'utf8')).trim()!==config.releaseSha)fail('RBRIDGE_PEER_INSTALL_SOURCE_MISMATCH');
   const st=await lstat(entry);if(!st.isFile()||st.uid!==0||(st.mode&0o022)||st.nlink!==1)fail('RBRIDGE_PEER_INSTALL_ENTRYPOINT_UNTRUSTED');
   return new RbridgeChatPeerStoreV3(config.storeRoot);
 }
