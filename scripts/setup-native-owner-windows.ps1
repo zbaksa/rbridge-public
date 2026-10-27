@@ -282,6 +282,9 @@ try {
         try {$Stream.CopyTo($Output);$Output.Flush($true)} finally {$Stream.Dispose();$Output.Dispose()}
       }
     } finally {if ($null -ne $Archive) {$Archive.Dispose()};$ArchiveStream.Dispose()}
+    # Another installation can register this host while the package downloads.
+    # Preserve any new binding before changing the installation or its key ACL.
+    foreach ($Key in $RegistryPaths) {Need ($null -eq (Binding $Key)) 'NATIVE_REGISTRATION_ALREADY_PRESENT'}
     $Phase='DEDICATED_KEY_PREPARATION'
     if ($Resuming) {
       $CurrentPartial=Check-PartialIdentity
