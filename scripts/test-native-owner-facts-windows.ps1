@@ -12,10 +12,10 @@ function Save([string]$Path,[string]$Text) {
   [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path))
   [IO.File]::WriteAllText($Path,$Text,$Utf8)
 }
-function Collect([string]$Install,[string]$Profile) {
+function Collect([string]$Install,[string]$Profile,[string]$RunCollector=$CollectorPath) {
   $Start = New-Object Diagnostics.ProcessStartInfo
   $Start.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-  $Start.Arguments = '-NoProfile -NonInteractive -File "'+$CollectorPath+'" -InstallDir "'+$Install+'"'
+  $Start.Arguments = '-NoProfile -NonInteractive -File "'+$RunCollector+'" -InstallDir "'+$Install+'"'
   $Start.UseShellExecute = $false
   $Start.RedirectStandardOutput = $true
   $Start.RedirectStandardError = $true
@@ -112,6 +112,30 @@ try {
   $R = Collect (Join-Path $Alias 'nested') $OwnerProfileFixture
   Assert-True ($R.value.installation.state -eq 'UNTRUSTED_DIRECTORY') 'ancestor reparse rejected'
   [IO.Directory]::Delete($Alias)
+  $Passed++
+
+  # Swap an ancestor deterministically after the old pathname inspection and
+  # before file open. The redirected same-length target must never be read.
+  $RaceInstall = Join-Path $Root 'race-install'
+  $RaceMoved = Join-Path $Root 'race-original'
+  $RaceTarget = Join-Path $Root 'race-target'
+  [void][IO.Directory]::CreateDirectory($RaceInstall)
+  [void][IO.Directory]::CreateDirectory($RaceTarget)
+  $RaceConfig = Join-Path $RaceInstall 'rbridge-native-host.config.json'
+  Save $RaceConfig $RawConfig
+  Save (Join-Path $RaceTarget 'rbridge-native-host.config.json') $RawConfig
+  $RaceCollector = Join-Path $Root 'race-collector.ps1'
+  $Hook = '$Full = Local-Path $Path'+[Environment]::NewLine+
+    ('    if ($Path -eq ''{0}'') {{ [IO.Directory]::Move(''{1}'',''{2}''); [void](New-Item -ItemType Junction -Path ''{1}'' -Target ''{3}'') }}' -f $RaceConfig,$RaceInstall,$RaceMoved,$RaceTarget)
+  $CollectorText = [IO.File]::ReadAllText($CollectorPath)
+  Assert-True ($CollectorText.Contains('$Full = Local-Path $Path')) 'race hook boundary'
+  Save $RaceCollector ($CollectorText.Replace('$Full = Local-Path $Path',$Hook))
+  try {
+    $R = Collect $RaceInstall $OwnerProfileFixture $RaceCollector
+    Assert-True ($R.value.installation.config.state -ne 'PRESENT_METADATA_ONLY') 'ancestor replacement not followed'
+  } finally {
+    if ((Get-Item -LiteralPath $RaceInstall -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($RaceInstall) }
+  }
   $Passed++
 
   [pscustomobject]@{schema='RBRIDGE_WINDOWS_OWNER_FACTS_QA_V1';state='PASS';passed=$Passed;powerShellMajor=$PSVersionTable.PSVersion.Major;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
