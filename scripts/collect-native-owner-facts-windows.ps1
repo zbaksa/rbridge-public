@@ -48,8 +48,10 @@ function Open-LocalRead([string]$Full,[bool]$DirectoryOnly) {
     for ($Index=-1; $Index -lt $Parts.Count; $Index++) {
       if ($Index -ge 0) { $Current=$Current.TrimEnd('\')+'\'+$Parts[$Index] }
       $IsDirectory = $DirectoryOnly -or $Index -lt $Parts.Count-1
-      $Access = if ($IsDirectory) { [uint32]128 } else { [uint32]2147483648 }
-      # No delete/write sharing; every validated ancestor stays held until the read completes.
+      # Attribute-only directory handles do not participate in sharing checks.
+      # Enumeration pins add FILE_LIST_DIRECTORY, keeping namespace rename/delete denied.
+      $Access = if ($IsDirectory) { if ($DirectoryOnly) {[uint32]129} else {[uint32]128} } else { [uint32]2147483648 }
+      # Share READ only; keep every validated ancestor held until the observation completes.
       $Handle = $Native::CreateFileW($Current,$Access,[uint32]1,[IntPtr]::Zero,[uint32]3,[uint32]35651584,[IntPtr]::Zero)
       $ErrorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
       if ($Handle.IsInvalid) { $Handle.Dispose(); if ($ErrorCode -in @(2,3)) { throw 'ABSENT' }; throw 'UNAVAILABLE' }
