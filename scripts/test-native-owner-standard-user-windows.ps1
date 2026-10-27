@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$PackageZip)
+param([Parameter(Mandatory=$true)][string]$PackageZip,[string]$UpgradePackageZip='')
 $ErrorActionPreference='Stop'
 if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_REPOSITORY -cne 'zbaksa/rbridge-public') {throw 'DEDICATED_WINDOWS_CI_REQUIRED'}
 $Current=[Security.Principal.WindowsIdentity]::GetCurrent()
@@ -27,6 +27,13 @@ try {
   [void]$Acl.AddAccessRule($Rule);Set-Acl -LiteralPath $Root -AclObject $Acl
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'setup-native-owner-windows.ps1') -Destination (Join-Path $Root 'setup.ps1')
   Copy-Item -LiteralPath $PackageZip -Destination (Join-Path $Root 'qualified.zip')
+  if ($UpgradePackageZip -ne '') {
+    if ((Get-FileHash -LiteralPath $UpgradePackageZip -Algorithm SHA256).Hash.ToLowerInvariant() -cne '0e614e0f143bb49db4e2e2807a9ebde4e6796e5adcf7425ff08762bd240b4af0') {throw 'QUALIFIED_UPGRADE_ZIP_REQUIRED'}
+    Copy-Item -LiteralPath $UpgradePackageZip -Destination (Join-Path $Root 'upgrade-qualified.zip')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'test-native-owner-upgrade-cases-windows.ps1') -Destination (Join-Path $Root 'upgrade-cases.ps1')
+    $UpgradeSource=Join-Path $PSScriptRoot 'upgrade-native-owner-windows.ps1'
+    if (Test-Path -LiteralPath $UpgradeSource) {Copy-Item -LiteralPath $UpgradeSource -Destination (Join-Path $Root 'upgrade.ps1')}
+  }
   $Driver=@'
 $ErrorActionPreference='Stop'
 $Root=$PSScriptRoot
@@ -149,7 +156,12 @@ try {
   $Repeated=Run-Partial $true
   if ($Repeated.status -cne 'PASS' -or $Repeated.state -cne 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') {throw 'PARTIAL_RESUME_NOT_IDEMPOTENT'}
   Assert-PartialKeyPreserved
-  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=13;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
+  $UpgradeQA=$null
+  if (Test-Path -LiteralPath (Join-Path $Root 'upgrade-cases.ps1')) {
+    $UpgradeQA=& (Join-Path $Root 'upgrade-cases.ps1')
+    if ($UpgradeQA.state -cne 'PASS' -or $UpgradeQA.passed -lt 10) {throw 'ORDINARY_USER_UPGRADE_QA_FAILED'}
+  }
+  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=13;upgradeQA=$UpgradeQA;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
   exit 0
 } catch {
   $Records=@($Error | Select-Object -First 12 | ForEach-Object {[pscustomobject]@{type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult;id=$_.FullyQualifiedErrorId;line=$_.InvocationInfo.ScriptLineNumber;message=$_.Exception.Message}})
@@ -179,6 +191,7 @@ try {
   if ($Child.ExitCode -ne 0) {throw ('ORDINARY_USER_SETUP_REGRESSION_EXIT_'+$Child.ExitCode)}
   $Value=$Output | ConvertFrom-Json
   if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 13) {throw 'ORDINARY_USER_PROOF_INVALID'}
+  if ($UpgradePackageZip -ne '' -and ($Value.upgradeQA.state -cne 'PASS' -or $Value.upgradeQA.passed -lt 10)) {throw 'ORDINARY_USER_UPGRADE_PROOF_INVALID'}
   $ExitCode=0
 } finally {
   if ($null -ne $Child) {if(-not $Child.HasExited){$Child.Kill()};$Child.Dispose()}
@@ -189,3 +202,4 @@ try {
   if (Test-Path -LiteralPath $Root) {Remove-Item -LiteralPath $Root -Recurse -Force}
 }
 exit $ExitCode
+

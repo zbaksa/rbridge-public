@@ -43,7 +43,10 @@ jobs:
           Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/zbaksa/rbridge-public/releases/download/cocwin-windows-34871a7/rbridge-windows-34871a7.zip' -OutFile $Zip -TimeoutSec 180
           if ((Get-Item -LiteralPath $Zip).Length -ne 34356996) { throw 'QUALIFIED_PACKAGE_SIZE_MISMATCH' }
           if ((Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9afb6a22737f3b2d446684240051477096924e55e4d688b5f2feef70e8ef3350') { throw 'QUALIFIED_PACKAGE_SHA_MISMATCH' }
-          powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-standard-user-windows.ps1 -PackageZip $Zip
+          $UpgradeZip = Join-Path $env:RUNNER_TEMP 'rbridge-qualified-11c6723.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/zbaksa/rbridge-public/releases/download/cocwin-windows-11c6723/rbridge-windows-11c6723.zip' -OutFile $UpgradeZip -TimeoutSec 180
+          if ((Get-Item -LiteralPath $UpgradeZip).Length -ne 34357300 -or (Get-FileHash -LiteralPath $UpgradeZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '0e614e0f143bb49db4e2e2807a9ebde4e6796e5adcf7425ff08762bd240b4af0') { throw 'QUALIFIED_UPGRADE_PACKAGE_INVALID' }
+          powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-standard-user-windows.ps1 -PackageZip $Zip -UpgradePackageZip $UpgradeZip
           if ($LASTEXITCODE -ne 0) { throw 'STANDARD_USER_SETUP_QA_FAILED' }
           powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-setup-windows.ps1 -PackageZip $Zip
           if ($LASTEXITCODE -ne 0) { throw 'OWNER_SETUP_QA_FAILED' }
@@ -137,3 +140,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/publish-qualified-windows-package.sh
+
