@@ -59,12 +59,24 @@ try {
   $AdminRule=New-Object Security.AccessControl.FileSystemAccessRule($Administrators,[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Allow)
   [void]$PrivateAcl.AddAccessRule($AdminRule)
   [IO.File]::SetAccessControl($Private,$PrivateAcl)
-  function Run-Partial([bool]$Resume,[string]$Destination='') {
+  function Run-Partial([bool]$Resume,[string]$Destination='',[string]$RegistrationDuringDownload='') {
     $Collected=New-Object 'Collections.Generic.List[string]'
     try {
       $SetupArguments=@{PackageZip=(Join-Path $Root 'qualified.zip');SshHost='fixture.invalid';ServerHostKey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'}
       if ($Resume) {$SetupArguments.ResumeKeyPreparation=$true}
       if ($Destination -ne '') {$SetupArguments.InstallDir=$Destination}
+      if ($RegistrationDuringDownload -ne '') {
+        [void]$SetupArguments.Remove('PackageZip')
+        # Only the external download boundary is controlled. Package bytes,
+        # entry hashes, extraction and registry effects remain real.
+        function Invoke-WebRequest {
+          param([switch]$UseBasicParsing,[string]$Uri,[string]$OutFile,[int]$TimeoutSec)
+          if (-not $UseBasicParsing -or $Uri -cne 'https://github.com/zbaksa/rbridge-public/releases/download/cocwin-windows-34871a7/rbridge-windows-34871a7.zip' -or $TimeoutSec -ne 180 -or (Get-Item -LiteralPath $OutFile).Length -ne 0) {throw 'UNEXPECTED_DOWNLOAD_FIXTURE_REQUEST'}
+          [IO.File]::Copy((Join-Path $Root 'qualified.zip'),$OutFile,$true)
+          $Reg=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($RegistrationDuringDownload)
+          try {$Reg.SetValue('','C:\cocwin-ci-foreign-native-host.json',[Microsoft.Win32.RegistryValueKind]::String)} finally {$Reg.Dispose()}
+        }
+      }
       & ([scriptblock]::Create($Source)) @SetupArguments | ForEach-Object {[void]$Collected.Add([string]$_)}
     } catch {if ($_.FullyQualifiedErrorId -cne 'COCWIN_RBRIDGE_OWNER_SETUP_BLOCKED') {throw}}
     return (($Collected -join "`n") | ConvertFrom-Json)
@@ -101,6 +113,7 @@ try {
   } finally {[IO.File]::WriteAllBytes($PublicPath,$PublicBefore)}
   foreach ($AclPath in @($Private,(Join-Path $Install 'keys'))) {
   $BeforeAcl=Get-Acl -LiteralPath $AclPath
+  $AccessBefore=$BeforeAcl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
   $Broad=Get-Acl -LiteralPath $AclPath
   $Everyone=New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
   $Rule=New-Object Security.AccessControl.FileSystemAccessRule($Everyone,[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Allow)
@@ -111,7 +124,24 @@ try {
     $Unsafe=Run-Partial $true
     if ($Unsafe.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Unsafe.installationMutationsStarted -ne $false -or (Get-Acl -LiteralPath $AclPath).Sddl -cne $BroaderSddl) {throw 'UNSAFE_PARTIAL_ACL_CHANGED_OR_ACCEPTED'}
     Assert-PartialKeyPreserved
-  } finally {if ($AclPath -ceq $Private) {[IO.File]::SetAccessControl($AclPath,$BeforeAcl)} else {[IO.Directory]::SetAccessControl($AclPath,$BeforeAcl)}}
+  } finally {
+    $BeforeAcl.SetSecurityDescriptorSddlForm($AccessBefore,[Security.AccessControl.AccessControlSections]::Access)
+    if ($AclPath -ceq $Private) {[IO.File]::SetAccessControl($AclPath,$BeforeAcl)} else {[IO.Directory]::SetAccessControl($AclPath,$BeforeAcl)}
+    if ((Get-Acl -LiteralPath $AclPath).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $AccessBefore) {throw 'FIXTURE_ACL_RESTORE_FAILED'}
+  }
+  }
+  foreach ($RegistryPath in @('Software\Google\Chrome\NativeMessagingHosts\com.cocwin.rbridge_chat_v1','Software\Microsoft\Edge\NativeMessagingHosts\com.cocwin.rbridge_chat_v1')) {
+    $AclBeforeRace=(Get-Acl -LiteralPath $Private).Sddl
+    try {
+      $Race=Run-Partial $true '' $RegistryPath
+      $Reg=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($RegistryPath)
+      try {$Binding=if($null -ne $Reg){$Reg.GetValue('',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}else{$null}} finally {if($null -ne $Reg){$Reg.Dispose()}}
+      if ($Race.reason -cne 'NATIVE_REGISTRATION_ALREADY_PRESENT' -or $Race.installationMutationsStarted -ne $false -or $Binding -cne 'C:\cocwin-ci-foreign-native-host.json' -or (Get-Acl -LiteralPath $Private).Sddl -cne $AclBeforeRace) {throw 'NATIVE_REGISTRATION_DURING_VERIFICATION_NOT_PRESERVED'}
+      Assert-PartialKeyPreserved
+    } finally {
+      $Reg=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($RegistryPath,$true)
+      try {if($null -ne $Reg){$Reg.DeleteValue('',$false)}} finally {if($null -ne $Reg){$Reg.Dispose()}}
+    }
   }
   $Resumed=Run-Partial $true
   if ($Resumed.status -cne 'PASS' -or $Resumed.state -cne 'INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' -or $Resumed.publicKey -cne $Value.publicKey) {throw 'PARTIAL_RESUME_FAILED'}
@@ -119,7 +149,7 @@ try {
   $Repeated=Run-Partial $true
   if ($Repeated.status -cne 'PASS' -or $Repeated.state -cne 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') {throw 'PARTIAL_RESUME_NOT_IDEMPOTENT'}
   Assert-PartialKeyPreserved
-  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=11;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
+  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=13;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
   exit 0
 } catch {
   $Records=@($Error | Select-Object -First 12 | ForEach-Object {[pscustomobject]@{type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult;id=$_.FullyQualifiedErrorId;line=$_.InvocationInfo.ScriptLineNumber;message=$_.Exception.Message}})
@@ -140,7 +170,7 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($Errors)) {throw 'ORDINARY_USER_UNEXPECTED_STDERR'}
   if ($Child.ExitCode -ne 0) {throw 'ORDINARY_USER_SETUP_REGRESSION'}
   $Value=$Output | ConvertFrom-Json
-  if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 11) {throw 'ORDINARY_USER_PROOF_INVALID'}
+  if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 13) {throw 'ORDINARY_USER_PROOF_INVALID'}
   $ExitCode=0
 } finally {
   if ($null -ne $Child) {if(-not $Child.HasExited){$Child.Kill()};$Child.Dispose()}
