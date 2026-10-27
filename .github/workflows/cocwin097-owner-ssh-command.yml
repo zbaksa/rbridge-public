@@ -1,0 +1,24 @@
+name: COCWIN097 owner SSH command parsing
+on:
+  push:
+    branches: ['ops/cocwin097-owner-ssh-command-r1']
+permissions:
+  contents: read
+concurrency:
+  group: cocwin097-owner-ssh-command-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows-command-parsing:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reproduce real Windows PowerShell 5.1 argument handling without network
+        shell: powershell
+        run: ./scripts/test-owner-ssh-command-windows.ps1
+      - name: Verify the same command on PowerShell 7 without network
+        if: always()
+        shell: pwsh
+        run: ./scripts/test-owner-ssh-command-windows.ps1
