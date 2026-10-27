@@ -1,0 +1,68 @@
+name: Publish qualified COCWIN Windows 11c6723
+
+on:
+  push:
+    branches: ['ops/cocwin096-publish-windows-11c6723']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cocwin-qualified-windows-11c6723
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: [self-hosted, linux, x64, rbridge]
+    timeout-minutes: 6
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Verify dedicated publication identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(id -un)" = 'rbridge-ci'
+          test "${RUNNER_NAME}" = 'rbridge-debian-ci'
+          test "${GITHUB_REPOSITORY}" = 'zbaksa/rbridge-public'
+          command -v gh
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+
+      - name: Verify both exact source qualifications
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh api repos/zbaksa/rbridge-public/actions/runs/40517709746 > "$RUNNER_TEMP/cocwin096-windows-run.json"
+          gh api repos/zbaksa/rbridge-public/actions/runs/40517709788 > "$RUNNER_TEMP/cocwin096-linux-run.json"
+          python3 - <<'PY'
+          import json,os
+          for name in ('windows','linux'):
+              with open(os.path.join(os.environ['RUNNER_TEMP'],'cocwin096-'+name+'-run.json')) as f:r=json.load(f)
+              assert r['head_sha']=='11c67238e4d1998e0fab166da048c655b478a1d6' and r['status']=='completed' and r['conclusion']=='success'
+          print('EXACT_SOURCE_QUALIFICATIONS=PASS')
+          PY
+
+      - name: Verify current archive and unchanged publication regressions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh api repos/zbaksa/rbridge-public/actions/artifacts/12741520050/zip > "$RUNNER_TEMP/rbridge-qualified-11c6723.zip"
+          node scripts/test-qualified-windows-11c6723-publication.mjs "$RUNNER_TEMP/rbridge-qualified-11c6723.zip"
+
+      - name: Publish or verify exact qualified archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/publish-qualified-windows-11c6723.sh
