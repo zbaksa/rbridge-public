@@ -58,7 +58,7 @@ try {
 
   $Install=Join-Path $Root 'fresh'
   $R=Run-Setup $Install
-  Assert-QA ($R.exitCode -eq 0 -and $R.value.status -ceq 'PASS' -and $R.value.state -ceq 'INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') 'fresh install'
+  Assert-QA ($R.exitCode -eq 0 -and $R.value.status -ceq 'PASS' -and $R.value.state -ceq 'INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') ('fresh install; state='+$R.value.state+' phase='+$R.value.failedAt+' reason='+$R.value.reason)
   Assert-QA ($R.value.v3Configured -eq $false -and $R.value.executableSha256 -ceq '630ea7b69c12283ac311cbf137adfaf8078f091071697bab355282d080997b95') 'qualified binary no invented v3'
   $Private=Join-Path $Install 'keys\owner_ed25519';$Public=$Private+'.pub';$Known=Join-Path $Install 'keys\known_hosts.cocwin'
   Assert-QA ((Get-Content -LiteralPath $Known -Raw).Trim() -ceq ('fixture.invalid '+$ServerKey)) 'known-host out-of-band pin'
