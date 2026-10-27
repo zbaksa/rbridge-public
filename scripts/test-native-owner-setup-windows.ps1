@@ -28,13 +28,14 @@ function Clear-Bindings {
 function Run-Setup([string]$Install,[string]$Zip=$PackageZip,[string]$HostKey=$ServerKey) {
   $Start=New-Object Diagnostics.ProcessStartInfo
   $Start.FileName=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) 'System32\WindowsPowerShell\v1.0\powershell.exe'
-  $Start.Arguments='-NoProfile -NonInteractive -File "'+$BootstrapPath+'" -PackageZip "'+$Zip+'" -InstallDir "'+$Install+'" -SshHost "fixture.invalid" -ServerHostKey "'+$HostKey+'"'
+  $ZipArgument=if([string]::IsNullOrWhiteSpace($Zip)){''}else{' -PackageZip "'+$Zip+'"'}
+  $Start.Arguments='-NoProfile -NonInteractive -File "'+$BootstrapPath+'"'+$ZipArgument+' -InstallDir "'+$Install+'" -SshHost "fixture.invalid" -ServerHostKey "'+$HostKey+'"'
   $Start.UseShellExecute=$false;$Start.RedirectStandardOutput=$true;$Start.RedirectStandardError=$true
   $Process=New-Object Diagnostics.Process
   $Process.StartInfo=$Start
   try {
     [void]$Process.Start();$Out=$Process.StandardOutput.ReadToEndAsync();$Err=$Process.StandardError.ReadToEndAsync()
-    if (-not $Process.WaitForExit(45000)) { $Process.Kill();throw 'OWNER_SETUP_TEST_TIMEOUT' }
+    if (-not $Process.WaitForExit($(if([string]::IsNullOrWhiteSpace($Zip)){210000}else{45000}))) { $Process.Kill();throw 'OWNER_SETUP_TEST_TIMEOUT' }
     if (-not $Out.Wait(1000) -or -not $Err.Wait(1000)) { throw 'OWNER_SETUP_TEST_IO_TIMEOUT' }
     Assert-QA ([string]::IsNullOrWhiteSpace($Err.Result)) ('stderr '+$Err.Result)
     Assert-QA ($Out.Result.Length -lt 16384) 'bounded stdout'
@@ -81,6 +82,57 @@ try {
   Assert-QA ($Again.value.publicKey -ceq $R.value.publicKey -and (Get-FileHash -LiteralPath $Private).Hash -ceq $PrivateHash) 'no rekey'
   Assert-QA ((Get-FileHash -LiteralPath $Config).Hash -ceq $ConfigHash -and (Get-Item -LiteralPath $Config).LastWriteTimeUtc.Ticks -eq $ConfigTime) 'no config rewrite'
   $Passed++
+
+  # Neither a corrupt nor a different private identity may reuse an old public receipt.
+  [byte[]]$PrivateBefore=[IO.File]::ReadAllBytes($Private)
+  $PrivateAclBefore=Get-Acl -LiteralPath $Private
+  [IO.File]::WriteAllBytes($Private,[byte[]]@())
+  try {
+    $R=Run-Setup $Install
+    Blocked $R 'EXISTING_INSTALLATION_CHANGED'
+    Assert-QA ((Get-Item -LiteralPath $Private).Length -eq 0) 'corrupt private preimage preserved'
+  } finally {[IO.File]::WriteAllBytes($Private,$PrivateBefore);Set-Acl -LiteralPath $Private -AclObject $PrivateAclBefore}
+  $Passed++
+
+  $Other=Join-Path $Root 'other_ed25519'
+  $Start=New-Object Diagnostics.ProcessStartInfo
+  $Start.FileName=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) 'System32\OpenSSH\ssh-keygen.exe'
+  $Start.Arguments='-q -t ed25519 -N "" -f "'+$Other+'"';$Start.UseShellExecute=$false;$Start.CreateNoWindow=$true;$Start.RedirectStandardInput=$true;$Start.RedirectStandardOutput=$true;$Start.RedirectStandardError=$true
+  $Gen=New-Object Diagnostics.Process;$Gen.StartInfo=$Start
+  try {[void]$Gen.Start();$Gen.StandardInput.Close();if(-not $Gen.WaitForExit(15000)){$Gen.Kill();throw 'ALTERNATE_KEY_FIXTURE_TIMEOUT'};Assert-QA ($Gen.ExitCode -eq 0) 'alternate real private key fixture'} finally {$Gen.Dispose()}
+  [byte[]]$OtherBytes=[IO.File]::ReadAllBytes($Other)
+  [IO.File]::WriteAllBytes($Private,$OtherBytes)
+  try {
+    $DifferentHash=(Get-FileHash -LiteralPath $Private).Hash
+    $R=Run-Setup $Install
+    Blocked $R 'EXISTING_INSTALLATION_CHANGED'
+    Assert-QA ((Get-FileHash -LiteralPath $Private).Hash -ceq $DifferentHash) 'different private preimage preserved'
+  } finally {[IO.File]::WriteAllBytes($Private,$PrivateBefore);Set-Acl -LiteralPath $Private -AclObject $PrivateAclBefore}
+  $Passed++
+
+  Remove-Item -LiteralPath $Private
+  [void](New-Item -ItemType SymbolicLink -Path $Private -Target $Other)
+  try {
+    $R=Run-Setup $Install
+    Blocked $R 'EXISTING_INSTALLATION_CHANGED'
+    Assert-QA ((Get-Item -LiteralPath $Private -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) 'private reparse preserved'
+  } finally {[IO.File]::Delete($Private);[IO.File]::WriteAllBytes($Private,$PrivateBefore);Set-Acl -LiteralPath $Private -AclObject $PrivateAclBefore}
+  $Passed++
+
+  foreach ($AclPath in @($Private,(Join-Path $Install 'keys'))) {
+    $BeforeAcl=Get-Acl -LiteralPath $AclPath
+    $BroaderAcl=Get-Acl -LiteralPath $AclPath
+    $Everyone=New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
+    $Rule=New-Object Security.AccessControl.FileSystemAccessRule($Everyone,[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Allow)
+    [void]$BroaderAcl.AddAccessRule($Rule);Set-Acl -LiteralPath $AclPath -AclObject $BroaderAcl
+    try {
+      $R=Run-Setup $Install
+      Blocked $R 'EXISTING_INSTALLATION_CHANGED'
+      $Now=Get-Acl -LiteralPath $AclPath
+      Assert-QA (@($Now.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object {$_.IdentityReference.Value -ceq 'S-1-1-0'}).Count -gt 0) 'broader ACL preserved rather than reset'
+    } finally {Set-Acl -LiteralPath $AclPath -AclObject $BeforeAcl}
+    $Passed++
+  }
 
   # The owner invokes downloaded code in memory; it must return to its caller.
   $DriverData=Join-Path $Root 'memory-driver.json'
@@ -166,6 +218,12 @@ try {
   $Invalid=Join-Path $Root 'invalid-host-key';$R=Run-Setup $Invalid $PackageZip 'ssh-ed25519 NOT_A_VALID_PUBLIC_KEY'
   Blocked $R 'SERVER_HOST_KEY_INVALID'
   Assert-QA (-not (Test-Path -LiteralPath $Invalid)) 'invalid pin before destination changes'
+  $Passed++
+
+  Clear-Bindings
+  $DownloadInstall=Join-Path $Root 'anonymous-default-download'
+  $R=Run-Setup $DownloadInstall ''
+  Assert-QA ($R.exitCode -eq 0 -and $R.value.state -ceq 'INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' -and $R.value.packageSha256 -ceq '9afb6a22737f3b2d446684240051477096924e55e4d688b5f2feef70e8ef3350') 'actual default anonymous Windows download'
   $Passed++
 
   [pscustomobject]@{schema='RBRIDGE_WINDOWS_OWNER_SETUP_QA_V1';state='PASS';passed=$Passed;powerShellMajor=$PSVersionTable.PSVersion.Major;actualOwnerWindows='NOT_RUN';sshAuthenticatedSessions=0;browserSends=0} | ConvertTo-Json -Compress
