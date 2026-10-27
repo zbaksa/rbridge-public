@@ -95,6 +95,9 @@ function Check-Installed([string]$ExpectedConfigSha) {
   Need ($Utf8.GetString((Read-Small $KnownHosts 4096)) -ceq $KnownLine) 'EXISTING_INSTALLATION_CHANGED'
   [void](Read-Small ($Identity+'.pub') 4096)
   Need (Test-Path -LiteralPath $Identity -PathType Leaf) 'EXISTING_INSTALLATION_CHANGED'
+  $Manifest=$Utf8.GetString((Read-Small $ManifestPath 16384)) | ConvertFrom-Json
+  Need ($Manifest -is [pscustomobject] -and @($Manifest.PSObject.Properties).Count -eq 5 -and $Manifest.name -is [string] -and $Manifest.name -ceq $NativeName -and $Manifest.type -is [string] -and $Manifest.type -ceq 'stdio' -and $Manifest.path -is [string] -and [string]::Equals($Manifest.path,$ExePath,[StringComparison]::OrdinalIgnoreCase)) 'EXISTING_INSTALLATION_CHANGED'
+  Need ($Manifest.allowed_origins -is [array] -and $Manifest.allowed_origins.Count -eq 1 -and $Manifest.allowed_origins[0] -is [string] -and $Manifest.allowed_origins[0] -ceq ('chrome-extension://'+$ExtensionId+'/')) 'EXISTING_INSTALLATION_CHANGED'
   foreach ($Key in $RegistryPaths) {Need ([string]::Equals((Binding $Key),$ManifestPath,[StringComparison]::OrdinalIgnoreCase)) 'EXISTING_INSTALLATION_CHANGED'}
   return Hash-Bytes $Raw
 }
@@ -151,7 +154,8 @@ try {
     $Stage=Join-Path $LocalData ('cocwin-native-owner-stage-'+[Guid]::NewGuid().ToString('N'))
     [void](New-Item -ItemType Directory -Path $Stage);$OwnStage=$true
     if ([string]::IsNullOrWhiteSpace($PackageZip)) {
-      $PackageZip=Join-Path $Stage 'qualified-package.zip';$StageFiles+=$PackageZip
+      $PackageZip=Join-Path $Stage 'qualified-package.zip'
+      New-Bytes $PackageZip ([byte[]]@());$StageFiles+=$PackageZip
       Invoke-WebRequest -UseBasicParsing -Uri $PackageUrl -OutFile $PackageZip -TimeoutSec 180
     }
     $PackageZip=Local-Path $PackageZip
@@ -170,8 +174,9 @@ try {
         try {Need ((Hash-Stream $Stream) -ceq $File.sha) 'PACKAGE_ENTRY_INVALID'} finally {$Stream.Dispose()}
       }
       foreach ($File in $Files | Where-Object {$null -ne $_.output}) {
-        $Destination=Join-Path $Stage $File.output;$StageFiles+=$Destination
+        $Destination=Join-Path $Stage $File.output
         $Output=New-Object IO.FileStream($Destination,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $StageFiles+=$Destination
         $Stream=$Archive.GetEntry($File.name).Open()
         try {$Stream.CopyTo($Output);$Output.Flush($true)} finally {$Stream.Dispose();$Output.Dispose()}
       }

@@ -45,7 +45,7 @@ function Run-Setup([string]$Install,[string]$Zip=$PackageZip,[string]$HostKey=$S
   } finally { $Process.Dispose() }
 }
 function Blocked($Result,[string]$Reason) {
-  Assert-QA ($Result.exitCode -eq 2 -and $Result.value.status -ceq 'BLOCKED' -and $Result.value.reason -ceq $Reason) ('expected blocked '+$Reason)
+  Assert-QA ($Result.exitCode -eq 2 -and $Result.value.status -ceq 'BLOCKED' -and $Result.value.reason -ceq $Reason) ('expected blocked '+$Reason+'; actual exit='+$Result.exitCode+' status='+$Result.value.status+' state='+$Result.value.state+' reason='+$Result.value.reason)
 }
 try {
   Clear-Bindings
@@ -80,6 +80,18 @@ try {
   Assert-QA ($Again.exitCode -eq 0 -and $Again.value.state -ceq 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') 'idempotent state'
   Assert-QA ($Again.value.publicKey -ceq $R.value.publicKey -and (Get-FileHash -LiteralPath $Private).Hash -ceq $PrivateHash) 'no rekey'
   Assert-QA ((Get-FileHash -LiteralPath $Config).Hash -ceq $ConfigHash -and (Get-Item -LiteralPath $Config).LastWriteTimeUtc.Ticks -eq $ConfigTime) 'no config rewrite'
+  $Passed++
+
+  # Unknown local receipt fields must never be echoed by a successful rerun.
+  $SetupReceipt=Join-Path $Install '.owner-setup-v1.json'
+  $ReceiptBefore=[IO.File]::ReadAllText($SetupReceipt)
+  $LocalReceipt=$ReceiptBefore | ConvertFrom-Json
+  $LocalReceipt | Add-Member -NotePropertyName unexpectedSecret -NotePropertyValue 'DO_NOT_ECHO_LOCAL_RECEIPT_SECRET'
+  [IO.File]::WriteAllText($SetupReceipt,($LocalReceipt | ConvertTo-Json -Depth 8),$Utf8)
+  $R=Run-Setup $Install
+  Assert-QA ($R.exitCode -eq 0 -and $R.value.status -ceq 'PASS') 'consistent installation still accepted'
+  Assert-QA (-not $R.raw.Contains('DO_NOT_ECHO_LOCAL_RECEIPT_SECRET') -and @($R.value.PSObject.Properties.Name) -notcontains 'unexpectedSecret') 'untrusted receipt fields not echoed'
+  [IO.File]::WriteAllText($SetupReceipt,$ReceiptBefore,$Utf8)
   $Passed++
 
   $ManifestFile=Join-Path $Install 'com.cocwin.rbridge_chat_v1.json'
