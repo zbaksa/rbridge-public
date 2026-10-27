@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: rbridge-topplan-w1-windows-${{ github.ref }}
@@ -31,6 +32,19 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Verify first owner setup under Windows PowerShell 5.1
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Zip = Join-Path $env:RUNNER_TEMP 'rbridge-qualified-34871a7.zip'
+          gh api repos/zbaksa/rbridge-public/actions/artifacts/12718921370/zip > $Zip
+          if ($LASTEXITCODE -ne 0) { throw 'QUALIFIED_PACKAGE_DOWNLOAD_FAILED' }
+          if ((Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9afb6a22737f3b2d446684240051477096924e55e4d688b5f2feef70e8ef3350') { throw 'QUALIFIED_PACKAGE_SHA_MISMATCH' }
+          powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-setup-windows.ps1 -PackageZip $Zip
+          if ($LASTEXITCODE -ne 0) { throw 'OWNER_SETUP_QA_FAILED' }
 
       - name: Verify read-only owner facts under Windows PowerShell 5.1
         shell: pwsh
