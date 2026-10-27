@@ -21,10 +21,37 @@ function Snapshot {
   })
   return ($Rows | ConvertTo-Json -Depth 4 -Compress)
 }
-function Run-Upgrade([string]$Pin=$ConfigSha,[string]$Directory=$Install,[string]$Zip=$NewZip,[bool]$Race=$false,[bool]$DownloadAlias=$false) {
+function Acl-QA([string]$Sddl) {
+  $Raw=New-Object Security.AccessControl.RawSecurityDescriptor($Sddl)
+  $Raw.SetFlags([Security.AccessControl.ControlFlags]([int]$Raw.ControlFlags -band (-bnot [int][Security.AccessControl.ControlFlags]::DiscretionaryAclAutoInherited)))
+  return $Raw.GetSddlForm([Security.AccessControl.AccessControlSections]::All)
+}
+function Run-Upgrade([string]$Pin=$ConfigSha,[string]$Directory=$Install,[string]$Zip=$NewZip,[bool]$Race=$false,[bool]$DownloadAlias=$false,[string]$Fault='') {
   $Collected=New-Object 'Collections.Generic.List[string]'
   $Arguments=@{ExpectedConfigSha256=$Pin;InstallDir=$Directory;PackageZip=$Zip}
-  if ($Race -or $DownloadAlias) {
+  $script:FaultTriggered=$false;$script:CandidateSwapBlocked=$false;$script:TargetSwapBlocked=$false;$script:ParentSwapBlocked=$false
+  if ($Fault -ne '') {
+    function Get-Acl {
+      param([string]$LiteralPath)
+      if ($Fault -eq 'LOCKS' -and $Phase -eq 'READONLY_CANDIDATE_CHECK' -and $LiteralPath -ceq $NewExe) {
+        try {[IO.File]::Move($LiteralPath,($LiteralPath+'.foreign-move'))} catch [IO.IOException] {$script:CandidateSwapBlocked=$true}
+        try {[IO.Directory]::Move($Stage,($Stage+'.foreign-move'))} catch [IO.IOException] {$script:ParentSwapBlocked=$true}
+      }
+      if ($Fault -eq 'LOCKS' -and $Phase -eq 'EXECUTABLE_PUBLICATION' -and $LiteralPath -ceq $Exe) {
+        try {[IO.File]::Move($LiteralPath,($LiteralPath+'.foreign-move'))} catch [IO.IOException] {$script:TargetSwapBlocked=$true}
+      }
+      if (-not $script:FaultTriggered -and $Fault -eq 'SLOT_COLLISION' -and $Phase -eq 'ORIGINAL_BACKED_UP') {
+        $script:FaultTriggered=$true;[IO.File]::WriteAllText($Exe,'foreign target appeared between no-overwrite renames')
+      }
+      if (-not $script:FaultTriggered -and $Fault -in @('ROLLBACK','ROLLBACK_COLLISION') -and $Phase -eq 'INSTALLED_READBACK' -and $LiteralPath -ceq $Exe) {
+        $script:FaultTriggered=$true
+        if ($Fault -eq 'ROLLBACK_COLLISION') {[IO.File]::WriteAllText((Join-Path $Stage 'rejected.exe'),'foreign recovery destination')}
+        throw 'INJECTED_READBACK_FAILURE'
+      }
+      return Microsoft.PowerShell.Security\Get-Acl -LiteralPath $LiteralPath
+    }
+  }
+  if ($Race -or $DownloadAlias -or $Fault -eq 'FOREIGN_STAGE') {
     [void]$Arguments.Remove('PackageZip')
     function Invoke-WebRequest {
       param([switch]$UseBasicParsing,[string]$Uri,[string]$OutFile,[int]$TimeoutSec)
@@ -41,9 +68,14 @@ function Run-Upgrade([string]$Pin=$ConfigSha,[string]$Directory=$Install,[string
         }
         return [pscustomobject]@{RawContentStream=(New-Object IO.MemoryStream(,[IO.File]::ReadAllBytes($NewZip)))}
       }
-      [IO.File]::Copy($NewZip,$OutFile,$true)
+      if ($Fault -eq 'FOREIGN_STAGE') {
+        [IO.File]::WriteAllText((Join-Path $Stage 'rejected.exe'),'foreign stage file must survive cleanup')
+        return [pscustomobject]@{RawContentStream=(New-Object IO.MemoryStream(,[IO.File]::ReadAllBytes($NewZip)))}
+      }
+      if ($OutFile -ne '') {[IO.File]::Copy($NewZip,$OutFile,$true)}
       $Key=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($Registry,$true)
       try {$Key.SetValue('','C:\foreign-native-host.json',[Microsoft.Win32.RegistryValueKind]::String)} finally {$Key.Dispose()}
+      if ($OutFile -eq '') {return [pscustomobject]@{RawContentStream=(New-Object IO.MemoryStream(,[IO.File]::ReadAllBytes($NewZip)))}}
     }
   }
   try {& ([scriptblock]::Create($Source)) @Arguments | ForEach-Object {[void]$Collected.Add([string]$_)}}
@@ -51,7 +83,19 @@ function Run-Upgrade([string]$Pin=$ConfigSha,[string]$Directory=$Install,[string
   return (($Collected -join "`n") | ConvertFrom-Json)
 }
 function Need-Old {if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $OldSha) {throw 'UPGRADE_NEGATIVE_CHANGED_EXECUTABLE'}}
-$Before=Snapshot;$ExeAcl=(Get-Acl -LiteralPath $Exe).Sddl
+function Restore-OldFixture {
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $OldZip=[IO.Compression.ZipFile]::OpenRead((Join-Path $Root 'qualified.zip'))
+  try {$In=$OldZip.GetEntry('dist-native-host/rbridge-native-host.exe').Open();$Out=[IO.File]::Open($Exe,[IO.FileMode]::Create,[IO.FileAccess]::Write);try {$In.CopyTo($Out)} finally {$In.Dispose();$Out.Dispose()}} finally {$OldZip.Dispose()}
+}
+function Restore-RetainedFixture([string]$Evidence) {
+  $Backup=Join-Path $Evidence 'original.exe'
+  Need-QA ((Get-FileHash -LiteralPath $Backup -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $OldSha) 'ORIGINAL_BACKUP_NOT_RETAINED'
+  [IO.File]::Delete($Exe);[IO.File]::Move($Backup,$Exe)
+  foreach ($Name in @('qualified.exe','rejected.exe')) {if (Test-Path -LiteralPath (Join-Path $Evidence $Name)) {[IO.File]::Delete((Join-Path $Evidence $Name))}}
+  [IO.Directory]::Delete($Evidence,$false)
+}
+$Before=Snapshot;$ExeAcl=Acl-QA (Get-Acl -LiteralPath $Exe).Sddl
 $Private=Join-Path $Install 'keys\owner_ed25519';$PrivateBytes=[IO.File]::ReadAllBytes($Private);$AliasChanged=$false
 try {
   $R=Run-Upgrade $ConfigSha $Install $NewZip $false $true
@@ -67,9 +111,7 @@ try {
 # A safe in-memory download also performs the legitimate upgrade; reconstruct
 # only this disposable fixture's old executable before the remaining cases.
 if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $NewSha) {
-  Add-Type -AssemblyName System.IO.Compression
-  $OldZip=[IO.Compression.ZipFile]::OpenRead((Join-Path $Root 'qualified.zip'))
-  try {$In=$OldZip.GetEntry('dist-native-host/rbridge-native-host.exe').Open();$Out=[IO.File]::Open($Exe,[IO.FileMode]::Create,[IO.FileAccess]::Write);try {$In.CopyTo($Out)} finally {$In.Dispose();$Out.Dispose()}} finally {$OldZip.Dispose()}
+  Restore-OldFixture
 }
 $R=Run-Upgrade ('0'*64)
 Need-QA ($R.status -ceq 'BLOCKED' -and -not $R.executablePublicationStarted) 'WRONG_CONFIG_PIN_ACCEPTED';Need-Old
@@ -111,11 +153,36 @@ try {$R=Run-Upgrade $ConfigSha $Install $NewZip $true;Need-QA ($R.status -ceq 'B
   try {$Key.SetValue('',$Manifest,[Microsoft.Win32.RegistryValueKind]::String)} finally {$Key.Dispose()}
 }
 Need-QA ((Snapshot) -ceq $Before) 'NEGATIVE_UPGRADE_CHANGED_PROTECTED_FILES'
-$R=Run-Upgrade
+$R=Run-Upgrade $ConfigSha $Install $NewZip $false $false 'ROLLBACK'
+Need-QA ($script:FaultTriggered -and $R.status -ceq 'BLOCKED' -and $R.state -ceq 'ROLLED_BACK' -and (Snapshot) -ceq $Before) 'SUCCESSFUL_PUBLICATION_ROLLBACK_NOT_PROVEN';Need-Old
+$R=Run-Upgrade $ConfigSha $Install $NewZip $false $false 'ROLLBACK_COLLISION'
+Need-QA ($script:FaultTriggered -and $R.status -ceq 'BLOCKED' -and $R.state -ceq 'UNCERTAIN' -and (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $NewSha -and (Get-Content -LiteralPath (Join-Path $R.evidenceStage 'rejected.exe') -Raw) -ceq 'foreign recovery destination') 'UNSAFE_ROLLBACK_DID_NOT_RETAIN_EVIDENCE'
+Restore-RetainedFixture $R.evidenceStage;Need-Old
+$R=Run-Upgrade $ConfigSha $Install $NewZip $false $false 'SLOT_COLLISION'
+Need-QA ($script:FaultTriggered -and $R.status -ceq 'BLOCKED' -and $R.state -ceq 'UNCERTAIN' -and (Get-Content -LiteralPath $Exe -Raw) -ceq 'foreign target appeared between no-overwrite renames') 'FOREIGN_TARGET_WAS_OVERWRITTEN'
+Restore-RetainedFixture $R.evidenceStage;Need-Old
+$R=Run-Upgrade $ConfigSha $Install $NewZip $false $false 'FOREIGN_STAGE'
+Need-QA ($R.status -ceq 'PASS' -and $R.state -ceq 'UPGRADED' -and $R.stageCleanup -ceq 'PRESERVED' -and (Get-Content -LiteralPath (Join-Path $R.evidenceStage 'rejected.exe') -Raw) -ceq 'foreign stage file must survive cleanup') 'FOREIGN_STAGE_CONTENT_WAS_DELETED'
+[IO.File]::Delete((Join-Path $R.evidenceStage 'rejected.exe'));[IO.Directory]::Delete($R.evidenceStage,$false);Restore-OldFixture;Need-Old
+$R=Run-Upgrade $ConfigSha $Install $NewZip $false $false 'LOCKS'
 if ($R.status -cne 'PASS') {throw ('QUALIFIED_UPGRADE_DID_NOT_SUCCEED receipt='+($R | ConvertTo-Json -Compress)+' expectedAcl='+$ExeAcl+' actualAcl='+(Get-Acl -LiteralPath $Exe).Sddl+' downloadAliasChanged='+$AliasChanged)}
 Need-QA ($R.status -ceq 'PASS' -and $R.state -ceq 'UPGRADED' -and $R.executableSha256 -ceq $NewSha -and $R.v3Configured -eq $false -and $R.browserSends -eq 0) 'QUALIFIED_UPGRADE_DID_NOT_SUCCEED'
-Need-QA ((Snapshot) -ceq $Before -and (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $NewSha -and (Get-Acl -LiteralPath $Exe).Sddl -ceq $ExeAcl) 'UPGRADE_CHANGED_KEY_CONFIG_HISTORY_OR_ACL'
+Need-QA ($script:CandidateSwapBlocked -and $script:TargetSwapBlocked -and $script:ParentSwapBlocked) 'CANDIDATE_TARGET_OR_PARENT_SUBSTITUTION_NOT_BLOCKED'
+Need-QA ((Snapshot) -ceq $Before -and (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $NewSha -and (Acl-QA (Get-Acl -LiteralPath $Exe).Sddl) -ceq $ExeAcl) 'UPGRADE_CHANGED_KEY_CONFIG_HISTORY_OR_ACL'
 $R=Run-Upgrade $ConfigSha $Install 'C:\qualified-upgrade-must-not-download.zip'
 Need-QA ($R.status -ceq 'PASS' -and $R.state -ceq 'ALREADY_QUALIFIED' -and -not $R.executablePublicationStarted -and (Snapshot) -ceq $Before) 'UPGRADE_RERUN_NOT_IDEMPOTENT'
 Need-QA (-not $AliasChanged) 'DOWNLOAD_OUTPUT_SUBSTITUTION_CHANGED_PRIVATE_KEY'
+foreach ($Case in @(@{pin=$ConfigSha;code=0;status='PASS'},@{pin=('0'*64);code=2;status='BLOCKED'})) {
+  $Start=New-Object Diagnostics.ProcessStartInfo
+  $Start.FileName=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $Start.Arguments='-NoProfile -NonInteractive -File "'+$Updater+'" -ExpectedConfigSha256 '+$Case.pin
+  $Start.UseShellExecute=$false;$Start.CreateNoWindow=$true;$Start.RedirectStandardInput=$true;$Start.RedirectStandardOutput=$true;$Start.RedirectStandardError=$true
+  $Child=New-Object Diagnostics.Process;$Child.StartInfo=$Start
+  try {
+    [void]$Child.Start();$Child.StandardInput.Close();$Out=$Child.StandardOutput.ReadToEndAsync();$Err=$Child.StandardError.ReadToEndAsync()
+    Need-QA ($Child.WaitForExit(30000) -and $Out.Wait(1000) -and $Err.Wait(1000)) 'UPGRADER_FILE_MODE_TIMEOUT'
+    $Value=$Out.Result | ConvertFrom-Json
+    Need-QA ($Child.ExitCode -eq $Case.code -and $Value.status -ceq $Case.status -and [string]::IsNullOrWhiteSpace($Err.Result) -and (Snapshot) -ceq $Before) 'UPGRADER_FILE_MODE_EXIT_OR_PRESERVATION_FAILED'
+  } finally {if (-not $Child.HasExited) {$Child.Kill()};$Child.Dispose()}
+}
 [pscustomobject]@{schema='RBRIDGE_WINDOWS_ORDINARY_USER_UPGRADE_QA_V1';state='PASS';passed=$Passed;administratorToken=$false;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0}

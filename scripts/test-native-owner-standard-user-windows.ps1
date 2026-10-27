@@ -182,7 +182,8 @@ try {
   $Child=New-Object Diagnostics.Process;$Child.StartInfo=$Start
   [void]$Child.Start();$Child.StandardInput.Close()
   $OutTask=$Child.StandardOutput.ReadToEndAsync();$ErrTask=$Child.StandardError.ReadToEndAsync()
-  if (-not $Child.WaitForExit(120000)) {$Child.Kill();throw 'ORDINARY_USER_FIXTURE_TIMEOUT'}
+  $Budget=if ($UpgradePackageZip -ne '') {240000} else {120000}
+  if (-not $Child.WaitForExit($Budget)) {$Child.Kill();throw 'ORDINARY_USER_FIXTURE_TIMEOUT'}
   if (-not $OutTask.Wait(1000) -or -not $ErrTask.Wait(1000)) {throw 'ORDINARY_USER_FIXTURE_IO_TIMEOUT'}
   $Output=$OutTask.Result;$Errors=$ErrTask.Result
   if ($Output.Length -gt 16384 -or $Errors.Length -gt 16384) {throw 'ORDINARY_USER_FIXTURE_OUTPUT_TOO_LARGE'}

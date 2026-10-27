@@ -4,7 +4,7 @@
 
 **Goal:** Update the managed Windows Native executable while preserving its working SSH identity and all configuration/history.
 
-**Architecture:** Fixed qualified artifact, existing first-install provenance and named mutex, one atomic executable replacement with bounded verification/rollback. Existing ordinary-user CI harness carries regression tests.
+**Architecture:** Fixed qualified artifact, existing first-install provenance and named mutex, file-handle publication by two no-overwrite renames with bounded verification/rollback. Existing ordinary-user CI harness carries regression tests.
 
 **Tech Stack:** Windows PowerShell5.1/.NET, existing GitHub/Remote Bridge and CI.
 
@@ -29,8 +29,8 @@
 Files: create scripts/upgrade-native-owner-windows.ps1 and scripts/test-native-owner-upgrade-cases-windows.ps1; extend scripts/test-native-owner-standard-user-windows.ps1 with optional UpgradePackageZip; wire the qualified new archive into .github/workflows/topplan-w1-windows-native-host.yml.
 
 - [ ] Write ordinary-user cases against missing updater; use real old/new qualified archives and existing successful setup fixture.
-- [ ] Observe Windows RED before implementing updater.
-- [ ] Implement fixed archive validation, provenance/config/registration/key snapshots, read-only candidate check and atomic replacement/rollback; no generic execution or migration.
+- [x] Observe Windows RED before implementing updater:40557523236 / QUALIFIED_NATIVE_UPGRADER_NOT_IMPLEMENTED.
+- [ ] Implement fixed archive validation, provenance/config/registration/key snapshots, read-only candidate check and publication/rollback through stable file handles; no generic execution or migration.
 - [ ] Observe ordinary-user cases GREEN and exact-head full Windows/Linux CI; normal RBridge source checks and canonical blob hashes.
 - [ ] One fresh whole-component review; one regression-first fix pass for accepted Important/Critical findings, no re-review.
 - [ ] Integrate exact qualified source, save actual owner SSH PASS and prepare only the necessary pinned Windows update invocation. Actual owner update remains NOT_RUN until its real receipt.
