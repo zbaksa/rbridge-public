@@ -26,6 +26,8 @@ try {
   $Rule=New-Object Security.AccessControl.FileSystemAccessRule($Account.SID,[Security.AccessControl.FileSystemRights]::ReadAndExecute,([Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'),[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
   [void]$Acl.AddAccessRule($Rule);Set-Acl -LiteralPath $Root -AclObject $Acl
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'setup-native-owner-windows.ps1') -Destination (Join-Path $Root 'setup.ps1')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'collect-native-owner-facts-windows.ps1') -Destination (Join-Path $Root 'collect-native-owner-facts-windows.ps1')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'test-native-owner-facts-windows.ps1') -Destination (Join-Path $Root 'test-native-owner-facts-windows.ps1')
   Copy-Item -LiteralPath $PackageZip -Destination (Join-Path $Root 'qualified.zip')
   if ($UpgradePackageZip -ne '') {
     if ((Get-FileHash -LiteralPath $UpgradePackageZip -Algorithm SHA256).Hash.ToLowerInvariant() -cne '0e614e0f143bb49db4e2e2807a9ebde4e6796e5adcf7425ff08762bd240b4af0') {throw 'QUALIFIED_UPGRADE_ZIP_REQUIRED'}
@@ -161,7 +163,9 @@ try {
     $UpgradeQA=& (Join-Path $Root 'upgrade-cases.ps1')
     if ($UpgradeQA.state -cne 'PASS' -or $UpgradeQA.passed -lt 10) {throw 'ORDINARY_USER_UPGRADE_QA_FAILED'}
   }
-  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=13;upgradeQA=$UpgradeQA;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
+  $OwnerFactsQA=(& (Join-Path $Root 'test-native-owner-facts-windows.ps1')) | ConvertFrom-Json
+  if ($OwnerFactsQA.state -cne 'PASS' -or $OwnerFactsQA.passed -lt 18) {throw 'ORDINARY_USER_OWNER_FACTS_QA_FAILED'}
+  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=13;upgradeQA=$UpgradeQA;ownerFactsPassed=$OwnerFactsQA.passed;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
   exit 0
 } catch {
   $Records=@($Error | Select-Object -First 12 | ForEach-Object {[pscustomobject]@{type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult;id=$_.FullyQualifiedErrorId;line=$_.InvocationInfo.ScriptLineNumber;message=$_.Exception.Message}})
@@ -203,4 +207,3 @@ try {
   if (Test-Path -LiteralPath $Root) {Remove-Item -LiteralPath $Root -Recurse -Force}
 }
 exit $ExitCode
-

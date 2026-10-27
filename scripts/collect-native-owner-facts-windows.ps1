@@ -23,6 +23,9 @@ Native-Method 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) ([Typ
 Native-Method 'GetFileInformationByHandle' ([bool]) ([Type[]]@([Microsoft.Win32.SafeHandles.SafeFileHandle],[IntPtr]))
 Native-Method 'GetFinalPathNameByHandleW' ([uint32]) ([Type[]]@([Microsoft.Win32.SafeHandles.SafeFileHandle],[Text.StringBuilder],[uint32],[uint32]))
 Native-Method 'GetVolumeNameForVolumeMountPointW' ([bool]) ([Type[]]@([string],[Text.StringBuilder],[uint32]))
+Native-Method 'FindFirstFileW' ([IntPtr]) ([Type[]]@([string],[IntPtr]))
+Native-Method 'FindNextFileW' ([bool]) ([Type[]]@([IntPtr],[IntPtr]))
+Native-Method 'FindClose' ([bool]) ([Type[]]@([IntPtr]))
 $Native = $Builder.CreateType()
 function Local-Path([string]$Path) {
   if ($Path.Length -gt 1024 -or $Path -notmatch '^[A-Za-z]:[\\/]' -or $Path -match '[\r\n\x00]') { throw 'NONLOCAL_PATH_REJECTED' }
@@ -62,7 +65,7 @@ function Open-LocalRead([string]$Full,[bool]$DirectoryOnly) {
       $Length = $Native::GetFinalPathNameByHandleW($Handle,$Final,1100,1)
       if ($Length -eq 0 -or $Length -ge 1100 -or -not [string]::Equals($Final.ToString().TrimEnd('\'),$Current.TrimEnd('\'),[StringComparison]::OrdinalIgnoreCase)) { throw 'UNTRUSTED_DIRECTORY' }
     }
-    return @{handles=$Held;leaf=$Held[$Held.Count-1]}
+    return @{handles=$Held;leaf=$Held[$Held.Count-1];path=$Current}
   } catch {
     foreach ($Handle in $Held) { $Handle.Dispose() }
     throw
@@ -73,6 +76,66 @@ function Observe-Directory([string]$Path) {
   try { $Read=Open-LocalRead (Local-Path $Path) $true; return 'PRESENT_METADATA_ONLY' }
   catch { if ($_.Exception.Message -in @('ABSENT','UNTRUSTED_DIRECTORY','NONLOCAL_PATH_REJECTED')) { return $_.Exception.Message }; return 'UNAVAILABLE' }
   finally { if ($null -ne $Read) { foreach ($Handle in $Read.handles) { $Handle.Dispose() } } }
+}
+function Observe-DirectorySnapshot([string]$Path,[int]$Limit,[bool]$KeepNames=$false) {
+  $Read=$null;$Find=[IntPtr]::Zero;$Data=[IntPtr]::Zero
+  try {
+    $Read=Open-LocalRead (Local-Path $Path) $true
+    # WIN32_FIND_DATAW is metadata only. Never open a child file or parse its contents.
+    # Enumerate through the validated volume GUID while every ancestor remains held.
+    $Data=[Runtime.InteropServices.Marshal]::AllocHGlobal(592)
+    $Find=$Native::FindFirstFileW($Read.path.TrimEnd('\')+'\*',$Data)
+    $Code=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    $Count=0;$Partial=$false;$Names=New-Object 'Collections.Generic.List[string]'
+    if ($Find.ToInt64() -eq -1) {
+      if ($Code -ne 2) {throw 'UNAVAILABLE'}
+    } else {
+      while ($true) {
+        $Name=[Runtime.InteropServices.Marshal]::PtrToStringUni([IntPtr]::Add($Data,44))
+        if ($Name -cne '.' -and $Name -cne '..') {
+          $Count++
+          if ($Count -gt $Limit) {$Partial=$true;break}
+          if ($KeepNames) {[void]$Names.Add($Name)}
+        }
+        $More=$Native::FindNextFileW($Find,$Data)
+        $Code=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if (-not $More) {if ($Code -ne 18) {throw 'UNAVAILABLE'};break}
+      }
+    }
+    $State=if ($Partial) {'BOUNDED_PARTIAL'} elseif ($Count -eq 0) {'EMPTY_SNAPSHOT'} else {'RETAINED_METADATA_ONLY'}
+    $Fact=@{state=$State;authority='NOT_AUTHENTICATED'}
+    if ($Partial) {$Fact.entryCountAtLeast=$Count} else {$Fact.entryCount=$Count}
+    if ($KeepNames) {$Fact.names=@($Names.ToArray())}
+    return $Fact
+  } catch {
+    $State=if ($_.Exception.Message -in @('ABSENT','UNTRUSTED_DIRECTORY','NONLOCAL_PATH_REJECTED')) {$_.Exception.Message} else {'UNAVAILABLE'}
+    return @{state=$State;authority='NOT_AUTHENTICATED'}
+  } finally {
+    if ($Find -ne [IntPtr]::Zero -and $Find.ToInt64() -ne -1) {[void]$Native::FindClose($Find)}
+    if ($Data -ne [IntPtr]::Zero) {[Runtime.InteropServices.Marshal]::FreeHGlobal($Data)}
+    if ($null -ne $Read) {foreach ($Handle in $Read.handles) {$Handle.Dispose()}}
+  }
+}
+function Observe-ChromeProfiles {
+  $Report=@{state='NOT_EVALUATED';extensionId='ebibbijpegoankenmggdnehpoadcophk';profileCoverage='DEFAULT_AND_NUMBERED_PROFILES_ONLY';runtimeBinding='NOT_OBSERVED';profiles=@()}
+  try {
+    $Root=Local-Path (Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data')
+    $Snapshot=Observe-DirectorySnapshot $Root 256 $true
+    $Report.state=$Snapshot.state
+    if ($Snapshot.state -notin @('EMPTY_SNAPSHOT','RETAINED_METADATA_ONLY','BOUNDED_PARTIAL')) {return $Report}
+    $Candidates=@($Snapshot.names | Where-Object {$_ -ceq 'Default' -or $_ -cmatch '^Profile [0-9]{1,9}$'} | Sort-Object)
+    $Report.state=if ($Snapshot.state -ceq 'BOUNDED_PARTIAL' -or $Candidates.Count -gt 32) {'BOUNDED_PARTIAL'} else {'PRESENT_METADATA_ONLY'}
+    foreach ($Name in @($Candidates | Select-Object -First 32)) {
+      $ProfileRoot=Join-Path $Root $Name
+      $Profile=@{directory=$Name;state=(Observe-Directory $ProfileRoot);extensionPayload=@{state='NOT_EVALUATED'};extensionStorage=@{state='NOT_EVALUATED'}}
+      if ($Profile.state -ceq 'PRESENT_METADATA_ONLY') {
+        $Profile.extensionPayload=Observe-DirectorySnapshot (Join-Path $ProfileRoot ('Extensions\'+$Report.extensionId)) 256
+        $Profile.extensionStorage=Observe-DirectorySnapshot (Join-Path $ProfileRoot ('Local Extension Settings\'+$Report.extensionId)) 256
+      }
+      $Report.profiles+=@($Profile)
+    }
+  } catch {$Report.state='UNAVAILABLE'}
+  return $Report
 }
 function Observe-File([string]$Path,[long]$Limit,[bool]$KeepBytes) {
   $Read=$null;$Stream=$null;$Hasher=$null
@@ -143,7 +206,7 @@ function V3-Metadata($Value) {
 }
 $KeyPaths = New-Object 'Collections.Generic.List[string]'
 $KeyPaths.Add((Join-Path $env:USERPROFILE '.ssh\rbridge_ed25519.pub'))
-$Install = @{state='ABSENT';directory=$InstallDir}
+$Install = @{state='ABSENT';directory=$InstallDir;nativeHistory=@{state='NOT_EVALUATED';authority='NOT_AUTHENTICATED'}}
 try {
   $InstallDir=Local-Path $InstallDir
   $Install.directory=$InstallDir
@@ -158,6 +221,7 @@ try {
       try {
         try { $Config=$Utf8.GetString($Document.rawBytes) | ConvertFrom-Json -ErrorAction Stop } catch { throw 'MALFORMED_CONFIG' }
         if ($Config -isnot [pscustomobject] -or $Config.schema -cne 'RBRIDGE_NATIVE_HOST_CONFIG_V1') { throw 'UNRECOGNIZED_CONFIG' }
+        if ($Config.eventStoreRoot -is [string]) {$Install.nativeHistory=Observe-DirectorySnapshot $Config.eventStoreRoot 256}
         $Install.config=@{state='PRESENT_METADATA_ONLY';sha256=$Document.sha256;bytes=$Document.bytes;v3Configured=(@($Config.PSObject.Properties.Name) -contains 'v3')}
         if ($Config.expectedExtensionId -is [string] -and $Config.expectedExtensionId -cmatch '^[a-p]{32}$') { $Install.config.extensionId=$Config.expectedExtensionId }
         if ($Install.config.v3Configured) { $Install.config.v3=V3-Metadata $Config.v3 }
@@ -195,4 +259,4 @@ $Keys=@()
 foreach ($PublicPath in $KeyPaths) { $Keys+=(Public-Key $PublicPath) }
 [pscustomobject]@{schema='COCWIN_RBRIDGE_WINDOWS_OWNER_FACTS_V1';status='COLLECTED_READONLY';
   owner=@{userName=$env:USERNAME;computerName=$env:COMPUTERNAME};installation=$Install;nativeRegistrations=$Registrations;
-  publicKeys=$Keys;peerReadiness='NOT_EVALUATED';filesystemChanges=0;sshConnections=0;browserSends=0} | ConvertTo-Json -Depth 12 -Compress
+  publicKeys=$Keys;chromeProfiles=(Observe-ChromeProfiles);peerReadiness='NOT_EVALUATED';filesystemChanges=0;sshConnections=0;browserSends=0} | ConvertTo-Json -Depth 12 -Compress

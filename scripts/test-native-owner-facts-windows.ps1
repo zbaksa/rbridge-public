@@ -213,6 +213,35 @@ try {
   try {$R=Collect $Install $OwnerProfileFixture;Assert-True ($R.value.chromeProfiles.state -ceq 'UNTRUSTED_DIRECTORY') 'Chrome root junction rejected'} finally {[IO.Directory]::Delete($ChromeRoot);[IO.Directory]::Move($ChromeMoved,$ChromeRoot)}
   $Passed++
 
+  $RaceEvents=Join-Path $Install 'race-events'
+  $RaceEventsMoved=$RaceEvents+'-original'
+  $RaceEventsTarget=$RaceEvents+'-foreign'
+  [void][IO.Directory]::CreateDirectory($RaceEvents)
+  [void][IO.Directory]::CreateDirectory($RaceEventsTarget)
+  Save (Join-Path $RaceEventsTarget 'FOREIGN_ENTRY_MUST_NOT_BE_OBSERVED') 'FOREIGN_HISTORY_PRIVATE_SENTINEL'
+  Save $Config (@{schema='RBRIDGE_NATIVE_HOST_CONFIG_V1';eventStoreRoot=$RaceEvents} | ConvertTo-Json -Compress)
+  $DirectoryRaceCollector=Join-Path $Root 'directory-race-collector.ps1'
+  $CollectorText=[IO.File]::ReadAllText($CollectorPath)
+  $Boundary='    return @{handles=$Held;'
+  Assert-True ($CollectorText.Contains($Boundary)) 'held-directory race boundary'
+  $DirectoryHook=('    if ($DirectoryOnly -and $Full -ceq ''{0}'') {{ try {{ [IO.Directory]::Move(''{0}'',''{1}''); [void](New-Item -ItemType Junction -Path ''{0}'' -Target ''{2}'') }} catch {{}} }}' -f $RaceEvents,$RaceEventsMoved,$RaceEventsTarget)+[Environment]::NewLine+$Boundary
+  Save $DirectoryRaceCollector ($CollectorText.Replace($Boundary,$DirectoryHook))
+  try {
+    $R=Collect $Install $OwnerProfileFixture $DirectoryRaceCollector
+    Assert-True ($R.value.installation.nativeHistory.state -ceq 'EMPTY_SNAPSHOT') 'held history ancestor cannot be replaced before enumeration'
+    Assert-True (-not $R.raw.Contains('FOREIGN_HISTORY_PRIVATE_SENTINEL')) 'foreign history never exported'
+  } finally {
+    if (Test-Path -LiteralPath $RaceEventsMoved) {if ((Get-Item -LiteralPath $RaceEvents).Attributes -band [IO.FileAttributes]::ReparsePoint) {[IO.Directory]::Delete($RaceEvents)}}
+    Save $Config $HistoryConfig
+  }
+  $Passed++
+
+  for ($Index=0;$Index -lt 257;$Index++) {Save (Join-Path $Events ('private-'+$Index)) 'PRIVATE_BOUNDED_HISTORY'}
+  $R=Collect $Install $OwnerProfileFixture
+  Assert-True ($R.value.installation.nativeHistory.state -ceq 'BOUNDED_PARTIAL' -and $R.value.installation.nativeHistory.entryCountAtLeast -eq 257) 'Native enumeration bounded with explicit lower bound'
+  Assert-True (-not $R.raw.Contains('private-') -and -not $R.raw.Contains('PRIVATE_BOUNDED_HISTORY')) 'bounded directory names and contents stay private'
+  $Passed++
+
   [pscustomobject]@{schema='RBRIDGE_WINDOWS_OWNER_FACTS_QA_V1';state='PASS';passed=$Passed;powerShellMajor=$PSVersionTable.PSVersion.Major;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
 } finally {
   if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
