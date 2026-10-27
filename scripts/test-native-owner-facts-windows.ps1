@@ -20,6 +20,7 @@ function Collect([string]$Install,[string]$Profile,[string]$RunCollector=$Collec
   $Start.RedirectStandardOutput = $true
   $Start.RedirectStandardError = $true
   $Start.EnvironmentVariables['USERPROFILE'] = $Profile
+  $Start.EnvironmentVariables['LOCALAPPDATA'] = (Join-Path $Profile 'AppData\Local')
   $Process = New-Object Diagnostics.Process
   $Process.StartInfo = $Start
   try {
@@ -136,6 +137,80 @@ try {
   } finally {
     if ((Get-Item -LiteralPath $RaceInstall -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($RaceInstall) }
   }
+  $Passed++
+
+  # C100: these are metadata snapshots, never event-history/browser authority.
+  $Events=Join-Path $Install 'events'
+  $ChromeRoot=Join-Path $OwnerProfileFixture 'AppData\Local\Google\Chrome\User Data'
+  $ExtensionId='ebibbijpegoankenmggdnehpoadcophk'
+  $HistoryConfig=@{schema='RBRIDGE_NATIVE_HOST_CONFIG_V1';expectedExtensionId=$ExtensionId;eventStoreRoot=$Events} | ConvertTo-Json -Compress
+  Save $Config $HistoryConfig
+  $R=Collect $Install $OwnerProfileFixture
+  Assert-True ($R.value.installation.nativeHistory.state -ceq 'ABSENT') 'missing history observed without creation'
+  Assert-True ($R.value.chromeProfiles.state -ceq 'ABSENT') 'missing Chrome root observed without creation'
+  Assert-True (-not (Test-Path -LiteralPath $Events) -and -not (Test-Path -LiteralPath $ChromeRoot)) 'no history or browser directory creation'
+  $Passed++
+
+  [void][IO.Directory]::CreateDirectory($Events)
+  [void][IO.Directory]::CreateDirectory((Join-Path $ChromeRoot 'Default'))
+  $R=Collect $Install $OwnerProfileFixture
+  Assert-True ($R.value.installation.nativeHistory.state -ceq 'EMPTY_SNAPSHOT' -and $R.value.installation.nativeHistory.entryCount -eq 0) 'empty history is snapshot only'
+  Assert-True ($R.value.installation.nativeHistory.authority -ceq 'NOT_AUTHENTICATED') 'empty snapshot grants no authority'
+  Assert-True ($R.value.chromeProfiles.profiles.Count -eq 1 -and $R.value.chromeProfiles.profiles[0].directory -ceq 'Default') 'Default profile observed'
+  Assert-True ($R.value.chromeProfiles.profiles[0].extensionPayload.state -ceq 'ABSENT' -and $R.value.chromeProfiles.profiles[0].extensionStorage.state -ceq 'ABSENT') 'missing extension directories'
+  Assert-True ($R.value.chromeProfiles.runtimeBinding -ceq 'NOT_OBSERVED') 'payload metadata never invents runtime binding'
+  $Passed++
+
+  $EventSentinel=Join-Path $Events 'events.ndjson'
+  $DbSentinel=Join-Path $ChromeRoot ('Default\Local Extension Settings\'+$ExtensionId+'\000003.log')
+  Save $EventSentinel 'PRIVATE_NATIVE_EVENT_SENTINEL_MUST_NOT_BE_READ'
+  Save $DbSentinel 'PRIVATE_BROWSER_DB_SENTINEL_MUST_NOT_BE_READ'
+  [void][IO.Directory]::CreateDirectory((Join-Path $ChromeRoot ('Default\Extensions\'+$ExtensionId+'\0.1.0')))
+  [void][IO.Directory]::CreateDirectory((Join-Path $ChromeRoot 'Profile 2'))
+  [void][IO.Directory]::CreateDirectory((Join-Path $ChromeRoot 'SECRET_PROFILE_LABEL_MUST_NOT_BE_ECHOED'))
+  $EventHash=(Get-FileHash -LiteralPath $EventSentinel -Algorithm SHA256).Hash
+  $DbHash=(Get-FileHash -LiteralPath $DbSentinel -Algorithm SHA256).Hash
+  $EventLock=New-Object IO.FileStream($EventSentinel,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+  $DbLock=New-Object IO.FileStream($DbSentinel,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+  try {$R=Collect $Install $OwnerProfileFixture} finally {$DbLock.Dispose();$EventLock.Dispose()}
+  Assert-True ($R.value.installation.nativeHistory.state -ceq 'RETAINED_METADATA_ONLY' -and $R.value.installation.nativeHistory.entryCount -eq 1) 'retained Native history is never read or reset'
+  $Default=@($R.value.chromeProfiles.profiles | Where-Object {$_.directory -ceq 'Default'})[0]
+  Assert-True ($Default.extensionPayload.state -ceq 'RETAINED_METADATA_ONLY' -and $Default.extensionStorage.state -ceq 'RETAINED_METADATA_ONLY') 'payload and retained storage detected without opening locked database'
+  Assert-True ($R.value.chromeProfiles.profiles.Count -eq 2) 'numbered profiles observed; unrelated directories omitted'
+  foreach ($Secret in @('PRIVATE_NATIVE_EVENT_SENTINEL','PRIVATE_BROWSER_DB_SENTINEL','SECRET_PROFILE_LABEL','events.ndjson','000003.log')) {Assert-True (-not $R.raw.Contains($Secret)) 'private contents and arbitrary leaf names never exported'}
+  Assert-True ((Get-FileHash -LiteralPath $EventSentinel -Algorithm SHA256).Hash -ceq $EventHash -and (Get-FileHash -LiteralPath $DbSentinel -Algorithm SHA256).Hash -ceq $DbHash) 'history and database unchanged'
+  $Passed++
+
+  Save $Config (@{schema='RBRIDGE_NATIVE_HOST_CONFIG_V1';eventStoreRoot='\\facts.invalid\share\events'} | ConvertTo-Json -Compress)
+  $R=Collect $Install $OwnerProfileFixture
+  Assert-True ($R.value.installation.nativeHistory.state -ceq 'NONLOCAL_PATH_REJECTED') 'UNC history rejected before IO'
+  Assert-True (-not $R.raw.Contains('facts.invalid')) 'untrusted history path not echoed'
+  Save $Config (@{schema='not-native';eventStoreRoot=$Events} | ConvertTo-Json -Compress)
+  $R=Collect $Install $OwnerProfileFixture
+  Assert-True ($R.value.installation.nativeHistory.state -ceq 'NOT_EVALUATED') 'unrecognized config never supplies an observation path'
+  Save $Config $HistoryConfig
+  $Passed++
+
+  $HistoryAlias=Join-Path $Install 'event-alias'
+  [void](New-Item -ItemType Junction -Path $HistoryAlias -Target $Events)
+  Save $Config (@{schema='RBRIDGE_NATIVE_HOST_CONFIG_V1';eventStoreRoot=$HistoryAlias} | ConvertTo-Json -Compress)
+  try {$R=Collect $Install $OwnerProfileFixture;Assert-True ($R.value.installation.nativeHistory.state -ceq 'UNTRUSTED_DIRECTORY') 'history junction rejected'} finally {[IO.Directory]::Delete($HistoryAlias)}
+  Save $Config $HistoryConfig
+  $AliasProfile=Join-Path $ChromeRoot 'Profile 7'
+  [void](New-Item -ItemType Junction -Path $AliasProfile -Target (Join-Path $ChromeRoot 'Default'))
+  try {$R=Collect $Install $OwnerProfileFixture;$AliasFact=@($R.value.chromeProfiles.profiles | Where-Object {$_.directory -ceq 'Profile 7'})[0];Assert-True ($AliasFact.state -ceq 'UNTRUSTED_DIRECTORY') 'profile junction rejected'} finally {[IO.Directory]::Delete($AliasProfile)}
+  $Passed++
+
+  for ($Index=3;$Index -lt 38;$Index++) {[void][IO.Directory]::CreateDirectory((Join-Path $ChromeRoot ('Profile '+$Index)))}
+  $R=Collect $Install $OwnerProfileFixture
+  Assert-True ($R.value.chromeProfiles.state -ceq 'BOUNDED_PARTIAL' -and $R.value.chromeProfiles.profiles.Count -eq 32) 'profile output bounded with explicit partial coverage'
+  $Passed++
+
+  # The root must be validated before even harmless directory enumeration.
+  $ChromeMoved=$ChromeRoot+'-original'
+  [IO.Directory]::Move($ChromeRoot,$ChromeMoved)
+  [void](New-Item -ItemType Junction -Path $ChromeRoot -Target $ChromeMoved)
+  try {$R=Collect $Install $OwnerProfileFixture;Assert-True ($R.value.chromeProfiles.state -ceq 'UNTRUSTED_DIRECTORY') 'Chrome root junction rejected'} finally {[IO.Directory]::Delete($ChromeRoot);[IO.Directory]::Move($ChromeMoved,$ChromeRoot)}
   $Passed++
 
   [pscustomobject]@{schema='RBRIDGE_WINDOWS_OWNER_FACTS_QA_V1';state='PASS';passed=$Passed;powerShellMajor=$PSVersionTable.PSVersion.Major;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
