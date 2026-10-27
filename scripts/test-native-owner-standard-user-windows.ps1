@@ -160,15 +160,23 @@ try {
 }
 '@
   [IO.File]::WriteAllText((Join-Path $Root 'driver.ps1'),$Driver,$Utf8)
-  $Credential=New-Object Management.Automation.PSCredential(($env:COMPUTERNAME+'\'+$Name),$Password)
-  $PowerShell=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-  $Child=Start-Process -FilePath $PowerShell -Credential $Credential -LoadUserProfile -WorkingDirectory $Root -ArgumentList ('-NoProfile -NonInteractive -File "'+(Join-Path $Root 'driver.ps1')+'"') -RedirectStandardOutput (Join-Path $Root 'stdout.json') -RedirectStandardError (Join-Path $Root 'stderr.txt') -PassThru
+  # Retain the actual process/handle: Start-Process -Credential may lose ExitCode.
+  $Start=New-Object Diagnostics.ProcessStartInfo
+  $Start.FileName=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $Start.Arguments='-NoProfile -NonInteractive -File "'+(Join-Path $Root 'driver.ps1')+'"'
+  $Start.WorkingDirectory=$Root;$Start.UseShellExecute=$false;$Start.CreateNoWindow=$true
+  $Start.UserName=$Name;$Start.Domain=$env:COMPUTERNAME;$Start.Password=$Password;$Start.LoadUserProfile=$true
+  $Start.RedirectStandardInput=$true;$Start.RedirectStandardOutput=$true;$Start.RedirectStandardError=$true
+  $Child=New-Object Diagnostics.Process;$Child.StartInfo=$Start
+  [void]$Child.Start();$Child.StandardInput.Close()
+  $OutTask=$Child.StandardOutput.ReadToEndAsync();$ErrTask=$Child.StandardError.ReadToEndAsync()
   if (-not $Child.WaitForExit(120000)) {$Child.Kill();throw 'ORDINARY_USER_FIXTURE_TIMEOUT'}
-  $Output=[IO.File]::ReadAllText((Join-Path $Root 'stdout.json'))
-  $Errors=[IO.File]::ReadAllText((Join-Path $Root 'stderr.txt'))
+  if (-not $OutTask.Wait(1000) -or -not $ErrTask.Wait(1000)) {throw 'ORDINARY_USER_FIXTURE_IO_TIMEOUT'}
+  $Output=$OutTask.Result;$Errors=$ErrTask.Result
+  if ($Output.Length -gt 16384 -or $Errors.Length -gt 16384) {throw 'ORDINARY_USER_FIXTURE_OUTPUT_TOO_LARGE'}
   Write-Output $Output
   if (-not [string]::IsNullOrWhiteSpace($Errors)) {throw 'ORDINARY_USER_UNEXPECTED_STDERR'}
-  if ($Child.ExitCode -ne 0) {throw 'ORDINARY_USER_SETUP_REGRESSION'}
+  if ($Child.ExitCode -ne 0) {throw ('ORDINARY_USER_SETUP_REGRESSION_EXIT_'+$Child.ExitCode)}
   $Value=$Output | ConvertFrom-Json
   if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 13) {throw 'ORDINARY_USER_PROOF_INVALID'}
   $ExitCode=0
