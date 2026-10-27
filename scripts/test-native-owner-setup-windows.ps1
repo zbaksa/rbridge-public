@@ -71,7 +71,7 @@ try {
   $Rules=$Acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])
   Assert-QA (@($Rules | Where-Object {$_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $_.IdentityReference.Value -notin @($Sid,'S-1-5-18')}).Count -eq 0) 'key directory restricted to current owner and SYSTEM'
   foreach ($Key in $Keys) { $Reg=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($Key);try { Assert-QA ($Reg.GetValue('') -ceq (Join-Path $Install 'com.cocwin.rbridge_chat_v1.json')) 'registry readback' } finally {$Reg.Dispose()} }
-  foreach ($File in @('manifest.json','contentScript.js','serviceWorker.js')) { Assert-QA (Test-Path -LiteralPath (Join-Path $Install ('extension\'+$File)) -PathType Leaf) 'extension staging' }
+  Assert-QA ($R.value.browserExtension -ceq 'NOT_INSTALLED_BY_THIS_STEP') 'no legacy extension deployment'
   $Config=Join-Path $Install 'rbridge-native-host.config.json'
   $ConfigHash=(Get-FileHash -LiteralPath $Config).Hash;$PrivateHash=(Get-FileHash -LiteralPath $Private).Hash;$ConfigTime=(Get-Item -LiteralPath $Config).LastWriteTimeUtc.Ticks
   $Passed++
@@ -80,6 +80,18 @@ try {
   Assert-QA ($Again.exitCode -eq 0 -and $Again.value.state -ceq 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') 'idempotent state'
   Assert-QA ($Again.value.publicKey -ceq $R.value.publicKey -and (Get-FileHash -LiteralPath $Private).Hash -ceq $PrivateHash) 'no rekey'
   Assert-QA ((Get-FileHash -LiteralPath $Config).Hash -ceq $ConfigHash -and (Get-Item -LiteralPath $Config).LastWriteTimeUtc.Ticks -eq $ConfigTime) 'no config rewrite'
+  $Passed++
+
+  $ManifestFile=Join-Path $Install 'com.cocwin.rbridge_chat_v1.json'
+  $ManifestBefore=[IO.File]::ReadAllText($ManifestFile)
+  $ManifestChanged=($ManifestBefore | ConvertFrom-Json)
+  $ManifestChanged.path='C:\untrusted\other.exe'
+  [IO.File]::WriteAllText($ManifestFile,($ManifestChanged | ConvertTo-Json),$Utf8)
+  $ChangedManifestHash=(Get-FileHash -LiteralPath $ManifestFile).Hash
+  $R=Run-Setup $Install
+  Blocked $R 'EXISTING_INSTALLATION_CHANGED'
+  Assert-QA ((Get-FileHash -LiteralPath $ManifestFile).Hash -ceq $ChangedManifestHash) 'changed manifest preserved'
+  [IO.File]::WriteAllText($ManifestFile,$ManifestBefore,$Utf8)
   $Passed++
 
   $Changed=[IO.File]::ReadAllText($Config)+[Environment]::NewLine

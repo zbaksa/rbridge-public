@@ -24,9 +24,9 @@
 ## Task1: Bootstrap, tests and durable qualified package
 Files: create scripts/setup-native-owner-windows.ps1 and scripts/test-native-owner-setup-windows.ps1; modify .github/workflows/topplan-w1-windows-native-host.yml; same spec/plan. Existing installer stays unchanged.
 Interfaces: consumes exact qualified ZIP and validated caller public host key; produces COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1 with real public identity and explicit NOT_RUN live gates. CI consumes `-PackageZip <original archive>`; publisher consumes successful Windows qualification and publishes original ZIP without rebuilding it.
-- [ ] Write eight-case real Windows harness; insert bounded read-only artifact download/verification and harness step in existing Windows CI. Publish tests first; expected RED OWNER_SETUP_IMPLEMENTATION_ABSENT.
+- [ ] Write nine-case real Windows harness; insert bounded read-only artifact download/verification and harness step in existing Windows CI. Publish tests first; expected RED OWNER_SETUP_IMPLEMENTATION_ABSENT.
 - [ ] Implement validated package staging, same installer mutex, dedicated key/ACL/known-host preparation, unchanged installer invocation, readback/receipt and no-write consistent rerun. Fresh returns INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT; rerun returns ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT.
-- [ ] GREEN all eight Windows cases plus existing facts/native suites/11installer tests; actual1027 type/lint/build/diff and full exact-head Linux/Windows CI.
+- [ ] GREEN all nine Windows cases plus existing facts/native suites/11installer tests; actual1027 type/lint/build/diff and full exact-head Linux/Windows CI.
 - [ ] Add narrow immutable archive publication job gated on Windows success, content-write only there; inspect created public release/download bytes separately from source/CI claims.
 - [ ] One fresh whole-component review; Critical/Important one RED/GREEN fix pass with suite; Minor ledger. Qualified-head integration with expected-head lease, exact readback and tracker19281.
 - [ ] Save owner facts and live server host-key proof privately; supply only the unavoidable owner Windows invocation after all available qualification. Real owner install/auth/V3/CHAT remain NOT_RUN until actual subsequent receipts.
