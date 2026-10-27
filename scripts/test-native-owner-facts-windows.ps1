@@ -1,6 +1,7 @@
 [CmdletBinding()]
-param([string]$CollectorPath = (Join-Path $PSScriptRoot 'collect-native-owner-facts-windows.ps1'))
+param([string]$CollectorPath = '')
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($CollectorPath)) { $CollectorPath = Join-Path $PSScriptRoot 'collect-native-owner-facts-windows.ps1' }
 if (-not (Test-Path -LiteralPath $CollectorPath -PathType Leaf)) { throw 'COLLECTOR_IMPLEMENTATION_ABSENT' }
 $Root = Join-Path ([IO.Path]::GetTempPath()) ('rbridge-owner-facts-test-'+[Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($Root)
@@ -39,10 +40,10 @@ function Collect([string]$Install,[string]$Profile) {
   } finally { $Process.Dispose() }
 }
 try {
-  $Home = Join-Path $Root 'profile'
-  [void][IO.Directory]::CreateDirectory($Home)
+  $OwnerProfileFixture = Join-Path $Root 'profile'
+  [void][IO.Directory]::CreateDirectory($OwnerProfileFixture)
   $Install = Join-Path $Root 'absent'
-  $R = Collect $Install $Home
+  $R = Collect $Install $OwnerProfileFixture
   Assert-True ($R.value.installation.state -eq 'ABSENT') 'absent install'
   Assert-True (@($R.value.publicKeys).Count -eq 1 -and $R.value.publicKeys[0].state -eq 'ABSENT') 'absent public key'
   Assert-True (-not (Test-Path -LiteralPath $Install)) 'absent directory not created'
@@ -52,14 +53,14 @@ try {
   $Config = Join-Path $Install 'rbridge-native-host.config.json'
   $Exe = Join-Path $Install 'rbridge-native-host.exe'
   Save $Exe 'NOT_AN_EXECUTABLE_SHOULD_NEVER_RUN'
-  $Private = Join-Path $Home '.ssh\rbridge_ed25519'
+  $Private = Join-Path $OwnerProfileFixture '.ssh\rbridge_ed25519'
   Save $Private 'PRIVATE_KEY_SENTINEL_MUST_NEVER_BE_READ_OR_ECHOED'
   Save ($Private+'.pub') 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER COMMENT_SENTINEL_MUST_NOT_BE_ECHOED'
   $RawConfig = '{"schema":"RBRIDGE_NATIVE_HOST_CONFIG_V1","expectedExtensionId":"ebibbijpegoankenmggdnehpoadcophk","eventStoreRoot":"C:\\facts-events","ssh":{"sshPath":"C:\\Windows\\System32\\OpenSSH\\ssh.exe","host":"aether-engine","port":22,"user":"rbridge","identityFile":"'+$Private.Replace('\','\\')+'","knownHostsFile":"C:\\known_hosts"},"unexpectedSecret":"CONFIG_SECRET_SENTINEL_MUST_NEVER_BE_ECHOED"}'
   Save $Config $RawConfig
   $Before = (Get-FileHash -LiteralPath $Config -Algorithm SHA256).Hash
   $Lock = New-Object IO.FileStream($Private,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
-  try { $R = Collect $Install $Home } finally { $Lock.Dispose() }
+  try { $R = Collect $Install $OwnerProfileFixture } finally { $Lock.Dispose() }
   Assert-True ($R.value.installation.state -eq 'PRESENT_METADATA_ONLY') 'present install'
   Assert-True ($R.value.installation.config.state -eq 'PRESENT_METADATA_ONLY') 'present config'
   Assert-True ($R.value.publicKeys[0].state -eq 'PUBLIC_KEY_OBSERVED') 'public key'
@@ -69,26 +70,35 @@ try {
   Assert-True ((Get-FileHash -LiteralPath $Config -Algorithm SHA256).Hash -eq $Before) 'config preserved'
   $Passed++
 
+  $RemoteConfig = @{schema='RBRIDGE_NATIVE_HOST_CONFIG_V1';ssh=@{host='aether-engine';port=22;user='rbridge';identityFile='\\facts.invalid\share\key'}} | ConvertTo-Json -Depth 4
+  Save $Config $RemoteConfig
+  $R = Collect $Install $OwnerProfileFixture
+  Assert-True ($R.value.installation.config.keyPathState -eq 'NONLOCAL_PATH_REJECTED') 'UNC path rejected before probing'
+  Assert-True (@($R.value.publicKeys).Count -eq 1) 'remote key not added'
+  Assert-True (-not $R.raw.Contains('facts.invalid')) 'untrusted path not echoed'
+  Save $Config $RawConfig
+  $Passed++
+
   Save ($Private+'.pub') '-----BEGIN OPENSSH PRIVATE KEY----- PRIVATE_SENTINEL'
-  $R = Collect $Install $Home
+  $R = Collect $Install $OwnerProfileFixture
   Assert-True ($R.value.publicKeys[0].state -eq 'UNRECOGNIZED_PUBLIC_KEY') 'private bytes rejected'
   Assert-True (-not $R.raw.Contains('PRIVATE_SENTINEL')) 'private bytes not echoed'
   $Passed++
 
   Save $Config '{"schema":"bad","unexpectedSecret":"BAD_JSON_SECRET"}'
-  $R = Collect $Install $Home
+  $R = Collect $Install $OwnerProfileFixture
   Assert-True ($R.value.installation.config.state -eq 'UNRECOGNIZED_CONFIG') 'unknown schema'
   Assert-True (-not $R.raw.Contains('BAD_JSON_SECRET')) 'unknown fields not echoed'
   $Passed++
 
   Save $Config '{"broken":"MALFORMED_SECRET'
-  $R = Collect $Install $Home
+  $R = Collect $Install $OwnerProfileFixture
   Assert-True ($R.value.installation.config.state -eq 'MALFORMED_CONFIG') 'malformed config'
   Assert-True (-not $R.raw.Contains('MALFORMED_SECRET')) 'parse error sanitized'
   $Passed++
 
   Save $Config ('x'*65537)
-  $R = Collect $Install $Home
+  $R = Collect $Install $OwnerProfileFixture
   Assert-True ($R.value.installation.config.state -eq 'UNTRUSTED_FILE') 'oversize config'
   $Passed++
 
@@ -96,8 +106,11 @@ try {
   [void][IO.Directory]::CreateDirectory($Target)
   $Alias = Join-Path $Root 'junction-install'
   [void](New-Item -ItemType Junction -Path $Alias -Target $Target)
-  $R = Collect $Alias $Home
+  $R = Collect $Alias $OwnerProfileFixture
   Assert-True ($R.value.installation.state -eq 'UNTRUSTED_DIRECTORY') 'reparse install rejected'
+  [void][IO.Directory]::CreateDirectory((Join-Path $Target 'nested'))
+  $R = Collect (Join-Path $Alias 'nested') $OwnerProfileFixture
+  Assert-True ($R.value.installation.state -eq 'UNTRUSTED_DIRECTORY') 'ancestor reparse rejected'
   [IO.Directory]::Delete($Alias)
   $Passed++
 
