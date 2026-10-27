@@ -35,6 +35,10 @@ jobs:
       - name: Verify native Windows SSH launch paths
         run: npm run test:ssh-paths
 
+      - name: Verify read-only owner facts under Windows PowerShell 5.1
+        shell: pwsh
+        run: powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-facts-windows.ps1
+
       - name: Verify first owner setup under Windows PowerShell 5.1
         shell: pwsh
         run: |
@@ -50,10 +54,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'STANDARD_USER_SETUP_QA_FAILED' }
           powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-setup-windows.ps1 -PackageZip $Zip
           if ($LASTEXITCODE -ne 0) { throw 'OWNER_SETUP_QA_FAILED' }
-
-      - name: Verify read-only owner facts under Windows PowerShell 5.1
-        shell: pwsh
-        run: powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-facts-windows.ps1
 
       - name: Verify portable V3 Native result store
         run: npm run test:v3:native-results
@@ -140,4 +140,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/publish-qualified-windows-package.sh
-

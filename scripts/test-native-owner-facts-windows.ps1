@@ -228,7 +228,7 @@ try {
   Save $DirectoryRaceCollector ($CollectorText.Replace($Boundary,$DirectoryHook))
   try {
     $R=Collect $Install $OwnerProfileFixture $DirectoryRaceCollector
-    Assert-True ($R.value.installation.nativeHistory.state -ceq 'EMPTY_SNAPSHOT') 'held history ancestor cannot be replaced before enumeration'
+    Assert-True ($R.value.installation.nativeHistory.state -ceq 'EMPTY_SNAPSHOT') ('held history ancestor cannot be replaced before enumeration; observed='+$R.value.installation.nativeHistory.state+'; config='+$R.value.installation.config.state+'; originalMoved='+(Test-Path -LiteralPath $RaceEventsMoved))
     Assert-True (-not $R.raw.Contains('FOREIGN_HISTORY_PRIVATE_SENTINEL')) 'foreign history never exported'
   } finally {
     if (Test-Path -LiteralPath $RaceEventsMoved) {if ((Get-Item -LiteralPath $RaceEvents).Attributes -band [IO.FileAttributes]::ReparsePoint) {[IO.Directory]::Delete($RaceEvents)}}
