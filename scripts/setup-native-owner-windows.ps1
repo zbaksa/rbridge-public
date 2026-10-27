@@ -101,6 +101,10 @@ function Check-Installed([string]$ExpectedConfigSha) {
   foreach ($Key in $RegistryPaths) {Need ([string]::Equals((Binding $Key),$ManifestPath,[StringComparison]::OrdinalIgnoreCase)) 'EXISTING_INSTALLATION_CHANGED'}
   return Hash-Bytes $Raw
 }
+function Public-Result([string]$State,[string]$ConfigDigest,$PublicIdentity) {
+  # Construct a fixed public projection; never return an owner-editable receipt document.
+  return [pscustomobject]@{schema='COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1';status='PASS';state=$State;packageSourceSha=$PackageSource;packageSha256=$PackageSha;executableSha256=$ExeSha;configSha256=$ConfigDigest;directory=$InstallDir;sshHost=$SshHost;sshPort=$SshPort;serverHostKey=$ServerHostKey;serverFingerprint=$Server.fingerprint;publicKey=$PublicIdentity.publicKey;fingerprint=$PublicIdentity.fingerprint;identityFile=$Identity;knownHostsFile=$KnownHosts;extensionId=$ExtensionId;browserExtension='NOT_INSTALLED_BY_THIS_STEP';v3Configured=$false;sshAuthentication='NOT_RUN';browserAcceptance='NOT_RUN';browserSends=0}
+}
 function Run-Bounded([string]$Exe,[string]$Arguments,[int]$Timeout) {
   $Start=New-Object Diagnostics.ProcessStartInfo
   $Start.FileName=$Exe;$Start.Arguments=$Arguments;$Start.UseShellExecute=$false;$Start.CreateNoWindow=$true
@@ -141,12 +145,12 @@ try {
     try {
       $Saved=$Utf8.GetString((Read-Small $ReceiptPath 16384)) | ConvertFrom-Json
       Need ($Saved -is [pscustomobject]) 'EXISTING_INSTALLATION_CHANGED'
-      foreach ($Name in @('schema','sourceSha','packageSha256','executableSha256','configSha256','sshHost','serverHostKey','publicKey','fingerprint','directory')) {Need ($Saved.$Name -is [string]) 'EXISTING_INSTALLATION_CHANGED'}
-      Need ($Saved.schema -ceq 'COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1' -and $Saved.sourceSha -ceq $PackageSource -and $Saved.packageSha256 -ceq $PackageSha -and $Saved.executableSha256 -ceq $ExeSha -and $Saved.directory -ceq $InstallDir -and $Saved.sshHost -ceq $SshHost -and $Saved.serverHostKey -ceq $ServerHostKey -and $Saved.sshPort -is [int] -and $Saved.sshPort -eq $SshPort) 'EXISTING_INSTALLATION_CHANGED'
+      foreach ($Name in @('schema','packageSourceSha','packageSha256','executableSha256','configSha256','sshHost','serverHostKey','publicKey','fingerprint','directory')) {Need ($Saved.$Name -is [string]) 'EXISTING_INSTALLATION_CHANGED'}
+      Need ($Saved.schema -ceq 'COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1' -and $Saved.packageSourceSha -ceq $PackageSource -and $Saved.packageSha256 -ceq $PackageSha -and $Saved.executableSha256 -ceq $ExeSha -and $Saved.directory -ceq $InstallDir -and $Saved.sshHost -ceq $SshHost -and $Saved.serverHostKey -ceq $ServerHostKey -and $Saved.sshPort -is [int] -and $Saved.sshPort -eq $SshPort) 'EXISTING_INSTALLATION_CHANGED'
       $ConfigSha=Check-Installed $Saved.configSha256
       $Public=Public-Key ($Utf8.GetString((Read-Small ($Identity+'.pub') 4096))) 'EXISTING_INSTALLATION_CHANGED'
       Need ($Public.publicKey -ceq $Saved.publicKey -and $Public.fingerprint -ceq $Saved.fingerprint) 'EXISTING_INSTALLATION_CHANGED'
-      $Result=$Saved;$Result.state='ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT';$ExitCode=0
+      $Result=Public-Result 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' $ConfigSha $Public;$ExitCode=0
     } catch {throw 'EXISTING_INSTALLATION_CHANGED'}
   } else {
     foreach ($Key in $RegistryPaths) {Need ($null -eq (Binding $Key)) 'NATIVE_REGISTRATION_ALREADY_PRESENT'}
@@ -209,7 +213,7 @@ try {
     $ConfigSha=Check-Installed ''
     $Checked=(Run-Bounded $ExePath ('--check-config "'+$ConfigPath+'"') 15000) | ConvertFrom-Json
     Need ($Checked -is [pscustomobject] -and $Checked.schema -is [string] -and $Checked.schema -ceq 'RBRIDGE_NATIVE_CONFIG_CHECK_V1' -and $Checked.status -ceq 'PASS' -and $Checked.activated -is [bool] -and -not $Checked.activated -and $Checked.v3Configured -is [bool] -and -not $Checked.v3Configured -and $Checked.sourceSha256 -is [string] -and $Checked.sourceSha256 -ceq $ConfigSha) 'NATIVE_CONFIG_READBACK_INVALID'
-    $Result=[pscustomobject]@{schema='COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1';status='PASS';state='INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT';sourceSha=$PackageSource;packageSha256=$PackageSha;executableSha256=$ExeSha;configSha256=$ConfigSha;directory=$InstallDir;sshHost=$SshHost;sshPort=$SshPort;serverHostKey=$ServerHostKey;serverFingerprint=$Server.fingerprint;publicKey=$Public.publicKey;fingerprint=$Public.fingerprint;identityFile=$Identity;knownHostsFile=$KnownHosts;extensionId=$ExtensionId;browserExtension='NOT_INSTALLED_BY_THIS_STEP';v3Configured=$false;sshAuthentication='NOT_RUN';browserAcceptance='NOT_RUN';browserSends=0}
+    $Result=Public-Result 'INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' $ConfigSha $Public
     New-Bytes $ReceiptPath ($Utf8.GetBytes(($Result | ConvertTo-Json -Depth 6 -Compress)))
     $ExitCode=0
   }
