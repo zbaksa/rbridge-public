@@ -1,10 +1,17 @@
 import {M0_LIMITS,canonicalJson} from '../domain/rbridgeChatCore.js';
+import {win32} from 'node:path';
 
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
 const SAFE_TOKEN=/^[A-Za-z0-9._:-]+$/;
 const FIXED_REMOTE_COMMAND='rbridge-chat-stdio-v1';
 function fail(code:string):never{throw new Error(code);}
-function absolutePath(value:string,code:string):string{if(typeof value!=='string'||!value.startsWith('/')||value.startsWith('//')||value.includes('\0')||/[\r\n]/u.test(value))fail(code);return value;}
+function absolutePath(value:string,code:string):string{
+  if(typeof value!=='string'||value.includes('\0')||/[\r\n]/u.test(value))fail(code);
+  if(process.platform==='win32'){
+    if(!/^[A-Za-z]:\\/.test(value)||win32.normalize(value)!==value||value.slice(2).includes(':'))fail(code);
+  }else if(!value.startsWith('/')||value.startsWith('//'))fail(code);
+  return value;
+}
 
 export interface SshStdioLaunchConfig{
   sshPath:string;
