@@ -1,5 +1,6 @@
 import {lstat,readFile,realpath} from 'node:fs/promises';
 import {isAbsolute,resolve} from 'node:path';
+import {createHash} from 'node:crypto';
 import type {NativeHostRuntimeConfigV1} from './nativeHostRuntime.js';
 import {parseV3Scope,requireV3Peer,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
 import {NativeV3PeerAuthority,type NativeV3HistoryAnchor} from './nativeV3PeerAuthority.js';
@@ -69,11 +70,12 @@ export function parseNativeHostConfigV1(input:unknown):NativeHostConfigFileV1{
     ...(v3===undefined?{}:{v3}),
   };
 }
-export async function loadNativeHostConfigV1(path:string):Promise<NativeHostConfigFileV1>{
+export async function loadNativeHostConfigDocumentV1(path:string):Promise<{config:NativeHostConfigFileV1;sourceSha256:string}>{
   const exactPath=abs(path,'RBRIDGE_NATIVE_CONFIG_PATH_INVALID');
   const info=await lstat(exactPath).catch(()=>fail('RBRIDGE_NATIVE_CONFIG_NOT_FOUND'));
   if(info.isSymbolicLink()||!info.isFile()||info.size<2||info.size>65536||!privateMode(info.mode))fail('RBRIDGE_NATIVE_CONFIG_FILE_INVALID');
   if(!samePath(await realpath(exactPath),exactPath))fail('RBRIDGE_NATIVE_CONFIG_FILE_INVALID');
-  let value:unknown;try{value=JSON.parse(await readFile(exactPath,'utf8'));}catch{fail('RBRIDGE_NATIVE_CONFIG_JSON_INVALID');}
-  return parseNativeHostConfigV1(value);
+  let value:unknown,bytes:Buffer;try{bytes=await readFile(exactPath);value=JSON.parse(bytes.toString('utf8'));}catch{fail('RBRIDGE_NATIVE_CONFIG_JSON_INVALID');}
+  return {config:parseNativeHostConfigV1(value),sourceSha256:createHash('sha256').update(bytes).digest('hex')};
 }
+export async function loadNativeHostConfigV1(path:string):Promise<NativeHostConfigFileV1>{return (await loadNativeHostConfigDocumentV1(path)).config;}

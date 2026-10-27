@@ -1,10 +1,21 @@
 import {M0_LIMITS,canonicalJson} from '../domain/rbridgeChatCore.js';
+import {win32} from 'node:path';
 
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
 const SAFE_TOKEN=/^[A-Za-z0-9._:-]+$/;
 const FIXED_REMOTE_COMMAND='rbridge-chat-stdio-v1';
 function fail(code:string):never{throw new Error(code);}
-function absolutePath(value:string,code:string):string{if(typeof value!=='string'||!value.startsWith('/')||value.startsWith('//')||value.includes('\0')||/[\r\n]/u.test(value))fail(code);return value;}
+function absolutePath(value:string,code:string):string{
+  if(typeof value!=='string'||value.includes('\0')||/[\r\n]/u.test(value))fail(code);
+  if(process.platform==='win32'){
+    if(!/^[A-Za-z]:\\/.test(value)||win32.normalize(value)!==value||value.slice(2).includes(':'))fail(code);
+    for(const part of value.slice(3).split('\\')){
+      const stem=part.split('.')[0]!.replace(/ +$/u,'');
+      if(!part||/[<>:"\/|?*\x00-\x1f]/u.test(part)||/[. ]$/u.test(part)||/^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$/iu.test(stem))fail(code);
+    }
+  }else if(!value.startsWith('/')||value.startsWith('//'))fail(code);
+  return value;
+}
 
 export interface SshStdioLaunchConfig{
   sshPath:string;
@@ -27,9 +38,14 @@ export function buildSshStdioLaunch(config:SshStdioLaunchConfig):SshStdioLaunch{
   if(!Number.isInteger(config.port)||config.port<1||config.port>65535)fail('RBRIDGE_SSH_PORT_INVALID');
   const identity=absolutePath(config.identityFile,'RBRIDGE_SSH_IDENTITY_INVALID');
   const knownHosts=absolutePath(config.knownHostsFile,'RBRIDGE_SSH_KNOWN_HOSTS_INVALID');
+  if(process.platform==='win32'){
+    if(/%|\$\{/u.test(identity))fail('RBRIDGE_SSH_IDENTITY_INVALID');
+    if(/%|\$\{/u.test(knownHosts))fail('RBRIDGE_SSH_KNOWN_HOSTS_INVALID');
+  }
+  const knownHostsOption=process.platform==='win32'?'"'+knownHosts.replaceAll('\\','\\\\')+'"':knownHosts;
   const args=[
     '-T','-oBatchMode=yes','-oStrictHostKeyChecking=yes','-oIdentitiesOnly=yes','-oPasswordAuthentication=no','-oKbdInteractiveAuthentication=no',
-    '-oUserKnownHostsFile='+knownHosts,'-i',identity,'-p',String(config.port),config.user+'@'+config.host,FIXED_REMOTE_COMMAND,
+    '-oUserKnownHostsFile='+knownHostsOption,'-i',identity,'-p',String(config.port),config.user+'@'+config.host,FIXED_REMOTE_COMMAND,
   ];
   return {command,args,options:{shell:false,stdio:['pipe','pipe','pipe']}};
 }

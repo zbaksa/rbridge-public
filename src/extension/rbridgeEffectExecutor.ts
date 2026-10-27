@@ -19,10 +19,10 @@ function assertSend(request:CocwinRbridgeEffectRequestV1,snapshot:BrowserAuthori
 export class BrowserEffectExecutorV3{
   private readonly claimed=new Set<string>();
   constructor(private readonly runtime:BrowserAuthorityRuntimeV1,private readonly effects:RbridgeEffectStoreV1,private readonly delivery:ChatgptDeliveryAdapterV3,private readonly rollover:ChatgptRolloverAdapterV3){this.rollover=rollover.withFinalAdmission(()=>this.effects.assertMutationAvailable());}
-  async executeBrowserEffect(input:CocwinRbridgeEffectRequestV1):Promise<EffectExecutionV3>{
+  async executeBrowserEffect(input:CocwinRbridgeEffectRequestV1,beforeExternalEffect:()=>void=()=>{}):Promise<EffectExecutionV3>{
     const snapshot=snapshotEffectData(input);let clicking=false,request:CocwinRbridgeEffectRequestV1;
     try{
-      request=await parseEffectRequest(snapshot,65536);
+      request=await parseEffectRequest(snapshot,65536);beforeExternalEffect();
       const reserved=await this.effects.read(request.effectId,request.requestDigest);
       if(!reserved||reserved.result||canonicalJson(reserved.request)!==canonicalJson(request))throw Error('RBRIDGE_EFFECT_RESERVATION_REQUIRED');
       this.effects.assertMutationAvailable();if(this.claimed.has(request.effectId))throw Error('RBRIDGE_SEND_RECONCILE_REQUIRED');this.claimed.add(request.effectId);
@@ -35,7 +35,7 @@ export class BrowserEffectExecutorV3{
       if(!current||!binding||binding.status!=='VERIFIED')throw Error('RBRIDGE_BINDING_REQUIRED');
       const expected=target(request);for(const key of Object.keys(expected) as (keyof BrowserTargetObservationV1)[])if(binding[key]!==expected[key])throw Error('BROWSER_BINDING_STALE');
       if(request.effectKind==='RBRIDGE_ROLLOVER'){
-        const bindingReceipt=await this.rollover.createAndBindNextConversation(request.payload.target,request.payload.nextConversationGeneration);
+        const bindingReceipt=await this.rollover.withFinalAdmission(beforeExternalEffect).createAndBindNextConversation(request.payload.target,request.payload.nextConversationGeneration);
         const body={schema:'RBRIDGE_CHAT_ROLLOVER_RECEIPT_V1' as const,receiptId:'rbridge-rollover:'+request.effectId,sessionId:request.sessionId,generation:request.generation,attemptId:request.attemptId,effectId:request.effectId,requestDigest:request.requestDigest,previousConversationId:request.payload.target.conversationId,previousConversationGeneration:request.payload.target.conversationGeneration,bindingReceipt,observedAt:new Date().toISOString()};
         return {state:'VERIFIED',receipt:{...body,sha256:await canonicalDigest(body)},reason:null};
       }
@@ -44,7 +44,7 @@ export class BrowserEffectExecutorV3{
       const staged=await this.runtime.stageSend({sessionId:request.sessionId,generation:request.generation,attemptId:request.attemptId,effectId:request.effectId,challenge:request.payload.challenge,purpose:request.payload.purpose,text:request.payload.text},new Date(),current);
       assertSend(request,staged,current);
       const intent=await this.runtime.persistSendIntentOnly(new Date(),staged);assertSend(request,intent,current);clicking=true;
-      const clicked=await this.runtime.executePersistedSend(new Date(),{guard,expected:intent,beforeClick:()=>{this.effects.assertMutationAvailable();this.delivery.assertAvailable();}});
+      const clicked=await this.runtime.executePersistedSend(new Date(),{guard,expected:intent,beforeClick:()=>{beforeExternalEffect();this.effects.assertMutationAvailable();this.delivery.assertAvailable();}});
       const tx=clicked.activeSend!;
       if(tx.state==='FAILED_BEFORE_CLICK')return {state:'FAILED_SAFE',receipt:await projectSendReceipt(tx),reason:tx.reason??'RBRIDGE_SEND_FAILED_BEFORE_CLICK'};
       for(const key of ['sessionId','generation','attemptId','effectId','challenge','purpose','conversationId','conversationGeneration','writeLeaderEpoch','captureEpoch'] as const)if(tx[key]!==staged.activeSend![key])throw Error('RBRIDGE_SEND_CORRELATION_CHANGED');

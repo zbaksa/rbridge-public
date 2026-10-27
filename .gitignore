@@ -6,3 +6,4 @@ coverage/
 .superpowers/
 dist-extension/
 dist-native-host/
+dist-extension-v3/

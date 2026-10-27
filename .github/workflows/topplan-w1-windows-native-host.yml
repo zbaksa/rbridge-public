@@ -32,6 +32,29 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify native Windows SSH launch paths
+        run: npm run test:ssh-paths
+
+      - name: Verify read-only owner facts under Windows PowerShell 5.1
+        shell: pwsh
+        run: powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-facts-windows.ps1
+
+      - name: Verify first owner setup under Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Zip = Join-Path $env:RUNNER_TEMP 'rbridge-qualified-34871a7.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/zbaksa/rbridge-public/releases/download/cocwin-windows-34871a7/rbridge-windows-34871a7.zip' -OutFile $Zip -TimeoutSec 180
+          if ((Get-Item -LiteralPath $Zip).Length -ne 34356996) { throw 'QUALIFIED_PACKAGE_SIZE_MISMATCH' }
+          if ((Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9afb6a22737f3b2d446684240051477096924e55e4d688b5f2feef70e8ef3350') { throw 'QUALIFIED_PACKAGE_SHA_MISMATCH' }
+          $UpgradeZip = Join-Path $env:RUNNER_TEMP 'rbridge-qualified-11c6723.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/zbaksa/rbridge-public/releases/download/cocwin-windows-11c6723/rbridge-windows-11c6723.zip' -OutFile $UpgradeZip -TimeoutSec 180
+          if ((Get-Item -LiteralPath $UpgradeZip).Length -ne 34357300 -or (Get-FileHash -LiteralPath $UpgradeZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '0e614e0f143bb49db4e2e2807a9ebde4e6796e5adcf7425ff08762bd240b4af0') { throw 'QUALIFIED_UPGRADE_PACKAGE_INVALID' }
+          powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-standard-user-windows.ps1 -PackageZip $Zip -UpgradePackageZip $UpgradeZip
+          if ($LASTEXITCODE -ne 0) { throw 'STANDARD_USER_SETUP_QA_FAILED' }
+          powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-setup-windows.ps1 -PackageZip $Zip
+          if ($LASTEXITCODE -ne 0) { throw 'OWNER_SETUP_QA_FAILED' }
+
       - name: Verify portable V3 Native result store
         run: npm run test:v3:native-results
 
@@ -47,8 +70,19 @@ jobs:
       - name: Build and verify Chrome extension
         run: npm run build:extension
 
+      - name: Verify provisioned V3 startup and separate bundle
+        run: npm run test:v3:startup && npm run test:v3:startup-bundle
+
       - name: Build Windows Native Host SEA
         run: npm run build:native-host:sea
+
+      - name: Verify read-only config check and V3 installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          node dist/tests/w1-v3-native-install.js
+          if ($LASTEXITCODE -ne 0) { throw "NATIVE_CONFIG_CHECK_TEST_FAILED" }
+          & scripts/test-native-v3-install-windows.ps1 -SourceExe dist-native-host/rbridge-native-host.exe
 
       - name: Stage installer
         shell: pwsh
@@ -76,3 +110,33 @@ jobs:
             dist-extension/serviceWorker.js
           if-no-files-found: error
           retention-days: 7
+
+  publish-qualified-windows-package:
+    needs: windows-native-host
+    if: github.event_name == 'push' && github.repository == 'zbaksa/rbridge-public' && github.ref == 'refs/heads/topplan/cocwin092-windows-owner-setup-r1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+
+      - name: Verify publication expiry and conflicting-tag regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --location --silent --show-error --max-time 180 'https://github.com/zbaksa/rbridge-public/releases/download/cocwin-windows-34871a7/rbridge-windows-34871a7.zip' --output "$RUNNER_TEMP/rbridge-qualified-34871a7.zip"
+          node scripts/test-qualified-windows-publication.mjs "$RUNNER_TEMP/rbridge-qualified-34871a7.zip"
+
+      - name: Publish or verify the exact qualified archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/publish-qualified-windows-package.sh

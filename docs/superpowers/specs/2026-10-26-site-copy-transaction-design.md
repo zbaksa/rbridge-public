@@ -1,0 +1,13 @@
+# Exact site Copy transaction component
+
+The immediate missing piece is acquisition of site-provided Markdown without reading a shared clipboard. A real anonymous public ChatGPT page on 26 October 2026 called `Clipboard.write` synchronously from its exact response Copy control. Its text/plain Blob produced the same 5637 bytes and SHA-256 as the earlier site Copy observation. The separate mouse interaction was blocked by an overlay; no complete live automation acceptance is claimed.
+
+Implement one self-contained MAIN-world function in the existing Markdown module. It validates an exact URL and assistant turn, intercepts only synchronous Clipboard.write/writeText calls caused by that control, restores descriptors before awaiting Blob data, and rejects ambiguous, deferred, changed, oversized or unreadable observations. It never reads the clipboard or forwards intercepted writes. A rejected asynchronous site handler may still perform its normal later clipboard write after restoration.
+
+Shared clipboard reads fail provenance, DOM-to-Markdown reconstruction loses source representation, and private React state is unsupported. The chosen component captures the first-party API argument directly. DOM is used only for targeting and stability. No new permission, wire schema or authority is added.
+
+This is an acquisition component, not a complete production adapter. An eventual Chrome.scripting MAIN-world caller must pin the admitted frame/document, live browser authority, current send/capture token and response completion. Existing acquireSiteAssistantMarkdown remains unavailable and SITE_ASSISTANT_MARKDOWN_AVAILABLE_V3 remains false until that integration and authenticated app-shell feasibility are qualified. Startup, Native config, server admission and runtime activation are outside this patch.
+
+Snapshot checks compare the selected document/turn at admission and completion; they do not detect transient changes restored between checks. Full Chrome document and capture authority fences remain mandatory at integration. Real-site rejection diagnosed on 26 October: the same Copy control changes its aria-label to `Response copied`; successful feedback must preserve control identity without requiring its original label. Native ClipboardItem/Blob semantics and fatal UTF-8 byte decoding are required.
+
+Admission requires the exact response Copy control in its ready `Copy response` state. The same control may show `Response copied` during the operation; that feedback does not invalidate its identity. An immediate repeated call while that feedback remains visible returns unavailable; a caller must wait for readiness or use its durable capture replay instead.
