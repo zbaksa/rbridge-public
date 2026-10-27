@@ -45,7 +45,62 @@ try {
   $Private=Join-Path $Install 'keys\owner_ed25519';$Digest=(Get-FileHash -LiteralPath $Private -Algorithm SHA256).Hash
   $Again=(& ([scriptblock]::Create($Source)) -SshHost fixture.invalid -ServerHostKey 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER' | Out-String) | ConvertFrom-Json
   if ($Again.status -cne 'PASS' -or $Again.state -cne 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' -or (Get-FileHash -LiteralPath $Private -Algorithm SHA256).Hash -cne $Digest) {throw 'ORDINARY_USER_RERUN_CHANGED_IDENTITY'}
-  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=2;administratorToken=$Elevated;defaultDirectory=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
+  # This disposable account owns the complete fixture. Retain its real key pair
+  # while reconstructing only the observed pre-install partial directory shape.
+  foreach ($Name in @('.owner-setup-v1.json','rbridge-native-host.exe','rbridge-native-host.config.json','com.cocwin.rbridge_chat_v1.json','keys\known_hosts.cocwin')) {[IO.File]::Delete((Join-Path $Install $Name))}
+  [IO.Directory]::Delete((Join-Path $Install 'events'),$false)
+  foreach ($Key in @('Software\Google\Chrome\NativeMessagingHosts\com.cocwin.rbridge_chat_v1','Software\Microsoft\Edge\NativeMessagingHosts\com.cocwin.rbridge_chat_v1')) {
+    $Reg=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($Key,$true)
+    try {$Reg.DeleteValue('',$false)} finally {$Reg.Dispose()}
+  }
+  $PrivateAcl=Get-Acl -LiteralPath $Private
+  $PrivateAcl.SetAccessRuleProtection($false,$true)
+  [IO.File]::SetAccessControl($Private,$PrivateAcl)
+  function Run-Partial([bool]$Resume) {
+    $Collected=New-Object 'Collections.Generic.List[string]'
+    try {
+      $Args=@{PackageZip=(Join-Path $Root 'qualified.zip');SshHost='fixture.invalid';ServerHostKey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'}
+      if ($Resume) {$Args.ResumeKeyPreparation=$true}
+      & ([scriptblock]::Create($Source)) @Args | ForEach-Object {[void]$Collected.Add([string]$_)}
+    } catch {if ($_.FullyQualifiedErrorId -cne 'COCWIN_RBRIDGE_OWNER_SETUP_BLOCKED') {throw}}
+    return (($Collected -join "`n") | ConvertFrom-Json)
+  }
+  function Assert-PartialKeyPreserved {
+    if ((Get-FileHash -LiteralPath $Private -Algorithm SHA256).Hash -cne $Digest) {throw 'PARTIAL_PRIVATE_KEY_CHANGED'}
+  }
+  $Blocked=Run-Partial $false
+  if ($Blocked.reason -cne 'EXISTING_INSTALLATION_UNMANAGED' -or $Blocked.installationMutationsStarted -ne $false) {throw 'PARTIAL_REQUIRES_EXPLICIT_RESUME'}
+  Assert-PartialKeyPreserved
+  $Sentinel=Join-Path $Install 'foreign.txt';[IO.File]::WriteAllText($Sentinel,'preserve')
+  try {
+    $Foreign=Run-Partial $true
+    if ($Foreign.reason -cne 'PARTIAL_INSTALLATION_LAYOUT_INVALID' -or (Get-Content -LiteralPath $Sentinel -Raw) -cne 'preserve') {throw 'FOREIGN_PARTIAL_RESUME_NOT_PRESERVED'}
+    Assert-PartialKeyPreserved
+  } finally {[IO.File]::Delete($Sentinel)}
+  $PublicPath=$Private+'.pub';$PublicBefore=[IO.File]::ReadAllBytes($PublicPath)
+  [IO.File]::WriteAllText($PublicPath,'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER')
+  try {
+    $Mismatch=Run-Partial $true
+    if ($Mismatch.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Mismatch.installationMutationsStarted -ne $false) {throw 'MISMATCHED_PARTIAL_IDENTITY_ACCEPTED'}
+    Assert-PartialKeyPreserved
+  } finally {[IO.File]::WriteAllBytes($PublicPath,$PublicBefore)}
+  $BeforeAcl=Get-Acl -LiteralPath $Private
+  $Broad=Get-Acl -LiteralPath $Private
+  $Everyone=New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
+  $Rule=New-Object Security.AccessControl.FileSystemAccessRule($Everyone,[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Allow)
+  [void]$Broad.AddAccessRule($Rule);[IO.File]::SetAccessControl($Private,$Broad)
+  try {
+    $Unsafe=Run-Partial $true
+    if ($Unsafe.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Unsafe.installationMutationsStarted -ne $false -or (Get-Acl -LiteralPath $Private).Sddl -cne $Broad.Sddl) {throw 'UNSAFE_PARTIAL_ACL_CHANGED_OR_ACCEPTED'}
+    Assert-PartialKeyPreserved
+  } finally {[IO.File]::SetAccessControl($Private,$BeforeAcl)}
+  $Resumed=Run-Partial $true
+  if ($Resumed.status -cne 'PASS' -or $Resumed.state -cne 'INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' -or $Resumed.publicKey -cne $Value.publicKey) {throw 'PARTIAL_RESUME_FAILED'}
+  Assert-PartialKeyPreserved
+  $Repeated=Run-Partial $true
+  if ($Repeated.status -cne 'PASS' -or $Repeated.state -cne 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') {throw 'PARTIAL_RESUME_NOT_IDEMPOTENT'}
+  Assert-PartialKeyPreserved
+  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=8;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
   exit 0
 } catch {
   $Records=@($Error | Select-Object -First 12 | ForEach-Object {[pscustomobject]@{type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult;id=$_.FullyQualifiedErrorId;line=$_.InvocationInfo.ScriptLineNumber;message=$_.Exception.Message}})
@@ -64,7 +119,7 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($Errors)) {throw 'ORDINARY_USER_UNEXPECTED_STDERR'}
   if ($Child.ExitCode -ne 0) {throw 'ORDINARY_USER_SETUP_REGRESSION'}
   $Value=$Output | ConvertFrom-Json
-  if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 2) {throw 'ORDINARY_USER_PROOF_INVALID'}
+  if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 8) {throw 'ORDINARY_USER_PROOF_INVALID'}
   $ExitCode=0
 } finally {
   if ($null -ne $Child) {if(-not $Child.HasExited){$Child.Kill()};$Child.Dispose()}

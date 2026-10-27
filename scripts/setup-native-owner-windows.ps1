@@ -110,7 +110,8 @@ function Set-FreshPrivatePermissions {
     $Access=New-Object Security.AccessControl.FileSystemAccessRule($AllowedSid,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow)
     [void]$Security.AddAccessRule($Access)
   }
-  Set-Acl -LiteralPath $Identity -AclObject $Security
+  # Persist only modified access/owner sections; Set-Acl requests audit privilege on files.
+  [IO.File]::SetAccessControl($Identity,$Security)
 }
 function Check-PrivateIdentity([string]$ExpectedPublic,[string]$Reason) {
   try {
