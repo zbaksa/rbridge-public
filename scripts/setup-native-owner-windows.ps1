@@ -4,6 +4,7 @@ param(
   [string]$InstallDir='',
   [string]$SshHost='aether-engine',
   [int]$SshPort=22,
+  [switch]$ResumeKeyPreparation,
   [Parameter(Mandatory=$true)][string]$ServerHostKey
 )
 $ErrorActionPreference='Stop'
@@ -24,6 +25,7 @@ $Files=@(
   @{name='dist-extension/contentScript.js';bytes=22461;sha='18e6fa923fabf879b07785266b56a4ad9599f97ea2ca8c4137d9788f21f7b8a3';output=$null},
   @{name='dist-extension/serviceWorker.js';bytes=108693;sha='d78e0c9b36df3d93a4e2b176dd18eaad3875d706a5de9f82fa82306b2f7e26b7';output=$null}
 )
+$ResumeIdentity=$null;$Resuming=$false
 $Phase='PREFLIGHT';$Mutations=$false;$Stage=$null;$OwnStage=$false;$StageFiles=@();$SetupMutex=$null;$MutexHeld=$false;$Result=$null;$ExitCode=2
 function Need([bool]$Condition,[string]$Reason) { if (-not $Condition) { throw $Reason } }
 function Hash-Bytes([byte[]]$Bytes) {
@@ -102,7 +104,8 @@ function Check-Installed([string]$ExpectedConfigSha) {
   return Hash-Bytes $Raw
 }
 function Set-FreshPrivatePermissions {
-  # Only the newly created key is normalized; existing keys/ACLs are never reset.
+  # Normalize only a new key or an explicitly validated partial owner key.
+  # Completed installations and foreign/changed keys are never reset.
   $OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User
   $Security=New-Object Security.AccessControl.FileSecurity
   [void](Local-Path $Identity)
@@ -135,6 +138,46 @@ function Check-PrivateIdentity([string]$ExpectedPublic,[string]$Reason) {
     $Derived=Public-Key $DerivedText $Reason
     Need ($Derived.publicKey -ceq $ExpectedPublic) $Reason
   } catch {throw $Reason}
+}
+function Check-PartialIdentity {
+  try {
+    [void](Local-Path $InstallDir);[void](Local-Path $KeyDir)
+    $RootInfo=Get-Item -LiteralPath $InstallDir -Force
+    $Items=@(Get-ChildItem -LiteralPath $InstallDir -Force)
+    Need ($RootInfo.PSIsContainer -and $Items.Count -eq 1 -and $Items[0].Name -ceq 'keys' -and $Items[0].PSIsContainer) 'PARTIAL_INSTALLATION_LAYOUT_INVALID'
+    $KeyItems=@(Get-ChildItem -LiteralPath $KeyDir -Force)
+    Need ($KeyItems.Count -eq 2 -and @($KeyItems | Where-Object {$_.Name -cnotin @('owner_ed25519','owner_ed25519.pub') -or $_.PSIsContainer}).Count -eq 0) 'PARTIAL_INSTALLATION_LAYOUT_INVALID'
+    foreach ($Path in @($Identity,($Identity+'.pub'))) {
+      [void](Local-Path $Path)
+      $Info=Get-Item -LiteralPath $Path -Force
+      Need (-not $Info.PSIsContainer -and [string]::IsNullOrEmpty([string]$Info.LinkType)) 'PARTIAL_IDENTITY_INVALID'
+    }
+    $PrivateInfo=Get-Item -LiteralPath $Identity -Force
+    Need ($PrivateInfo.Length -ge 1 -and $PrivateInfo.Length -le 16384) 'PARTIAL_IDENTITY_INVALID'
+    $Sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    Need ((Get-Acl -LiteralPath $InstallDir).GetOwner([Security.Principal.SecurityIdentifier]).Value -ceq $Sid) 'PARTIAL_IDENTITY_INVALID'
+    foreach ($Path in @($KeyDir,$Identity)) {
+      $Security=Get-Acl -LiteralPath $Path
+      Need ($Security.GetOwner([Security.Principal.SecurityIdentifier]).Value -ceq $Sid) 'PARTIAL_IDENTITY_INVALID'
+      if ($Path -ceq $KeyDir) {Need $Security.AreAccessRulesProtected 'PARTIAL_IDENTITY_INVALID'}
+      $Allowed=@($Sid,'S-1-5-18')
+      # Windows OpenSSH may retain the trusted local Administrators group on a
+      # just-generated file. Recovery narrows this to the normal owner/SYSTEM ACL.
+      if ($Path -ceq $Identity) {$Allowed+='S-1-5-32-544'}
+      $Rules=@($Security.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+      Need (@($Rules | Where-Object {$_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $_.IdentityReference.Value -ceq $Sid -and ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadData)}).Count -ge 1) 'PARTIAL_IDENTITY_INVALID'
+      foreach ($Rule in $Rules) {Need ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $Rule.IdentityReference.Value -in $Allowed) 'PARTIAL_IDENTITY_INVALID'}
+    }
+    $Public=Public-Key ($Utf8.GetString((Read-Small ($Identity+'.pub') 4096))) 'PARTIAL_IDENTITY_INVALID'
+    $Digest=(Get-FileHash -LiteralPath $Identity -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Derived=Public-Key (Run-Bounded $Keygen ('-y -P "" -f "'+$Identity+'"') 15000) 'PARTIAL_IDENTITY_INVALID'
+    Need ($Derived.publicKey -ceq $Public.publicKey -and (Get-FileHash -LiteralPath $Identity -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $Digest) 'PARTIAL_IDENTITY_INVALID'
+    return @{publicKey=$Public.publicKey;privateSha256=$Digest}
+  } catch {
+    $Code=[string]$_.Exception.Message
+    if ($Code -cin @('PARTIAL_INSTALLATION_LAYOUT_INVALID','UNTRUSTED_LOCAL_PATH')) {throw $Code}
+    throw 'PARTIAL_IDENTITY_INVALID'
+  }
 }
 function Public-Result([string]$State,[string]$ConfigDigest,$PublicIdentity) {
   # Construct a fixed public projection; never return an owner-editable receipt document.
@@ -188,7 +231,11 @@ try {
   try {$MutexHeld=$SetupMutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$MutexHeld=$true}
   Need $MutexHeld 'RBRIDGE_NATIVE_INSTALL_IN_PROGRESS'
   if (Test-Path -LiteralPath $InstallDir) {
-    Need (Test-Path -LiteralPath $ReceiptPath -PathType Leaf) 'EXISTING_INSTALLATION_UNMANAGED'
+    if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) {
+      Need ([bool]$ResumeKeyPreparation) 'EXISTING_INSTALLATION_UNMANAGED'
+      foreach ($Key in $RegistryPaths) {Need ($null -eq (Binding $Key)) 'NATIVE_REGISTRATION_ALREADY_PRESENT'}
+      $ResumeIdentity=Check-PartialIdentity;$Resuming=$true
+    } else {
     try {
       $Saved=$Utf8.GetString((Read-Small $ReceiptPath 16384)) | ConvertFrom-Json
       Need ($Saved -is [pscustomobject]) 'EXISTING_INSTALLATION_CHANGED'
@@ -200,7 +247,9 @@ try {
       Check-PrivateIdentity $Public.publicKey 'EXISTING_INSTALLATION_CHANGED'
       $Result=Public-Result 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' $ConfigSha $Public;$ExitCode=0
     } catch {throw 'EXISTING_INSTALLATION_CHANGED'}
-  } else {
+    }
+  } else {Need (-not $ResumeKeyPreparation) 'PARTIAL_INSTALLATION_REQUIRED'}
+  if ($null -eq $Result) {
     foreach ($Key in $RegistryPaths) {Need ($null -eq (Binding $Key)) 'NATIVE_REGISTRATION_ALREADY_PRESENT'}
     $Phase='PACKAGE_VERIFICATION'
     $Stage=Join-Path $LocalData ('cocwin-native-owner-stage-'+[Guid]::NewGuid().ToString('N'))
@@ -234,6 +283,11 @@ try {
       }
     } finally {if ($null -ne $Archive) {$Archive.Dispose()};$ArchiveStream.Dispose()}
     $Phase='DEDICATED_KEY_PREPARATION'
+    if ($Resuming) {
+      $CurrentPartial=Check-PartialIdentity
+      Need ($CurrentPartial.privateSha256 -ceq $ResumeIdentity.privateSha256 -and $CurrentPartial.publicKey -ceq $ResumeIdentity.publicKey) 'PARTIAL_IDENTITY_INVALID'
+      $Mutations=$true
+    } else {
     $Mutations=$true;[void](New-Item -ItemType Directory -Path $InstallDir)
     [void](New-Item -ItemType Directory -Path $KeyDir)
     $Sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -245,9 +299,11 @@ try {
     }
     Set-Acl -LiteralPath $KeyDir -AclObject $Acl
     [void](Run-Bounded $Keygen ('-q -t ed25519 -N "" -C "cocwin-native-owner" -f "'+$Identity+'"') 15000)
+    }
     Set-FreshPrivatePermissions
     $Public=Public-Key ($Utf8.GetString((Read-Small ($Identity+'.pub') 4096))) 'GENERATED_PUBLIC_KEY_INVALID'
     Check-PrivateIdentity $Public.publicKey 'GENERATED_IDENTITY_INVALID'
+    if ($Resuming) {Need ((Get-FileHash -LiteralPath $Identity -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $ResumeIdentity.privateSha256 -and $Public.publicKey -ceq $ResumeIdentity.publicKey) 'PARTIAL_IDENTITY_INVALID'}
     New-Bytes $KnownHosts ($Utf8.GetBytes($KnownLine))
     $Phase='NATIVE_INSTALLATION'
     $Installer=Join-Path $Stage 'install-native-host-windows.ps1';$SourceExe=Join-Path $Stage 'rbridge-native-host.exe'
@@ -270,7 +326,7 @@ try {
 } catch {
   $Message=[string]$_.Exception.Message
   $Reason=if ($Message -cmatch '^[A-Z][A-Z0-9_]{1,100}$') {$Message} else {'WINDOWS_OWNER_SETUP_FAILED'}
-  $Result=[pscustomobject]@{schema='COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1';status='BLOCKED';state='SETUP_BLOCKED_OR_PARTIAL_PRESERVED';reason=$Reason;failedAt=$Phase;installationMutationsStarted=$Mutations;sshAuthentication='NOT_RUN';browserAcceptance='NOT_RUN';browserSends=0}
+  $Result=[pscustomobject]@{schema='COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1';status='BLOCKED';state='SETUP_BLOCKED_OR_PARTIAL_PRESERVED';reason=$Reason;failedAt=$Phase;failureType=$_.Exception.GetType().FullName;failureHResult=$_.Exception.HResult;failureLine=$_.InvocationInfo.ScriptLineNumber;installationMutationsStarted=$Mutations;sshAuthentication='NOT_RUN';browserAcceptance='NOT_RUN';browserSends=0}
 } finally {
   if ($MutexHeld) {$SetupMutex.ReleaseMutex()}
   if ($null -ne $SetupMutex) {$SetupMutex.Dispose()}

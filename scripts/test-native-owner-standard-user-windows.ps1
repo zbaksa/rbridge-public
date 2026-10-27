@@ -55,12 +55,16 @@ try {
   }
   $PrivateAcl=Get-Acl -LiteralPath $Private
   $PrivateAcl.SetAccessRuleProtection($false,$true)
+  $Administrators=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+  $AdminRule=New-Object Security.AccessControl.FileSystemAccessRule($Administrators,[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Allow)
+  [void]$PrivateAcl.AddAccessRule($AdminRule)
   [IO.File]::SetAccessControl($Private,$PrivateAcl)
-  function Run-Partial([bool]$Resume) {
+  function Run-Partial([bool]$Resume,[string]$Destination='') {
     $Collected=New-Object 'Collections.Generic.List[string]'
     try {
       $SetupArguments=@{PackageZip=(Join-Path $Root 'qualified.zip');SshHost='fixture.invalid';ServerHostKey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'}
       if ($Resume) {$SetupArguments.ResumeKeyPreparation=$true}
+      if ($Destination -ne '') {$SetupArguments.InstallDir=$Destination}
       & ([scriptblock]::Create($Source)) @SetupArguments | ForEach-Object {[void]$Collected.Add([string]$_)}
     } catch {if ($_.FullyQualifiedErrorId -cne 'COCWIN_RBRIDGE_OWNER_SETUP_BLOCKED') {throw}}
     return (($Collected -join "`n") | ConvertFrom-Json)
@@ -71,12 +75,23 @@ try {
   $Blocked=Run-Partial $false
   if ($Blocked.reason -cne 'EXISTING_INSTALLATION_UNMANAGED' -or $Blocked.installationMutationsStarted -ne $false) {throw 'PARTIAL_REQUIRES_EXPLICIT_RESUME'}
   Assert-PartialKeyPreserved
+  $Missing=Join-Path (Split-Path -Parent $Install) 'missing-partial'
+  $NoPartial=Run-Partial $true $Missing
+  if ($NoPartial.reason -cne 'PARTIAL_INSTALLATION_REQUIRED' -or (Test-Path -LiteralPath $Missing)) {throw 'RESUME_MUST_NOT_GENERATE_A_NEW_IDENTITY'}
+  Assert-PartialKeyPreserved
   $Sentinel=Join-Path $Install 'foreign.txt';[IO.File]::WriteAllText($Sentinel,'preserve')
   try {
     $Foreign=Run-Partial $true
     if ($Foreign.reason -cne 'PARTIAL_INSTALLATION_LAYOUT_INVALID' -or (Get-Content -LiteralPath $Sentinel -Raw) -cne 'preserve') {throw 'FOREIGN_PARTIAL_RESUME_NOT_PRESERVED'}
     Assert-PartialKeyPreserved
   } finally {[IO.File]::Delete($Sentinel)}
+  $Alias=Join-Path (Split-Path -Parent $Install) 'private-alias'
+  [void](New-Item -ItemType HardLink -Path $Alias -Target $Private)
+  try {
+    $Aliased=Run-Partial $true
+    if ($Aliased.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Aliased.installationMutationsStarted -ne $false) {throw 'HARDLINKED_PARTIAL_IDENTITY_ACCEPTED'}
+    Assert-PartialKeyPreserved
+  } finally {[IO.File]::Delete($Alias)}
   $PublicPath=$Private+'.pub';$PublicBefore=[IO.File]::ReadAllBytes($PublicPath)
   [IO.File]::WriteAllText($PublicPath,'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER')
   try {
@@ -84,23 +99,27 @@ try {
     if ($Mismatch.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Mismatch.installationMutationsStarted -ne $false) {throw 'MISMATCHED_PARTIAL_IDENTITY_ACCEPTED'}
     Assert-PartialKeyPreserved
   } finally {[IO.File]::WriteAllBytes($PublicPath,$PublicBefore)}
-  $BeforeAcl=Get-Acl -LiteralPath $Private
-  $Broad=Get-Acl -LiteralPath $Private
+  foreach ($AclPath in @($Private,(Join-Path $Install 'keys'))) {
+  $BeforeAcl=Get-Acl -LiteralPath $AclPath
+  $Broad=Get-Acl -LiteralPath $AclPath
   $Everyone=New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
   $Rule=New-Object Security.AccessControl.FileSystemAccessRule($Everyone,[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Allow)
-  [void]$Broad.AddAccessRule($Rule);[IO.File]::SetAccessControl($Private,$Broad);$BroaderSddl=(Get-Acl -LiteralPath $Private).Sddl
+  [void]$Broad.AddAccessRule($Rule)
+  if ($AclPath -ceq $Private) {[IO.File]::SetAccessControl($AclPath,$Broad)} else {[IO.Directory]::SetAccessControl($AclPath,$Broad)}
+  $BroaderSddl=(Get-Acl -LiteralPath $AclPath).Sddl
   try {
     $Unsafe=Run-Partial $true
-    if ($Unsafe.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Unsafe.installationMutationsStarted -ne $false -or (Get-Acl -LiteralPath $Private).Sddl -cne $BroaderSddl) {throw 'UNSAFE_PARTIAL_ACL_CHANGED_OR_ACCEPTED'}
+    if ($Unsafe.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Unsafe.installationMutationsStarted -ne $false -or (Get-Acl -LiteralPath $AclPath).Sddl -cne $BroaderSddl) {throw 'UNSAFE_PARTIAL_ACL_CHANGED_OR_ACCEPTED'}
     Assert-PartialKeyPreserved
-  } finally {[IO.File]::SetAccessControl($Private,$BeforeAcl)}
+  } finally {if ($AclPath -ceq $Private) {[IO.File]::SetAccessControl($AclPath,$BeforeAcl)} else {[IO.Directory]::SetAccessControl($AclPath,$BeforeAcl)}}
+  }
   $Resumed=Run-Partial $true
   if ($Resumed.status -cne 'PASS' -or $Resumed.state -cne 'INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' -or $Resumed.publicKey -cne $Value.publicKey) {throw 'PARTIAL_RESUME_FAILED'}
   Assert-PartialKeyPreserved
   $Repeated=Run-Partial $true
   if ($Repeated.status -cne 'PASS' -or $Repeated.state -cne 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT') {throw 'PARTIAL_RESUME_NOT_IDEMPOTENT'}
   Assert-PartialKeyPreserved
-  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=8;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
+  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='PASS';passed=11;administratorToken=$Elevated;defaultDirectory=$true;partialPrivateKeyPreserved=$true;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Compress
   exit 0
 } catch {
   $Records=@($Error | Select-Object -First 12 | ForEach-Object {[pscustomobject]@{type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult;id=$_.FullyQualifiedErrorId;line=$_.InvocationInfo.ScriptLineNumber;message=$_.Exception.Message}})
@@ -121,7 +140,7 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($Errors)) {throw 'ORDINARY_USER_UNEXPECTED_STDERR'}
   if ($Child.ExitCode -ne 0) {throw 'ORDINARY_USER_SETUP_REGRESSION'}
   $Value=$Output | ConvertFrom-Json
-  if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 8) {throw 'ORDINARY_USER_PROOF_INVALID'}
+  if ($Value.state -cne 'PASS' -or $Value.administratorToken -ne $false -or $Value.passed -ne 11) {throw 'ORDINARY_USER_PROOF_INVALID'}
   $ExitCode=0
 } finally {
   if ($null -ne $Child) {if(-not $Child.HasExited){$Child.Kill()};$Child.Dispose()}

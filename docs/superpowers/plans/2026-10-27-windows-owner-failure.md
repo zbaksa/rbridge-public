@@ -1,0 +1,15 @@
+# Windows owner failure: ordinary token and partial key recovery
+
+Goal: correct the actual owner setup failure without elevation, deleting the partial installation, regenerating a key, or changing server/SSH/controller policy.
+
+Evidence: the owner reported `WINDOWS_OWNER_SETUP_FAILED` during `DEDICATED_KEY_PREPARATION`; retry preserved the directory with `EXISTING_INSTALLATION_UNMANAGED`. Ordinary-user Windows CI reproduced the same observable failure at private-file `Set-Acl`: run40503196137/job122186224194, `PrivilegeNotHeldException`/`SeSecurityPrivilege`. Replacing the API alone still attempted an owner change and failed in run40504320770/job122189615311. Keeping the verified current owner and persisting only the DACL passed fresh setup and rerun in run40505018182/job122191998080; that run then provided the partial-resume RED (`NamedParameterNotFound`).
+
+Implementation is limited to these boundaries:
+
+- Persist the private-file DACL directly, after checking the existing owner. Request neither an owner change nor audit privileges. Windows documents separate requirements for [DACL, owner and SACL updates](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow).
+- Keep normal unmanaged/changed/completed-installation checks. Add explicit `-ResumeKeyPreparation` only for a current-owner installation containing exactly `keys/owner_ed25519` and its `.pub`, no registrations or other installation files.
+- Reject reparse paths, hardlinked key files, wrong owners, unsafe readers, missing or malformed keys, and private/public mismatch before installation mutations. Require a protected owner/SYSTEM key directory. A partial private file may inherit only safe rules or retain the trusted local Administrators group; recovery narrows it to the normal owner/SYSTEM policy. Never normalize a foreign or completed installation.
+- Recheck the observed partial state after package verification, preserve the private-key SHA through ACL normalization, and reuse the same key. Continue the unchanged pinned installer with the same public receipt schema and NOT_RUN SSH/browser gates. Missing partial state cannot trigger a new identity through the resume switch.
+- Report fixed exception type/HResult/line metadata on failure, without raw exception messages or private material.
+
+Qualification: 11 ordinary-user/default-path cases covering fresh/rerun, explicit resume, missing/foreign/aliased/mismatched/unsafe partial states, unchanged private key and idempotence; retain all 17 original owner cases, facts/installer/portable suites, full exact-head Linux verification and actual RBridge1027 source checks. Use one fresh whole-component review before integration, one regression-first fix pass for findings, and no repeat review. Preserve externally managed worktrees and actual owner partial state. Actual owner recovery and CHAT remain unproven until genuine owner receipts.
