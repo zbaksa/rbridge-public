@@ -233,4 +233,7 @@ try {
   }
 }
 $Result | ConvertTo-Json -Depth 6 -Compress
-exit $ExitCode
+# A downloaded scriptblock runs inside the owner's current PowerShell caller.
+# Only a real -File invocation may exit its process with the CLI status.
+if ($MyInvocation.MyCommand -is [System.Management.Automation.ExternalScriptInfo]) { exit $ExitCode }
+if ($ExitCode -ne 0) { throw 'COCWIN_RBRIDGE_OWNER_SETUP_BLOCKED' }
