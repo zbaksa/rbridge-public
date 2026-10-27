@@ -39,9 +39,20 @@ function Run-Upgrade([string]$Pin=$ConfigSha,[string]$Directory=$Install,[string
   return (($Collected -join "`n") | ConvertFrom-Json)
 }
 function Need-Old {if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $OldSha) {throw 'UPGRADE_NEGATIVE_CHANGED_EXECUTABLE'}}
-$Before=Snapshot
+$Before=Snapshot;$ExeAcl=(Get-Acl -LiteralPath $Exe).Sddl
 $R=Run-Upgrade ('0'*64)
 Need-QA ($R.status -ceq 'BLOCKED' -and -not $R.executablePublicationStarted) 'WRONG_CONFIG_PIN_ACCEPTED';Need-Old
+$ConfigBytes=[IO.File]::ReadAllBytes($Config);$ReceiptBytes=[IO.File]::ReadAllBytes($Setup)
+try {
+  $V3Config=[IO.File]::ReadAllText($Config) | ConvertFrom-Json
+  $V3Config | Add-Member -NotePropertyName v3 -NotePropertyValue @{}
+  [IO.File]::WriteAllText($Config,($V3Config | ConvertTo-Json -Depth 8),(New-Object Text.UTF8Encoding($false)))
+  $V3Sha=(Get-FileHash -LiteralPath $Config -Algorithm SHA256).Hash.ToLowerInvariant()
+  $V3Receipt=[IO.File]::ReadAllText($Setup) | ConvertFrom-Json;$V3Receipt.configSha256=$V3Sha
+  [IO.File]::WriteAllText($Setup,($V3Receipt | ConvertTo-Json -Depth 8 -Compress),(New-Object Text.UTF8Encoding($false)))
+  $R=Run-Upgrade $V3Sha
+  Need-QA ($R.status -ceq 'BLOCKED' -and $R.reason -ceq 'LEGACY_CONFIG_REQUIRED' -and -not $R.executablePublicationStarted) 'EXISTING_V3_CONFIG_ACCEPTED';Need-Old
+} finally {[IO.File]::WriteAllBytes($Config,$ConfigBytes);[IO.File]::WriteAllBytes($Setup,$ReceiptBytes)}
 $Saved=Join-Path $Install '.setup-fixture-held'
 [IO.File]::Move($Setup,$Saved)
 try {$R=Run-Upgrade;Need-QA ($R.status -ceq 'BLOCKED' -and -not $R.executablePublicationStarted) 'UNMANAGED_INSTALLATION_ACCEPTED';Need-Old} finally {[IO.File]::Move($Saved,$Setup)}
@@ -71,7 +82,7 @@ try {$R=Run-Upgrade $ConfigSha $Install $NewZip $true;Need-QA ($R.status -ceq 'B
 Need-QA ((Snapshot) -ceq $Before) 'NEGATIVE_UPGRADE_CHANGED_PROTECTED_FILES'
 $R=Run-Upgrade
 Need-QA ($R.status -ceq 'PASS' -and $R.state -ceq 'UPGRADED' -and $R.executableSha256 -ceq $NewSha -and $R.v3Configured -eq $false -and $R.browserSends -eq 0) 'QUALIFIED_UPGRADE_DID_NOT_SUCCEED'
-Need-QA ((Snapshot) -ceq $Before -and (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $NewSha) 'UPGRADE_CHANGED_KEY_CONFIG_HISTORY_OR_ACL'
+Need-QA ((Snapshot) -ceq $Before -and (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $NewSha -and (Get-Acl -LiteralPath $Exe).Sddl -ceq $ExeAcl) 'UPGRADE_CHANGED_KEY_CONFIG_HISTORY_OR_ACL'
 $R=Run-Upgrade $ConfigSha $Install 'C:\qualified-upgrade-must-not-download.zip'
 Need-QA ($R.status -ceq 'PASS' -and $R.state -ceq 'ALREADY_QUALIFIED' -and -not $R.executablePublicationStarted -and (Snapshot) -ceq $Before) 'UPGRADE_RERUN_NOT_IDEMPOTENT'
 [pscustomobject]@{schema='RBRIDGE_WINDOWS_ORDINARY_USER_UPGRADE_QA_V1';state='PASS';passed=$Passed;administratorToken=$false;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0}
