@@ -140,7 +140,9 @@ function Run-Bounded([string]$Exe,[string]$Arguments,[int]$Timeout) {
   $Start.FileName=$Exe;$Start.Arguments=$Arguments;$Start.UseShellExecute=$false;$Start.CreateNoWindow=$true
   $Start.RedirectStandardInput=$true;$Start.RedirectStandardOutput=$true;$Start.RedirectStandardError=$true
   $Start.StandardOutputEncoding=$Utf8;$Start.StandardErrorEncoding=$Utf8
-  $Start.EnvironmentVariables.Clear()
+  # Windows OpenSSH needs the owner's normal Windows logon environment.
+  # Remove interpreter/askpass overrides while retaining those OS fields.
+  foreach ($Name in @('NODE_OPTIONS','NODE_PATH','SSH_ASKPASS')) {$Start.EnvironmentVariables.Remove($Name)}
   $Start.EnvironmentVariables['SystemRoot']=$Windows
   $Start.EnvironmentVariables['WINDIR']=$Windows
   $Start.EnvironmentVariables['PATH']=(Join-Path $Windows 'System32\OpenSSH')+';'+(Join-Path $Windows 'System32')
