@@ -10,8 +10,22 @@ $Command=$Ast.Find({param($Node) $Node -is [Management.Automation.Language.Comma
 $Elements=@($Command.CommandElements | ForEach-Object {[pscustomobject]@{type=$_.GetType().Name;text=$_.Extent.Text}})
 [pscustomobject]@{schema='COCWIN_OWNER_SSH_PROBE_ARGUMENTS_V1';powerShell=$PSVersionTable.PSVersion.ToString();ssh=$Version;elements=$Elements;sshConnections=0;browserSends=0} | ConvertTo-Json -Depth 5 -Compress
 # -G only parses and prints configuration; it never opens a network connection.
-$Lines=@(& $Ssh -G -F NUL -n -T -v -oBatchMode=yes -oPreferredAuthentications=publickey -oIdentitiesOnly=yes -oIdentityAgent=none -oStrictHostKeyChecking=yes -oUpdateHostKeys=no -oPasswordAuthentication=no -oKbdInteractiveAuthentication=no -oConnectTimeout=10 -oConnectionAttempts=1 -oServerAliveInterval=5 -oServerAliveCountMax=2 -oGlobalKnownHostsFile=NUL '-oUserKnownHostsFile=known_hosts.cocwin' -i owner_ed25519 -p 22 rbridge@192.168.100.14 cocwin-owner-auth-probe-v1 2>&1)
-$Code=$LASTEXITCODE
+# OpenSSH stats -i before -G; an absent fixture is discarded and selects defaults.
+# Use a public dummy file, never any CI or owner private key.
+$Work=Join-Path $env:RUNNER_TEMP ('cocwin097-'+[guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($Work)
+[IO.File]::WriteAllText((Join-Path $Work 'owner_ed25519'),"Public configuration fixture, not a private key.`n")
+[IO.File]::WriteAllText((Join-Path $Work 'known_hosts.cocwin'),'')
+Push-Location -LiteralPath $Work -ErrorAction Stop
+try {
+  $Lines=@(& $Ssh -G -F NUL -n -T -v -oBatchMode=yes -oPreferredAuthentications=publickey -oIdentitiesOnly=yes -oIdentityAgent=none -oStrictHostKeyChecking=yes -oUpdateHostKeys=no -oPasswordAuthentication=no -oKbdInteractiveAuthentication=no -oConnectTimeout=10 -oConnectionAttempts=1 -oServerAliveInterval=5 -oServerAliveCountMax=2 -oGlobalKnownHostsFile=NUL '-oUserKnownHostsFile=known_hosts.cocwin' -i owner_ed25519 -p 22 rbridge@192.168.100.14 cocwin-owner-auth-probe-v1 2>&1)
+  $Code=$LASTEXITCODE
+} finally {
+  Pop-Location
+  [IO.File]::Delete((Join-Path $Work 'owner_ed25519'))
+  [IO.File]::Delete((Join-Path $Work 'known_hosts.cocwin'))
+  [IO.Directory]::Delete($Work,$false)
+}
 $Text=($Lines | ForEach-Object {$_.ToString()}) -join "`n"
 $Selected=@($Text -split '\r?\n' | Where-Object {$_ -match '^(host|hostname|user|port|userknownhostsfile|identityfile|batchmode|stricthostkeychecking|preferredauthentications|passwordauthentication|kbdinteractiveauthentication|identitiesonly|identityagent|globalknownhostsfile|updatehostkeys|connecttimeout|connectionattempts|serveraliveinterval|serveralivecountmax) '})
 [pscustomobject]@{schema='COCWIN_OWNER_SSH_PROBE_EFFECTIVE_CONFIG_V1';exitCode=$Code;configuration=$Selected;sshConnections=0;browserSends=0} | ConvertTo-Json -Depth 4 -Compress
