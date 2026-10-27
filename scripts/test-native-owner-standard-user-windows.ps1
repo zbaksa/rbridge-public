@@ -59,9 +59,9 @@ try {
   function Run-Partial([bool]$Resume) {
     $Collected=New-Object 'Collections.Generic.List[string]'
     try {
-      $Args=@{PackageZip=(Join-Path $Root 'qualified.zip');SshHost='fixture.invalid';ServerHostKey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'}
-      if ($Resume) {$Args.ResumeKeyPreparation=$true}
-      & ([scriptblock]::Create($Source)) @Args | ForEach-Object {[void]$Collected.Add([string]$_)}
+      $SetupArguments=@{PackageZip=(Join-Path $Root 'qualified.zip');SshHost='fixture.invalid';ServerHostKey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBERERERERERERERERERERERERERERERERERERERERER'}
+      if ($Resume) {$SetupArguments.ResumeKeyPreparation=$true}
+      & ([scriptblock]::Create($Source)) @SetupArguments | ForEach-Object {[void]$Collected.Add([string]$_)}
     } catch {if ($_.FullyQualifiedErrorId -cne 'COCWIN_RBRIDGE_OWNER_SETUP_BLOCKED') {throw}}
     return (($Collected -join "`n") | ConvertFrom-Json)
   }
@@ -88,10 +88,10 @@ try {
   $Broad=Get-Acl -LiteralPath $Private
   $Everyone=New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
   $Rule=New-Object Security.AccessControl.FileSystemAccessRule($Everyone,[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Allow)
-  [void]$Broad.AddAccessRule($Rule);[IO.File]::SetAccessControl($Private,$Broad)
+  [void]$Broad.AddAccessRule($Rule);[IO.File]::SetAccessControl($Private,$Broad);$BroaderSddl=(Get-Acl -LiteralPath $Private).Sddl
   try {
     $Unsafe=Run-Partial $true
-    if ($Unsafe.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Unsafe.installationMutationsStarted -ne $false -or (Get-Acl -LiteralPath $Private).Sddl -cne $Broad.Sddl) {throw 'UNSAFE_PARTIAL_ACL_CHANGED_OR_ACCEPTED'}
+    if ($Unsafe.reason -cne 'PARTIAL_IDENTITY_INVALID' -or $Unsafe.installationMutationsStarted -ne $false -or (Get-Acl -LiteralPath $Private).Sddl -cne $BroaderSddl) {throw 'UNSAFE_PARTIAL_ACL_CHANGED_OR_ACCEPTED'}
     Assert-PartialKeyPreserved
   } finally {[IO.File]::SetAccessControl($Private,$BeforeAcl)}
   $Resumed=Run-Partial $true
@@ -104,7 +104,9 @@ try {
   exit 0
 } catch {
   $Records=@($Error | Select-Object -First 12 | ForEach-Object {[pscustomobject]@{type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult;id=$_.FullyQualifiedErrorId;line=$_.InvocationInfo.ScriptLineNumber;message=$_.Exception.Message}})
-  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='FAIL';administratorToken=$Elevated;bootstrapOutput=@($Lines);errors=$Records;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Depth 6 -Compress
+  $KeyFacts=$null
+  try {$Candidate=Join-Path $Install 'keys\owner_ed25519';if(Test-Path -LiteralPath $Candidate){$Security=Get-Acl -LiteralPath $Candidate;$KeyFacts=@{owner=$Security.GetOwner([Security.Principal.SecurityIdentifier]).Value;current=$Current.User.Value;protected=$Security.AreAccessRulesProtected;rules=@($Security.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object {@{sid=$_.IdentityReference.Value;rights=[string]$_.FileSystemRights;type=[string]$_.AccessControlType}})}}} catch {}
+  [pscustomobject]@{schema='RBRIDGE_WINDOWS_STANDARD_USER_SETUP_QA_V1';state='FAIL';administratorToken=$Elevated;bootstrapOutput=@($Lines);keyFacts=$KeyFacts;errors=$Records;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0} | ConvertTo-Json -Depth 6 -Compress
   exit 1
 }
 '@

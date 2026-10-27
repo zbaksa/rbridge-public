@@ -105,12 +105,16 @@ function Set-FreshPrivatePermissions {
   # Only the newly created key is normalized; existing keys/ACLs are never reset.
   $OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User
   $Security=New-Object Security.AccessControl.FileSecurity
-  $Security.SetOwner($OwnerSid);$Security.SetAccessRuleProtection($true,$false)
+  [void](Local-Path $Identity)
+  $ExistingSecurity=Get-Acl -LiteralPath $Identity
+  Need ($ExistingSecurity.GetOwner([Security.Principal.SecurityIdentifier]).Value -ceq $OwnerSid.Value) 'GENERATED_IDENTITY_OWNER_INVALID'
+  # The owner may update its DACL without requesting an owner or audit change.
+  $Security.SetAccessRuleProtection($true,$false)
   foreach ($AllowedSid in @($OwnerSid,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')))) {
     $Access=New-Object Security.AccessControl.FileSystemAccessRule($AllowedSid,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow)
     [void]$Security.AddAccessRule($Access)
   }
-  # Persist only modified access/owner sections; Set-Acl requests audit privilege on files.
+  # Persist only the modified DACL; keep the verified existing owner unchanged.
   [IO.File]::SetAccessControl($Identity,$Security)
 }
 function Check-PrivateIdentity([string]$ExpectedPublic,[string]$Reason) {
