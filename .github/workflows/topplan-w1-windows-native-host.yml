@@ -32,6 +32,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify native Windows SSH launch paths
+        run: npm run test:ssh-paths
+
       - name: Verify first owner setup under Windows PowerShell 5.1
         shell: pwsh
         run: |
