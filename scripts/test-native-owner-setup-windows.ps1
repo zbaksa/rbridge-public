@@ -82,6 +82,26 @@ try {
   Assert-QA ((Get-FileHash -LiteralPath $Config).Hash -ceq $ConfigHash -and (Get-Item -LiteralPath $Config).LastWriteTimeUtc.Ticks -eq $ConfigTime) 'no config rewrite'
   $Passed++
 
+  # The owner invokes downloaded code in memory; it must return to its caller.
+  $DriverData=Join-Path $Root 'memory-driver.json'
+  [IO.File]::WriteAllText($DriverData,(@{bootstrap=$BootstrapPath;package=$PackageZip;install=$Install;serverKey=$ServerKey}|ConvertTo-Json),$Utf8)
+  $Driver=Join-Path $Root 'memory-driver.ps1'
+  $DriverText='$d=Get-Content -LiteralPath '''+$DriverData.Replace("'","''")+''' -Raw | ConvertFrom-Json'+[Environment]::NewLine+
+    '& ([scriptblock]::Create([IO.File]::ReadAllText($d.bootstrap))) -PackageZip $d.package -InstallDir $d.install -SshHost fixture.invalid -ServerHostKey $d.serverKey'+[Environment]::NewLine+
+    '[Console]::WriteLine("OWNER_SETUP_CALLER_STILL_ALIVE")'
+  [IO.File]::WriteAllText($Driver,$DriverText,$Utf8)
+  $Start=New-Object Diagnostics.ProcessStartInfo
+  $Start.FileName=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $Start.Arguments='-NoProfile -NonInteractive -File "'+$Driver+'"';$Start.UseShellExecute=$false;$Start.RedirectStandardOutput=$true;$Start.RedirectStandardError=$true
+  $Child=New-Object Diagnostics.Process;$Child.StartInfo=$Start
+  try {
+    [void]$Child.Start();$Out=$Child.StandardOutput.ReadToEndAsync();$Err=$Child.StandardError.ReadToEndAsync()
+    if(-not $Child.WaitForExit(45000)){$Child.Kill();throw 'MEMORY_SETUP_TEST_TIMEOUT'}
+    Assert-QA ($Out.Wait(1000) -and $Err.Wait(1000) -and $Child.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($Err.Result)) 'memory execution'
+    Assert-QA ($Out.Result.Contains('OWNER_SETUP_CALLER_STILL_ALIVE')) 'memory invocation returns to caller'
+  } finally {$Child.Dispose()}
+  $Passed++
+
   # Unknown local receipt fields must never be echoed by a successful rerun.
   $SetupReceipt=Join-Path $Install '.owner-setup-v1.json'
   $ReceiptBefore=[IO.File]::ReadAllText($SetupReceipt)
