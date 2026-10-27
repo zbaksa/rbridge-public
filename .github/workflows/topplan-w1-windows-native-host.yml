@@ -32,6 +32,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify read-only owner facts under Windows PowerShell 5.1
+        shell: pwsh
+        run: powershell.exe -NoProfile -NonInteractive -File scripts/test-native-owner-facts-windows.ps1
+
       - name: Verify portable V3 Native result store
         run: npm run test:v3:native-results
 
