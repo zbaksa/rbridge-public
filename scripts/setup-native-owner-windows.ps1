@@ -101,6 +101,36 @@ function Check-Installed([string]$ExpectedConfigSha) {
   foreach ($Key in $RegistryPaths) {Need ([string]::Equals((Binding $Key),$ManifestPath,[StringComparison]::OrdinalIgnoreCase)) 'EXISTING_INSTALLATION_CHANGED'}
   return Hash-Bytes $Raw
 }
+function Set-FreshPrivatePermissions {
+  # Only the newly created key is normalized; existing keys/ACLs are never reset.
+  $OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+  $Security=New-Object Security.AccessControl.FileSecurity
+  $Security.SetOwner($OwnerSid);$Security.SetAccessRuleProtection($true,$false)
+  foreach ($AllowedSid in @($OwnerSid,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')))) {
+    $Access=New-Object Security.AccessControl.FileSystemAccessRule($AllowedSid,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow)
+    [void]$Security.AddAccessRule($Access)
+  }
+  Set-Acl -LiteralPath $Identity -AclObject $Security
+}
+function Check-PrivateIdentity([string]$ExpectedPublic,[string]$Reason) {
+  try {
+    [void](Local-Path $Identity)
+    $Info=Get-Item -LiteralPath $Identity -Force
+    Need (-not $Info.PSIsContainer -and $Info.Length -ge 1 -and $Info.Length -le 16384) $Reason
+    $OwnerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    foreach ($ProtectedPath in @($KeyDir,$Identity)) {
+      [void](Local-Path $ProtectedPath)
+      $Security=Get-Acl -LiteralPath $ProtectedPath
+      Need ($Security.AreAccessRulesProtected -and $Security.GetOwner([Security.Principal.SecurityIdentifier]).Value -ceq $OwnerSid) $Reason
+      foreach ($Rule in $Security.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+        Need ($Rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $Rule.IdentityReference.Value -in @($OwnerSid,'S-1-5-18')) $Reason
+      }
+    }
+    $DerivedText=Run-Bounded $Keygen ('-y -P "" -f "'+$Identity+'"') 15000
+    $Derived=Public-Key $DerivedText $Reason
+    Need ($Derived.publicKey -ceq $ExpectedPublic) $Reason
+  } catch {throw $Reason}
+}
 function Public-Result([string]$State,[string]$ConfigDigest,$PublicIdentity) {
   # Construct a fixed public projection; never return an owner-editable receipt document.
   return [pscustomobject]@{schema='COCWIN_RBRIDGE_WINDOWS_OWNER_SETUP_V1';status='PASS';state=$State;packageSourceSha=$PackageSource;packageSha256=$PackageSha;executableSha256=$ExeSha;configSha256=$ConfigDigest;directory=$InstallDir;sshHost=$SshHost;sshPort=$SshPort;serverHostKey=$ServerHostKey;serverFingerprint=$Server.fingerprint;publicKey=$PublicIdentity.publicKey;fingerprint=$PublicIdentity.fingerprint;identityFile=$Identity;knownHostsFile=$KnownHosts;extensionId=$ExtensionId;browserExtension='NOT_INSTALLED_BY_THIS_STEP';v3Configured=$false;sshAuthentication='NOT_RUN';browserAcceptance='NOT_RUN';browserSends=0}
@@ -109,6 +139,16 @@ function Run-Bounded([string]$Exe,[string]$Arguments,[int]$Timeout) {
   $Start=New-Object Diagnostics.ProcessStartInfo
   $Start.FileName=$Exe;$Start.Arguments=$Arguments;$Start.UseShellExecute=$false;$Start.CreateNoWindow=$true
   $Start.RedirectStandardInput=$true;$Start.RedirectStandardOutput=$true;$Start.RedirectStandardError=$true
+  $Start.StandardOutputEncoding=$Utf8;$Start.StandardErrorEncoding=$Utf8
+  $Start.EnvironmentVariables.Clear()
+  $Start.EnvironmentVariables['SystemRoot']=$Windows
+  $Start.EnvironmentVariables['WINDIR']=$Windows
+  $Start.EnvironmentVariables['PATH']=(Join-Path $Windows 'System32\OpenSSH')+';'+(Join-Path $Windows 'System32')
+  $Start.EnvironmentVariables['USERPROFILE']=[Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+  $Start.EnvironmentVariables['LOCALAPPDATA']=$LocalData
+  $Start.EnvironmentVariables['TEMP']=Join-Path $LocalData 'Temp'
+  $Start.EnvironmentVariables['TMP']=Join-Path $LocalData 'Temp'
+  $Start.EnvironmentVariables['SSH_ASKPASS_REQUIRE']='never'
   $Process=New-Object Diagnostics.Process;$Process.StartInfo=$Start
   try {
     [void]$Process.Start();$Process.StandardInput.Close();$Out=$Process.StandardOutput.ReadToEndAsync();$Err=$Process.StandardError.ReadToEndAsync()
@@ -150,6 +190,7 @@ try {
       $ConfigSha=Check-Installed $Saved.configSha256
       $Public=Public-Key ($Utf8.GetString((Read-Small ($Identity+'.pub') 4096))) 'EXISTING_INSTALLATION_CHANGED'
       Need ($Public.publicKey -ceq $Saved.publicKey -and $Public.fingerprint -ceq $Saved.fingerprint) 'EXISTING_INSTALLATION_CHANGED'
+      Check-PrivateIdentity $Public.publicKey 'EXISTING_INSTALLATION_CHANGED'
       $Result=Public-Result 'ALREADY_INSTALLED_AWAITING_SERVER_KEY_ENROLLMENT' $ConfigSha $Public;$ExitCode=0
     } catch {throw 'EXISTING_INSTALLATION_CHANGED'}
   } else {
@@ -197,7 +238,9 @@ try {
     }
     Set-Acl -LiteralPath $KeyDir -AclObject $Acl
     [void](Run-Bounded $Keygen ('-q -t ed25519 -N "" -C "cocwin-native-owner" -f "'+$Identity+'"') 15000)
+    Set-FreshPrivatePermissions
     $Public=Public-Key ($Utf8.GetString((Read-Small ($Identity+'.pub') 4096))) 'GENERATED_PUBLIC_KEY_INVALID'
+    Check-PrivateIdentity $Public.publicKey 'GENERATED_IDENTITY_INVALID'
     New-Bytes $KnownHosts ($Utf8.GetBytes($KnownLine))
     $Phase='NATIVE_INSTALLATION'
     $Installer=Join-Path $Stage 'install-native-host-windows.ps1';$SourceExe=Join-Path $Stage 'rbridge-native-host.exe'
