@@ -26,3 +26,5 @@ Consumes: buildSshStdioLaunch(SshStdioLaunchConfig):SshStdioLaunch. Produces: sa
 - [ ] Small platform-specific validator repair; Expected: new tests and existing portable suites PASS on actual RBridge1027 and Windows.
 - [ ] One fresh review, one regression-first fix pass if needed, exact-head full npm verify/type/lint/build/diff and canonical Windows CI. Preserve final artifact metadata, but do not relabel it published/installed.
 - [ ] Leased source integration, exact readback, durable tracker/checkpoint; genuine Windows authentication and V3 provisioning remain independently gated.
+
+Single review fix pass: first run Windows negatives for option parsing, actual client configuration, DOS component aliases and identity/known-host expansion syntax against the reviewed6aaa source. Expected real failures before implementation. Then encode only the Windows known-host option, reject unsafe Windows components/unsupported expansion grammar, and run the complete exact-head suite. Do not commission a second review or label generated packages installed.
