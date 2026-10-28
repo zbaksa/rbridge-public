@@ -1,0 +1,60 @@
+name: COCWIN P01 owner V3 install kit
+on:
+  push:
+    branches:
+      - cocwin/p01-owner-v3-kit-20261028
+    paths:
+      - .github/workflows/cocwin-p01-owner-v3-kit.yml
+      - scripts/p01-owner-setup.html
+      - scripts/p01-owner-setup.js
+      - scripts/p01-owner-configure-native.cjs
+      - scripts/p01-owner-v3-kit.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install pinned deps
+        run: npm ci --no-audit --no-fund
+      - name: Build qualified source
+        run: npm run build:server
+      - name: Check P01 installer source syntax
+        run: |
+          node --check scripts/p01-owner-setup.js
+          node --check scripts/p01-owner-configure-native.cjs
+          node --check scripts/p01-owner-v3-kit.mjs
+      - name: Build SHA-pinned owner Chrome/Native/Linux package
+        run: node scripts/p01-owner-v3-kit.mjs
+      - name: Verify package contract (no browser SEND)
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync,existsSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const root='dist-p01-owner-v3-kit/';
+          const m=JSON.parse(readFileSync(root+'MANIFEST.json','utf8'));
+          const ext=JSON.parse(readFileSync(root+'extension/manifest.json','utf8'));
+          const doc=readFileSync(root+'extension/p01-startup.json');
+          const hash=createHash('sha256').update(doc).digest('hex');
+          const startup=JSON.parse(doc);
+          const linux=JSON.parse(readFileSync(root+'linux/v3-peer-config.json','utf8'));
+          const native=JSON.parse(readFileSync(root+'native-v3.json','utf8'));
+          if(m.status!=='BUILT_NOT_INSTALLED'||m.browserSends!==0||hash!==m.startupConfigSha256||ext.action.default_popup!=='setup.html')throw Error('P01_KIT_PACKAGE_REJECTED');
+          if(startup.peer.peerId!==linux.peerPins.peerId||startup.peer.peerId!==native.peerPins.peerId||startup.scope.sessionId!==linux.scope.sessionId||startup.scope.sessionId!==native.scope.sessionId)throw Error('P01_KIT_SCOPE_MISMATCH');
+          if(linux.initialHistory.sequence!==0||native.initialHistory.eventSha256!==null)throw Error('P01_FRESH_HISTORY_REQUIRED');
+          if(!existsSync(root+'extension/serviceWorker.js')||!existsSync(root+'extension/content.js')||!existsSync(root+'INSTALL_NATIVE.cmd'))throw Error('P01_KIT_MISSING_FILE');
+          console.log('COCWIN_P01_OWNER_KIT_STATIC_GATE=PASS');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cocwin-p01-owner-v3-kit
+          path: dist-p01-owner-v3-kit/
+          retention-days: 7
+          if-no-files-found: error
