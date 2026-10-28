@@ -49,7 +49,7 @@ jobs:
           if(m.status!=='BUILT_NOT_INSTALLED'||m.browserSends!==0||hash!==m.startupConfigSha256||ext.action.default_popup!=='setup.html')throw Error('P01_KIT_PACKAGE_REJECTED');
           if(startup.peer.peerId!==linux.peerPins.peerId||startup.peer.peerId!==native.peerPins.peerId||startup.scope.sessionId!==linux.scope.sessionId||startup.scope.sessionId!==native.scope.sessionId)throw Error('P01_KIT_SCOPE_MISMATCH');
           if(linux.initialHistory.sequence!==0||native.initialHistory.eventSha256!==null)throw Error('P01_FRESH_HISTORY_REQUIRED');
-          if(!existsSync(root+'extension/serviceWorker.js')||!existsSync(root+'extension/content.js')||!existsSync(root+'INSTALL_NATIVE.cmd'))throw Error('P01_KIT_MISSING_FILE');
+          if(!existsSync(root+'extension/serviceWorker.js')||!existsSync(root+'extension/contentScript.js')||!existsSync(root+'INSTALL_NATIVE.cmd'))throw Error('P01_KIT_MISSING_FILE');
           console.log('COCWIN_P01_OWNER_KIT_STATIC_GATE=PASS');
           NODE
       - uses: actions/upload-artifact@v4
