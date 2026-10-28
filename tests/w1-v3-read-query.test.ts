@@ -89,7 +89,7 @@ describe('existing owner read commands through the fixed V3 peer',()=>{
   }));
   it('rejects late results at the deadline even on a renewed live channel',()=>root(async store=>{
     const start=Date.now();vi.spyOn(Date,'now').mockReturnValue(start);const q=await query();await reads(store).submitReadQuery(q);await store.takeForDispatch();
-    vi.spyOn(Date,'now').mockReturnValue(start+5000);await store.heartbeat();await expect(store.recordIncoming(await resultFor(q),pins)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');
+    vi.spyOn(Date,'now').mockReturnValue(start+4000);await store.heartbeat();vi.spyOn(Date,'now').mockReturnValue(start+5000);await expect(store.recordIncoming(await resultFor(q),pins)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');
   }));
   it.each([false,true])('retains old-channel records but never replays them, completed=%s',complete=>root(async(store,path)=>{
     const q=await query();await reads(store).submitReadQuery(q);if(complete){await store.takeForDispatch();await store.recordIncoming(await resultFor(q),pins);}
