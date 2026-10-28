@@ -7,7 +7,7 @@ import {canonicalJson,parseV3Scope} from '../domain/rbridgeEffectProtocol.js';
 import {RbridgeChatPeerStoreV3} from './rbridgeChatPeerStore.js';
 import {runRbridgeChatStdio} from './rbridgeChatStdio.js';
 
-const OPERATIONS=new Set(['stage-chunk','commit-command','read-result','read-event','inspect-peer']);
+const OPERATIONS=new Set(['stage-chunk','commit-command','read-result','read-event','inspect-peer','submit-query','read-query']);
 const CONFIG='/etc/rbridge/chat-peer-v3.json';
 function fail(code:string):never{throw Error(code);}
 function fields(value:unknown,keys:readonly string[]):Record<string,unknown>{
@@ -46,6 +46,8 @@ export async function executeRbridgeChatPeerCli(store:RbridgeChatPeerStoreV3,arg
   else if(operation==='commit-command'){await store.commitCommand(input);value=null;}
   else if(operation==='read-result'){const row=fields(input,['commandId','scope']);if(typeof row.commandId!=='string')fail('RBRIDGE_PEER_CLI_COMMAND_ID_INVALID');value=(await store.read(row.commandId,parseV3Scope(row.scope))).result;}
   else if(operation==='read-event'){const row=fields(input,['afterSequence']);if(!Number.isSafeInteger(row.afterSequence)||Number(row.afterSequence)<0)fail('RBRIDGE_PEER_CLI_CURSOR_INVALID');value=await store.readEvent(Number(row.afterSequence));}
+  else if(operation==='submit-query'){fields(input,['scope','command']);value=await store.submitReadQuery(input);}
+  else if(operation==='read-query'){const row=fields(input,['commandId','scope']);if(typeof row.commandId!=='string')fail('RBRIDGE_PEER_CLI_COMMAND_ID_INVALID');value=await store.readQuery(row.commandId,parseV3Scope(row.scope));}
   else{fields(input,[]);value=await store.peer();}
   const result={schema:'RBRIDGE_CHAT_FIXED_PEER_CLI_V3' as const,status:'PASS' as const,operation,value};
   if(Buffer.byteLength(canonicalJson(result))>131072)fail('RBRIDGE_PEER_CLI_OUTPUT_BUDGET_EXCEEDED');return result;
