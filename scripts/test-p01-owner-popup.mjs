@@ -33,7 +33,7 @@ async function run(name,initial,expected){
   assert.equal(reloads,expected.reloads,name+' reload');
   assert.equal(access,expected.access,name+' access');
   assert.equal(btn.disabled,expected.blocked,name+' button state');
-  if(expected.blocked)assert.match(status.textContent,/BLOKIRANO:/,name);
+  if(!expected.blocked)assert.match(status.textContent,/BLOKIRANO:/,name);
   if(!expected.blocked)assert.equal(store.rbridgeExtensionStartupV3,raw,name+' preserved startup');
   for(const [key,value]of Object.entries(initial))assert.deepEqual(store[key],value,name+' preserves '+key);
   console.log('PASS P01_POPUP '+name);
