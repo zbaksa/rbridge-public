@@ -42,3 +42,5 @@ Ruling: own App auth is already available through its existing scoped credential
 
 Task1 actual RED: test-only a48443ba09d51f5f86b952f43cfd395d6f871718/tree219ac76bee1ee45e051cabb5356f4c4b4c36aac2; actual RBridge1027 proof22753, 27 expected focused failures and independent typecheck PASS. Implementation qualification pending; no activation or readiness claim.
 Ruling: expiresAt is exclusive: now>=expiresAt is stale, including a completed result. Preserve optional legacy journal shape until an intentional query write. Effect dispatch order and existing budgets remain unchanged.
+
+First implementation522453cb: actual proof22754 focused24/27 PASS and typecheck PASS. Three fixture errors: foreignbase reused golden aaaa; expired-query tests let the separate channel lease expire before heartbeat. Correct fixtures to basebbbb and renew at+4000 before+5001, retaining strict production TTL. Add real independent CLI-process persistence and rehashed malformed-query metadata regressions. No production-code correction in this test-only increment.
