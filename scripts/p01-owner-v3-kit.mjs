@@ -16,8 +16,11 @@ const config=JSON.parse(originalConfigText);
 if(config.schema!=='RBRIDGE_CHAT_PEER_CONFIG_V3'||config.scope?.appId!=='cocwin'
  ||config.scope?.baseSha!==cocwinBaseSha||config.peerPins?.releaseSha!==releaseSha
  ||config.initialHistory?.sequence!==0||config.initialHistory?.eventSha256!==null)throw Error('P01_ORIGINAL_OWNER_SCOPE_CHANGED');
-const scope=parseV3Scope(config.scope);
-const peer=config.peerPins;
+const verifiedScope=parseV3Scope(config.scope);
+// Retain the original order of the exact owner-pinned startup JSON bytes.
+const scope={appId:verifiedScope.appId,baseSha:verifiedScope.baseSha,sessionId:verifiedScope.sessionId,generation:verifiedScope.generation};
+const data=config.peerPins;
+const peer={peerId:data.peerId,releaseSha:data.releaseSha,browserInstanceId:data.browserInstanceId,browserProfileId:data.browserProfileId,protocolMinor:data.protocolMinor,maxMessageBytes:data.maxMessageBytes,capabilities:data.capabilities};
 if(JSON.stringify(peer.capabilities)!==JSON.stringify(V3_CAPABILITIES))throw Error('P01_CAPABILITIES_CHANGED');
 requireV3Peer(peer);
 const initialHistory={sequence:0,eventSha256:null};
