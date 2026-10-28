@@ -1,0 +1,29 @@
+# Existing owner read-query lane for P01
+Goal: obtain genuine existing browser target discovery and persisted owner state through the installed fixed peer before inventing a new snapshot protocol. Native and browser931e already support DISCOVER_TARGET and READ_STATE; only Linux fixed peer/CLI reachability and the Cocwin client are missing.
+Reuse existing RBRIDGE_CHAT_COMMAND_V1 / COMMAND_RESULT_V1, minor1, Native allowlist, worker dispatcher, existing fixed peer spool/gates and App broker. No Windows bundle change, new controller/scheduler/registry/effect kind, provider call, capture start, SEND, readiness grant or production activation.
+Readonly means no browser mutation or artificial effect reservation. The peer still persists its deliberately submitted query metadata inside its existing spool. Preserve all old journals and uncertain operations. Source qualifies independently of activation.
+
+## Contract
+R module src/domain/rbridgeReadQuery.ts and mirrored C wire contract:
+- buildRbridgeReadQuery(scope, action, payload, commandId, issuedAt) async -> {scope,command}; action exactly READ_STATE|DISCOVER_TARGET, existing strict payload shape, attemptId/effectId null.
+- requestDigest = canonicalDigest({schema:'RBRIDGE_CHAT_READ_QUERY_DIGEST_V1',scope,command:all existing V1 command fields except requestDigest}); parser must verify it, exact scope/session/generation, 8192-byte input maximum.
+- RbridgeReadQueryRecordV1: {schema:'RBRIDGE_CHAT_READ_QUERY_RECORD_V1',scope,command,channelId,submittedAt,expiresAt,state:'QUEUED'|'DISPATCHED'|'COMPLETE',result:RbridgeChatCommandResultV1|null,receivedAt:number|null}. Times are safe integer Linux milliseconds; expiresAt=submittedAt+5000. channelId is actual stable current peer channel ID.
+- store.submitReadQuery(input:{scope,command}) -> record; store.readQuery(commandId,scope) -> record|null. Fresh current channel/pins/scope required. A duplicate exact command is idempotent; changed ID bytes or collision with effect/transfers is REQUEST_ID_COLLISION.
+- Fixed CLI adds submit-query({scope,command}) and read-query({commandId,scope}) only; standard canonical base64/argument/output budgets apply.
+- Store takeForDispatch may return an existing V1 read command OR original V3 effect command. Existing stdio/Native already carry the union. It never turns a query into EXECUTE/RECONCILE or reserves it in effect/result/event stores.
+- Incoming COMMAND_RESULT is accepted only from the owned authenticated channel, for one dispatched original query. All correlation fields/action/digest match; budget, current scope/channel and deadline are verified. Exact result replay allowed; conflicting/unsolicited result rejected. READ_STATE foreign owner/session remains rejected by existing browser dispatcher; don't weaken this.
+- Stale/channel-changed queries are never dispatched/replayed as current. Retain originals; throw RBRIDGE_READ_QUERY_STALE or RBRIDGE_READ_QUERY_CHANNEL_CHANGED from readback. Missing result stays pending; no retry under a changed identity after uncertainty.
+- Query records live in an additive optional queries array of the existing journal; legacy journal without it remains readable and unchanged until intentional query write. No history deletion. Existing overall8MiB/command budgets plus max128 query records; no uncontrolled cleanup. Old readers may reject new metadata on rollback: hold deployment until qualified coordinated Linux installation.
+- C existing createRbridgeAppPeerTransport gains submitReadQuery(query) and readQuery(commandId), returning strict records, with the same fixed root-owned installed entry, launchCwd, scope, AppUID path and original immutable commands. Parser revalidates result correlation/deadline, never grants readiness/capture/quiescence.
+- DISCOVER_TARGET lacks conversationGeneration and READ_STATE is persisted metadata; report missing generation/live-capture/quiescence UNKNOWN. These operations do not establish those truths.
+
+## Approaches
+Full new owner snapshot/capability would require Linux+Native+Windows deployment; defer until actual existing reads show what remains. Static HELLO/pins as readiness or VERIFIED SEND as quiescence is invalid. Chosen: bridge existing read-only operations first; smallest qualified transport addition and no new Windows release.
+
+## Live invariants
+Current browser/source931e02d6b771a351e8c4e4977cf25ebf82d12a13; old Linux6b4da06feb2bca19cce2067258ee9e9ed842a700 remain installed. Scope/base/session/generation/peer pins unchanged. R6STOP, D0UNCERTAIN, old NIM2UNKNOWN and block preserved. PolicyNONE/rev23/context38 unchanged during qualification. C actual own credential STATUS22750 is200 and other-app403; no new auth or Windmill job is required for that API. Never expose credential values.
+R worktree actualUID1027: /home/rbridge/.local/state/ai-tool-fabric/app-execution/diagnostics/cocwin-v10-owner-snapshot-r1/worktree, base931e/tree6e3eef5d85fdefccd0587385cf63582d409a9a55. Existing origin is local seed, not GitHub. Fetch new branch directly from known https://github.com/zbaksa/rbridge-public.git; do not fetch its unrelated main into browser snapshot. Unrelated public relay main5454dd20 and old fixture remain untouched.
+C base e9d40cf53c2a56c740a519fdbd198ea228d26b85/tree8d55819a014dd42806a64eb8554207cfcf96e6a9, source qualified PR22712/CI40771202033. Keep that prepared branch/artifact unchanged.
+
+## Tests and limits
+Real private file stores and stdio protocol; mock only external Chrome/Native boundaries. Test existing READ_STATE/DISCOVER parse and roundtrip, exact replay, collision, unsolicited/wrong action/scope/generation/result, stale/channel replacement, budgets, legacy journal and unchanged effect reserve/event hashes. Actual tests as respective AppUID1027/1023. Original explicit private Vitest JSON reports, raw Bridge digests, typecheck/lint and full changed-head suite/CI required. No fixture counts as live browser evidence.
