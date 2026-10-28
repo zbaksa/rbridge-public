@@ -7,6 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {RbridgeChatPeerStoreV3} from '../src/server/rbridgeChatPeerStore.js';
 import {executeRbridgeChatPeerCli} from '../src/server/rbridgeChatPeerCli.js';
 import {runRbridgeChatStdio} from '../src/server/rbridgeChatStdio.js';
+import {RbridgeEffectResultStoreV3} from '../src/nativeHost/rbridgeEffectResultStore.js';
 import {buildCommandResultV1,type RbridgeChatCommandV1,type RbridgeChatCommandResultV1} from '../src/domain/rbridgeChatCommand.js';
 import {canonicalDigest,canonicalJson,V3_CAPABILITIES,type V3Scope,type VerifiedPeerV3,type RbridgeChatEffectCommandV1} from '../src/domain/rbridgeEffectProtocol.js';
 import {RbridgeEventSpoolV1,type RbridgeChatHelloV1} from '../src/domain/rbridgeChatCore.js';
@@ -18,7 +19,7 @@ interface ReadStore {submitReadQuery(query:Query):Promise<RecordV1>;readQuery(co
 interface QueryModule {buildRbridgeReadQuery(scope:V3Scope,action:'READ_STATE'|'DISCOVER_TARGET',payload:Record<string,unknown>,commandId:string,issuedAt:string):Promise<Query>;parseRbridgeReadQuery(input:unknown):Promise<Query>;parseRbridgeReadQueryRecord(input:unknown):Promise<RecordV1>}
 const modulePath='../src/domain/rbridgeReadQuery.js';
 const queryModule=await import(modulePath).catch(()=>null) as QueryModule|null;
-const fixture=JSON.parse(await readFile(new URL('./fixtures/rbridge-cocwin-contract-v3.json',import.meta.url),'utf8')) as {vectors:{command:RbridgeChatEffectCommandV1}[]};
+const fixture=JSON.parse(await readFile(new URL('./fixtures/rbridge-cocwin-contract-v3.json',import.meta.url),'utf8')) as {vectors:{command:RbridgeChatEffectCommandV1;result:unknown}[]};
 const effect=fixture.vectors[0]!.command,target=effect.request.payload.target;
 const scope:V3Scope={appId:effect.request.appId,baseSha:effect.request.baseSha,sessionId:effect.request.sessionId,generation:effect.request.generation};
 const pins:VerifiedPeerV3={peerId:'query-peer',releaseSha:'1'.repeat(40),browserInstanceId:target.browserInstanceId,browserProfileId:target.browserProfileId,protocolMinor:1,maxMessageBytes:65536,capabilities:[...V3_CAPABILITIES]};
@@ -87,9 +88,10 @@ describe('existing owner read commands through the fixed V3 peer',()=>{
     await expect(reads(store).readQuery(q.command.commandId,scope)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');
     await expect(reads(store).submitReadQuery(q)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');
   }));
-  it('rejects late results at the deadline even on a renewed live channel',()=>root(async store=>{
+  it('discards fully correlated late evidence at the deadline and preserves the live channel',()=>root(async(store,path)=>{
     const start=Date.now();vi.spyOn(Date,'now').mockReturnValue(start);const q=await query();await reads(store).submitReadQuery(q);await store.takeForDispatch();
-    vi.spyOn(Date,'now').mockReturnValue(start+4000);await store.heartbeat();vi.spyOn(Date,'now').mockReturnValue(start+5000);await expect(store.recordIncoming(await resultFor(q),pins)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');
+    const before=await readFile(join(path,'v3-peer','journal.json'));vi.spyOn(Date,'now').mockReturnValue(start+4000);await store.heartbeat();vi.spyOn(Date,'now').mockReturnValue(start+5000);
+    await expect(store.recordIncoming(await resultFor(q),pins)).resolves.toBeUndefined();await expect(reads(store).readQuery(q.command.commandId,scope)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');expect(await store.peer()).toEqual(pins);expect(await readFile(join(path,'v3-peer','journal.json'))).toEqual(before);
   }));
   it.each([false,true])('retains old-channel records but never replays them, completed=%s',complete=>root(async(store,path)=>{
     const q=await query();await reads(store).submitReadQuery(q);if(complete){await store.takeForDispatch();await store.recordIncoming(await resultFor(q),pins);}
@@ -158,5 +160,54 @@ describe('existing owner read commands through the fixed V3 peer',()=>{
     if(kind==='expiry')record.expiresAt++;else if(kind==='digest')record.command.requestDigest='0'.repeat(64);else if(kind==='state')record.state='COMPLETE';else if(kind==='extra')record.untrusted=true;else journal.queries.push(structuredClone(record));
     const {sha256:old,...body}=journal;void old;journal.sha256=await canonicalDigest(body);await writeFile(p,canonicalJson(journal)+'\n',{mode:0o600});const original=await readFile(p);
     await expect(reads(store).readQuery(q.command.commandId,scope)).rejects.toThrow();expect(await readFile(p)).toEqual(original);
+  }));
+  it.each([false,true])('preserves result-only reservations after interrupted peer persistence, historical=%s',historical=>root(async(store,path)=>{
+    await store.enqueue(effect,scope);const orphan=structuredClone(fixture.vectors[1]!.command);
+    const retainedScope={...scope,baseSha:historical?'b'.repeat(40):scope.baseSha};orphan.request.baseSha=retainedScope.baseSha;
+    const {requestDigest:oldRequest,...request}=orphan.request;void oldRequest;orphan.request.requestDigest=await canonicalDigest(request);
+    const {commandSha256:oldCommand,...command}=orphan;void oldCommand;orphan.commandSha256=await canonicalDigest(command);
+    const results=new RbridgeEffectResultStoreV3({eventStoreRoot:path,scope:retainedScope,maxMessageBytes:pins.maxMessageBytes,crossProcess:true});await results.reserve(orphan);
+    const peerPath=join(path,'v3-peer','journal.json'),resultPath=join(path,'v3-results','journal.json'),peerBefore=await readFile(peerPath),resultsBefore=await readFile(resultPath),reopened=new RbridgeChatPeerStoreV3(path);
+    await expect(reads(reopened).submitReadQuery(await query(orphan.commandId))).rejects.toThrow('REQUEST_ID_COLLISION');expect(await readFile(peerPath)).toEqual(peerBefore);expect(await readFile(resultPath)).toEqual(resultsBefore);
+    if(!historical){await reopened.enqueue(orphan,scope);expect(await store.takeForDispatch()).toEqual(effect);expect(await store.takeForDispatch()).toEqual(orphan);}else expect((await results.readRetained(orphan.commandId))?.command).toEqual(orphan);
+  }));
+  it.each(['malformed','correlation','conflict','foreign-channel'] as const)('does not suppress invalid expired result: %s',kind=>root(async(store,path)=>{
+    const start=Date.now();vi.spyOn(Date,'now').mockReturnValue(start);const q=await query();await reads(store).submitReadQuery(q);await store.takeForDispatch();const result=await resultFor(q);
+    if(kind==='conflict')await store.recordIncoming(result,pins);
+    vi.spyOn(Date,'now').mockReturnValue(start+4000);await store.heartbeat();vi.spyOn(Date,'now').mockReturnValue(start+5000);
+    if(kind==='foreign-channel'){
+      await store.disconnect();const next=new RbridgeChatPeerStoreV3(path);await next.acceptHello(hello);try{await expect(next.recordIncoming(result,pins)).rejects.toThrow('RBRIDGE_READ_QUERY_CHANNEL_CHANGED');}finally{await next.disconnect();}
+    }else{
+      const changed=kind==='malformed'?{...result,completedAt:'invalid'}:kind==='correlation'?{...result,requestDigest:'0'.repeat(64)}:{...result,result:{changed:true}};
+      await expect(store.recordIncoming(changed,pins)).rejects.toThrow(kind==='conflict'?'REQUEST_ID_COLLISION':/INVALID|MISMATCH/);
+    }
+  }));
+  it('keeps real stdio and subsequent query/effect traffic alive after a late known result',()=>root(async(store,path)=>{
+    await store.disconnect();let now=Date.now();const start=now;vi.spyOn(Date,'now').mockImplementation(()=>now);
+    const input=new PassThrough(),output=new PassThrough(),decoder=new StdioFrameDecoder(),messages:unknown[]=[];let ended=false;
+    output.on('data',(data:Buffer)=>messages.push(...decoder.push(data)));const run=runRbridgeChatStdio(input,output,store);void run.then(()=>{ended=true;},()=>{ended=true;});
+    async function until(fn:()=>boolean|Promise<boolean>){const end=performance.now()+4000;while(!await fn()){if(performance.now()>=end)throw Error('LATE_QUERY_CHANNEL_TIMEOUT');await new Promise(resolve=>setTimeout(resolve,10));}}
+    try{
+      input.write(encodeStdioFrame(hello));await until(()=>messages.length===1);const q=await query('late-read'),broker=new RbridgeChatPeerStoreV3(path);await reads(broker).submitReadQuery(q);await until(()=>messages.length===2);
+      const peerPath=join(path,'v3-peer','journal.json'),original=JSON.parse((await readFile(peerPath)).toString()).queries[0];now=start+4000;await store.heartbeat();now=start+5000;
+      const next=await query('next-read');await reads(broker).submitReadQuery(next);await until(()=>messages.length===3);
+      input.write(Buffer.concat([encodeStdioFrame(await resultFor(q)),encodeStdioFrame(await resultFor(next))]));await until(async()=>(await reads(broker).readQuery(next.command.commandId,scope))?.state==='COMPLETE');
+      expect(ended).toBe(false);await expect(reads(broker).readQuery(q.command.commandId,scope)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');expect(JSON.parse((await readFile(peerPath)).toString()).queries[0]).toEqual(original);
+      await broker.enqueue(effect,scope);await until(()=>messages.length===4);expect(messages[3]).toEqual(effect);input.write(encodeStdioFrame(fixture.vectors[0]!.result));await until(async()=>Boolean((await broker.read(effect.commandId,scope)).result));expect(await broker.peer()).toEqual(pins);
+    }finally{input.end();await run.catch(()=>undefined);output.destroy();}
+  }));
+  it('does not emit or replay a query expiring during durable dispatch persistence',()=>root(async(store,path)=>{
+    await store.disconnect();let now=Date.now();const start=now;vi.spyOn(Date,'now').mockImplementation(()=>now);
+    const input=new PassThrough(),output=new PassThrough(),decoder=new StdioFrameDecoder(),messages:unknown[]=[];
+    output.on('data',(data:Buffer)=>messages.push(...decoder.push(data)));const run=runRbridgeChatStdio(input,output,store);void run.catch(()=>undefined);
+    async function until(fn:()=>boolean|Promise<boolean>){const end=performance.now()+4000;while(!await fn()){if(performance.now()>=end)throw Error('DISPATCH_EXPIRY_CHANNEL_TIMEOUT');await new Promise(resolve=>setTimeout(resolve,10));}}
+    const writable=store as unknown as {persist(journal:{queries?:RecordV1[]}):Promise<void>},persist=writable.persist.bind(store);let crossed=false;
+    vi.spyOn(writable,'persist').mockImplementation(async journal=>{await persist(journal);if(journal.queries?.some(q=>q.command.commandId==='expires-in-persist'&&q.state==='DISPATCHED')){now=start+5000;crossed=true;}});
+    try{
+      input.write(encodeStdioFrame(hello));await until(()=>messages.length===1);const broker=new RbridgeChatPeerStoreV3(path),q=await query('expires-in-persist');await reads(broker).submitReadQuery(q);now=start+4999;await store.heartbeat();await until(()=>crossed);
+      const next=await query('after-persistence-expiry');await reads(broker).submitReadQuery(next);await until(()=>messages.length===2);expect(messages[1]).toEqual(next.command);input.write(encodeStdioFrame(await resultFor(next)));await until(async()=>(await reads(broker).readQuery(next.command.commandId,scope))?.state==='COMPLETE');
+      await expect(reads(broker).readQuery(q.command.commandId,scope)).rejects.toThrow('RBRIDGE_READ_QUERY_STALE');expect(await broker.peer()).toEqual(pins);
+      expect(JSON.parse((await readFile(join(path,'v3-peer','journal.json'))).toString()).queries[0]).toMatchObject({state:'DISPATCHED',result:null});
+    }finally{input.end();await run.catch(()=>undefined);output.destroy();}
   }));
 });
