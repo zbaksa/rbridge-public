@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='dideri-r24-wasm-',dir=ROOT) as temp:
         for item in tf.getmembers():
             name=Path(item.name)
             assert not name.is_absolute() and '..' not in name.parts
-            assert item.name.startswith('games/tetris312-dos/')
+            assert item.name in ('games/','games/tetris312-dos/') or item.name.startswith('games/tetris312-dos/')
             assert item.isfile() or item.isdir()
         tf.extractall(path=dest)
     src=dest/'games/tetris312-dos/src/tetris312_wasm_entry.cpp'
