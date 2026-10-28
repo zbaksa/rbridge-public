@@ -24,7 +24,7 @@ FRAMES = [
     ('02_left_7', 'b02c8bc7cae4db2a270c6b0a6a5f2557df33dcc4017409261522cbc7e42ad28c'),
     ('03_right_9', '7f9da4a537f46e300bcced1d00a0f323b807d1402f69313d0d6e81c262549e95'),
     ('04_right_9', '19745f33a66a4bba58401b505f188372fcc2b9db9c7e77b94be3de77d97cd4da'),
-    ('05_left_7', '557180c8d63b2bf7b7afcdf0b09d92ab98e8e4ee63999b5e0f368679a09adb3'),
+    ('05_left_7', '557180c8d63b2bf7b7bafcdf0b09d92ab98e8e4ee63999b5e0f368679a09adb3'),
 ]
 EXPORTS = ['reset','reset_height','command','state','toggle_next','board','piece_cell']
 
