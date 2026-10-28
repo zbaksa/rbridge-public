@@ -65,3 +65,40 @@ btn.addEventListener('click',async()=>{
     chrome.runtime.reload();
   } catch(error) {show(error);btn.disabled=false;}
 });
+
+/** Read-only exact live tab observation for Cocwin P01; never binds or sends. */
+const copyTarget=document.createElement('button');
+copyTarget.textContent='Kopiraj ChatGPT cilj';
+copyTarget.id='copy-target';
+status.insertAdjacentElement('beforebegin',copyTarget);
+copyTarget.addEventListener('click',async()=>{
+  copyTarget.disabled=true;
+  try{
+    const {cfg}=await pinnedDocument();
+    if(typeof chrome.tabs?.query!=='function')throw Error('CHROME_TABS_UNAVAILABLE');
+    const matches=await chrome.tabs.query({active:true,currentWindow:true});
+    if(!Array.isArray(matches)||matches.length!==1)throw Error('EXACT_ACTIVE_TAB_AMBIGUOUS');
+    const tab=matches[0];
+    if(!Number.isInteger(tab?.id)||tab.id<0||!Number.isInteger(tab.windowId)||tab.windowId<0||typeof tab.url!=='string')
+      throw Error('ACTIVE_TAB_IDENTITY_INVALID');
+    let url;try{url=new URL(tab.url);}catch{throw Error('ACTIVE_TAB_URL_INVALID');}
+    if(url.origin!=='https://chatgpt.com')throw Error('OPEN_CHATGPT_PROJECT_CONVERSATION_FIRST');
+    const path=url.pathname.split('/').filter(Boolean);
+    if(path.length!==4||path[0]!=='g'||path[2]!=='c')throw Error('OPEN_CHATGPT_PROJECT_CONVERSATION_FIRST');
+    const projectId=path[1],conversationId=path[3];
+    const canonical=projectId.match(/^(g-p-[A-Za-z0-9]{32})(?:-[A-Za-z0-9][A-Za-z0-9-]*)?$/)?.[1];
+    if(!canonical||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(conversationId))
+      throw Error('CHATGPT_ROUTE_IDENTITY_UNSUPPORTED');
+    const result={schema:'COCWIN_P01_OWNER_ACTIVE_TAB_OBSERVATION_V1',status:'OBSERVED_NOT_BOUND',
+      scopeSessionId:cfg.scope.sessionId,peerId:cfg.peer.peerId,
+      browserInstanceId:cfg.peer.browserInstanceId,browserProfileId:cfg.peer.browserProfileId,
+      windowId:tab.windowId,tabId:tab.id,origin:url.origin,canonicalProjectId:canonical,
+      projectId,conversationId,observedAt:new Date().toISOString()};
+    const serialized=JSON.stringify(result);
+    status.textContent=serialized;
+    if(navigator?.clipboard?.writeText) {
+      try{await navigator.clipboard.writeText(serialized);status.textContent='CILJ KOPIRAN — zalijepi ga u ovaj ChatGPT razgovor.\n'+serialized;}
+      catch{status.textContent='KOPIRANJE NIJE DOSTUPNO — kopiraj JSON ispod.\n'+serialized;}
+    }
+  }catch(error){show(error);}finally{copyTarget.disabled=false;}
+});
