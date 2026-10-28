@@ -13,11 +13,6 @@ function show(error) {
   const reason=String(error?.message??error);
   status.textContent='BLOKIRANO: '+reason.slice(0,350);
 }
-function compatibleBootstrap(existing,expected) {
-  if(!existing||typeof existing!=='object'||Array.isArray(existing))return false;
-  const a=Object.keys(existing).sort(),b=Object.keys(expected).sort();
-  return a.length===b.length&&a.every((key,i)=>key===b[i]&&existing[key]===expected[key]);
-}
 async function pinnedDocument() {
   const response=await fetch(chrome.runtime.getURL('p01-startup.json'));
   if(!response.ok)throw Error('STARTUP_FILE_UNAVAILABLE');
@@ -39,7 +34,7 @@ void inspect().catch(show);
 btn.addEventListener('click',async()=>{
   btn.disabled=true;status.textContent='Provjeravam izvornu konfiguraciju i povijest...';
   try {
-    const {raw,cfg}=await pinnedDocument();
+    const {raw}=await pinnedDocument();
     const state=await chrome.storage.local.get(null);
     const keys=safeKeys(state);
     const prior=state[STARTUP_KEY];
@@ -54,8 +49,6 @@ btn.addEventListener('click',async()=>{
     // may contain live/uncertain state and must be preserved and reviewed.
     const other=keys.filter(key=>key!=='rbridgeExtensionBootstrapV1');
     if(other.length)throw Error('HISTORY_PRESENT_KEYS: '+other.join(', ').slice(0,240));
-    if(keys.includes('rbridgeExtensionBootstrapV1')&&!compatibleBootstrap(state.rbridgeExtensionBootstrapV1,cfg.bootstrap))
-      throw Error('LEGACY_BOOTSTRAP_IDENTITY_DIFFERENT');
     if(typeof chrome.storage.local.setAccessLevel!=='function')throw Error('TRUSTED_STORAGE_UNAVAILABLE');
     await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
     // An exclusive re-read blocks writing across observable conflicting keys.
@@ -64,8 +57,9 @@ btn.addEventListener('click',async()=>{
       throw Error('STORAGE_CHANGED_DURING_ACTIVATION');
     if(Object.keys(current).some(key=>key.startsWith('rbridge')&&!['rbridgeExtensionBootstrapV1'].includes(key)))
       throw Error('HISTORY_APPEARED_DURING_ACTIVATION');
-    if(keys.includes('rbridgeExtensionBootstrapV1')&&!compatibleBootstrap(current.rbridgeExtensionBootstrapV1,cfg.bootstrap))
-      throw Error('BOOTSTRAP_CHANGED_DURING_ACTIVATION');
+    if(keys.includes('rbridgeExtensionBootstrapV1')
+       &&JSON.stringify(current.rbridgeExtensionBootstrapV1)!==JSON.stringify(state.rbridgeExtensionBootstrapV1))
+      throw Error('LEGACY_BOOTSTRAP_CHANGED_DURING_ACTIVATION');
     await chrome.storage.local.set({[STARTUP_KEY]:raw});
     status.textContent='Početna V3 konfiguracija spremljena. Pokrećem vezu...';
     chrome.runtime.reload();
