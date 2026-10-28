@@ -208,7 +208,7 @@ export class RbridgeChatPeerStoreV3 {
       if(!same(query.scope,c.config.scope))fail('RBRIDGE_READ_QUERY_SCOPE_MISMATCH');
       if(Buffer.byteLength(canonicalJson(query.command))>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');
       const id=query.command.commandId;
-      if(c.journal.commands.some(entry=>entry.command.commandId===id)||c.journal.transfers.some(entry=>entry.commit.commandId===id))fail('REQUEST_ID_COLLISION');
+      if(c.journal.commands.some(entry=>entry.command.commandId===id)||c.journal.transfers.some(entry=>entry.commit.commandId===id)||(await c.results.readRetained(id))!==null)fail('REQUEST_ID_COLLISION');
       const old=c.journal.queries?.find(entry=>entry.command.commandId===id);
       if(old){if(!same(old.scope,query.scope)||!same(old.command,query.command))fail('REQUEST_ID_COLLISION');assertRbridgeReadQueryCurrent(old,c.config.scope,channel.channelId);return structuredClone(old);}
       if((c.journal.queries?.length??0)>=MAX_QUERIES)fail('RBRIDGE_READ_QUERY_RECORD_LIMIT');
@@ -227,7 +227,9 @@ export class RbridgeChatPeerStoreV3 {
     const channel=await this.channel(c,true),entry=c.journal.commands.find(e=>e.state==='QUEUED'&&sameScope(e.command,c.config.scope));
     if(entry){entry.state='DISPATCHED';await this.persist(c.journal);await this.channel(c,true);return structuredClone(entry.command);}
     const now=Date.now(),query=c.journal.queries?.find(record=>record.state==='QUEUED'&&same(record.scope,c.config.scope)&&record.channelId===channel.channelId&&now>=record.submittedAt&&now<record.expiresAt);
-    if(!query)return null;query.state='DISPATCHED';await this.persist(c.journal);assertRbridgeReadQueryCurrent(query,c.config.scope,(await this.channel(c,true)).channelId);return structuredClone(query.command);
+    if(!query)return null;query.state='DISPATCHED';await this.persist(c.journal);const current=await this.channel(c,true),observedAt=Date.now();
+    // A durable dispatch reservation is retained even when it expires before output.
+    if(observedAt>=query.expiresAt)return null;assertRbridgeReadQueryCurrent(query,c.config.scope,current.channelId,observedAt);return structuredClone(query.command);
   });}
   async recordIncoming(input:unknown,peerInput:VerifiedPeerV3):Promise<void>{
     const immutable=snapshotNativeMessage(input,65536),peer=snapshotNativeMessage(peerInput,16384) as VerifiedPeerV3;return this.exclusive(async c=>{
@@ -239,10 +241,16 @@ export class RbridgeChatPeerStoreV3 {
       const channel=await this.channel(c,true);if(Buffer.byteLength(canonicalJson(immutable))>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');
       if(schema==='RBRIDGE_CHAT_COMMAND_RESULT_V1'){
         const id=commandId((immutable as {commandId?:unknown}).commandId),record=c.journal.queries?.find(query=>query.command.commandId===id);
-        if(!record||record.state==='QUEUED')fail('RBRIDGE_READ_QUERY_RESULT_UNSOLICITED');assertRbridgeReadQueryCurrent(record,c.config.scope,channel.channelId);
+        if(!record||record.state==='QUEUED')fail('RBRIDGE_READ_QUERY_RESULT_UNSOLICITED');
         const result=correlateRbridgeReadQueryResult(immutable,record.command);
-        if(record.result!==null){if(!same(result,record.result))fail('REQUEST_ID_COLLISION');return;}
-        const receivedAt=Date.now();assertRbridgeReadQueryCurrent(record,c.config.scope,channel.channelId,receivedAt);
+        if(record.result!==null&&!same(result,record.result))fail('REQUEST_ID_COLLISION');
+        const receivedAt=Date.now();
+        try{assertRbridgeReadQueryCurrent(record,c.config.scope,channel.channelId,receivedAt);}catch(error){
+          // Expiry rejects evidence, not an otherwise authenticated shared channel.
+          if(error instanceof Error&&error.message==='RBRIDGE_READ_QUERY_STALE'&&receivedAt>=record.expiresAt)return;
+          throw error;
+        }
+        if(record.result!==null)return;
         record.result=result;record.receivedAt=receivedAt;record.state='COMPLETE';await this.persist(c.journal);return;
       }
       if(schema==='RBRIDGE_CHAT_EFFECT_RESULT_V1'){await c.results.recordRetained(immutable);return;}
