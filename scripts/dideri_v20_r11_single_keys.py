@@ -228,7 +228,6 @@ try:
                 ascii_board(frame)
             print('XTEST_LEFT2=PASS; XTEST_RIGHT2=PASS; '
                   'HORIZONTAL_MOVEMENT_CAUSALITY=UNKNOWN', flush=True)
-                  'HORIZONTAL_MOVEMENT_CAUSALITY=UNKNOWN', flush=True)
 finally:
     if proc is not None and proc.poll() is None:
         proc.terminate()
