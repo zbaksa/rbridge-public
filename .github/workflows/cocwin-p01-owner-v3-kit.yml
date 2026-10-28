@@ -9,6 +9,7 @@ on:
       - scripts/p01-owner-setup.js
       - scripts/p01-owner-configure-native.cjs
       - scripts/p01-owner-v3-kit.mjs
+      - scripts/test-p01-owner-popup.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,6 +34,8 @@ jobs:
           node --check scripts/p01-owner-v3-kit.mjs
       - name: Build SHA-pinned owner Chrome/Native/Linux package
         run: node scripts/p01-owner-v3-kit.mjs
+      - name: Verify idempotent owner popup preserves original storage history
+        run: node scripts/test-p01-owner-popup.mjs
       - name: Verify package contract (no browser SEND)
         run: |
           node --input-type=module <<'NODE'
