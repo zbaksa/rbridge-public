@@ -14,6 +14,14 @@ export interface RbridgeEffectResultStoreOptionsV3 {
   /** All fixed Linux peer journal writers must use the same kernel gate. Portable Native defaults stay unchanged. */
   crossProcess?:boolean;
 }
+export interface RbridgeScopeResultInventoryV1 {
+  readonly schema:'RBRIDGE_NATIVE_SCOPE_RESULT_INVENTORY_V1';
+  readonly scope:V3Scope;
+  readonly entryCount:number;
+  readonly unresolvedCount:number;
+  readonly entriesSha256:string;
+  readonly sha256:string;
+}
 interface Entry {command:RbridgeChatEffectCommandV1;result:RbridgeChatEffectResultV1|null}
 interface Journal {schema:'RBRIDGE_NATIVE_V3_RESULT_JOURNAL_V1';appId:string;revision:number;entries:Entry[];sha256:string}
 interface Authority {schema:'RBRIDGE_NATIVE_V3_RESULT_AUTHORITY_V1';appId:string;sha256:string}
@@ -225,6 +233,35 @@ export class RbridgeEffectResultStoreV3 {
   /** Complete reserved historical command, only for authenticated transport correlation. */
   async readRetained(id:string):Promise<Entry|null>{
     commandId(id);return this.exclusive(async()=>{const entry=(await this.load()).entries.find(row=>row.command.commandId===id);return entry?structuredClone(entry):null;});
+  }
+  /**
+   * Retained result evidence only, including null reservations; never a quiescence or capture claim.
+   * The existing private gate may touch its lock, but no journal or history authority is written.
+   */
+  async readScopeInventory(scopeInput:V3Scope):Promise<RbridgeScopeResultInventoryV1>{
+    const scope=parseV3Scope(snapshot(scopeInput));
+    if(canonicalJson(scope)!==canonicalJson(this.scope))fail('RBRIDGE_NATIVE_RESULT_SCOPE_MISMATCH');
+    return this.exclusive(async()=>{
+      const entries=(await this.load()).entries.filter(entry=>scopeMatches(entry.command,scope))
+        .sort((a,b)=>a.command.commandId<b.command.commandId?-1:a.command.commandId>b.command.commandId?1:0);
+      const terminal=(entry:Entry)=>entry.result?.state==='VERIFIED'||entry.result?.state==='FAILED_SAFE';
+      const reconciliations=new Map<string,string>();
+      for(const entry of entries){
+        if(entry.command.action!=='RECONCILE'||!terminal(entry))continue;
+        const request=canonicalJson(entry.command.request);
+        if(!reconciliations.has(request))reconciliations.set(request,entry.command.commandId);
+      }
+      const evidence=entries.map(entry=>({
+        command:entry.command,result:entry.result,
+        resolvedByCommandId:terminal(entry)?entry.command.commandId:reconciliations.get(canonicalJson(entry.command.request))??null,
+      }));
+      const body={
+        schema:'RBRIDGE_NATIVE_SCOPE_RESULT_INVENTORY_V1' as const,scope,
+        entryCount:evidence.length,unresolvedCount:evidence.filter(entry=>entry.resolvedByCommandId===null).length,
+        entriesSha256:await canonicalDigest(evidence),
+      };
+      return {...body,sha256:await canonicalDigest(body)};
+    });
   }
   /** Includes retained old-generation evidence for transport journaling; it grants no current-session authority. */
   async replay():Promise<RbridgeChatEffectResultV1[]>{return this.exclusive(async()=>structuredClone((await this.load()).entries.flatMap(row=>row.result?[row.result]:[])));}

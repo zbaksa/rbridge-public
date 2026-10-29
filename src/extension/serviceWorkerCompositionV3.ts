@@ -12,6 +12,7 @@ import {RbridgeChatCommandDispatcherV1} from './rbridgeCommandDispatcher.js';
 import {RbridgeEffectDispatcherV1} from './rbridgeEffectDispatcher.js';
 import {BrowserEffectExecutorV3} from './rbridgeEffectExecutor.js';
 import {RbridgeEffectStoreV1,snapshotEffectData} from './rbridgeEffectStore.js';
+import {RbridgeScopeStopStoreV1,type RbridgeScopeStopFenceV1} from './rbridgeScopeStopStore.js';
 import {RbridgeCaptureEgressV3,installCaptureMessageBridgeV3,type CaptureMessageApiV3} from './rbridgeCaptureEgress.js';
 import type {ExtensionBootstrapConfigV1} from './serviceWorkerEntry.js';
 
@@ -29,6 +30,7 @@ export interface WorkerCaptureStatusV3{
 }
 export interface QualifiedV3WorkerComposition{
   link:ExtensionNativePortLinkV1;readonly ready:boolean;readonly lastCapture:WorkerCaptureStatusV3|null;
+  readonly stopped:boolean;requestScopeStop(input:unknown):Promise<RbridgeScopeStopFenceV1>;
 }
 const ID=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/,SHA1=/^[a-f0-9]{40}$/;
 function fail(code:string):never{throw Error(code);}
@@ -49,7 +51,9 @@ export async function startQualifiedExtensionServiceWorkerV3(api:QualifiedV3Work
   if(!Array.isArray(initialHistory)||!Number.isInteger(captureTimeoutMs)||captureTimeoutMs<1||captureTimeoutMs>120000||!Number.isInteger(capturePollMs)||capturePollMs<1||capturePollMs>5000)fail('RBRIDGE_WORKER_CONFIGURATION_INVALID');
   const eventScope=(event:RbridgeChatEventV1)=>{if(event.sessionId!==scope.sessionId||event.generation!==scope.generation)fail('RBRIDGE_WORKER_HISTORY_SCOPE_MISMATCH');};
   for(const event of initialHistory)eventScope(event);
-  const storage=api.storage.local,driver=new ChromeContentDriverV1(api.tabs,api.scripting),runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),new ChromeLiveTargetReaderV1(api.tabs,bootstrap.browserInstanceId,bootstrap.browserProfileId),driver),effects=new RbridgeEffectStoreV1(storage);
+  const storage=api.storage.local,stops=new RbridgeScopeStopStoreV1(storage,scope);
+  await stops.initialize();
+  const driver=new ChromeContentDriverV1(api.tabs,api.scripting),runtime=new BrowserAuthorityRuntimeV1(new BrowserAuthorityStoreV1(storage),new ChromeLiveTargetReaderV1(api.tabs,bootstrap.browserInstanceId,bootstrap.browserProfileId),driver),effects=new RbridgeEffectStoreV1(storage);
   const delivery=new ChatgptDeliveryAdapterV3(storage,new ChromeDeliverySurfaceReaderV3(api.tabs,bootstrap.browserInstanceId,bootstrap.browserProfileId,api.scripting)),rollover=new ChatgptRolloverAdapterV3(runtime,new UnavailableChatgptRolloverDriverV3()),executor=new BrowserEffectExecutorV3(runtime,effects,delivery,rollover);
   let qualified=false,connection=0,lastCapture:WorkerCaptureStatusV3|null=null,captureSequence=0,helloTask:Promise<void>|null=null;
   const ready=()=>qualified&&link.protocolReady;
@@ -108,12 +112,26 @@ export async function startQualifiedExtensionServiceWorkerV3(api:QualifiedV3Work
     onServerEffectCommand:async(original)=>{
       const admission=link.admittedEffect(original),pending=helloTask;if(!pending)fail('RBRIDGE_WORKER_PEER_NOT_READY');await pending;
       assertReady();admission.assertCurrent();const command=admission.command;assertScope(command.request);
-      const admit=()=>{assertReady();admission.assertCurrent();},dispatcher=new RbridgeEffectDispatcherV1(effects,request=>executor.executeBrowserEffect(request,admit));
-      admit();const result=await dispatcher.dispatch(command);await link.sendEffectResult(original,result);
-      if(result.state==='VERIFIED'&&(command.request.effectKind==='RBRIDGE_SEND'||command.request.effectKind==='RBRIDGE_RESULT_SEND'))await capture(command.request,admit);
+      const current=()=>{assertReady();admission.assertCurrent();},admit=()=>{current();stops.assertExecuteAllowed();};
+      current();
+      if(command.action==='EXECUTE'){
+        let blocked:string|null=null;try{stops.assertExecuteAllowed();}catch(error){blocked=code(error);}
+        if(blocked){
+          // Retained completed commands replay their exact original bytes. A new
+          // stopped command gets no invented completion or ledger reservation;
+          // the authenticated transport retains its unresolved request.
+          const prior=await effects.getCommand(command);
+          await effects.read(command.request.effectId,command.request.requestDigest);
+          if(!prior?.result)fail(blocked);
+          current();await link.sendEffectResult(original,prior.result);return;
+        }
+      }
+      const dispatcher=new RbridgeEffectDispatcherV1(effects,request=>executor.executeBrowserEffect(request,admit));
+      const result=await dispatcher.dispatch(command);await link.sendEffectResult(original,result);
+      if(!stops.stopped&&result.state==='VERIFIED'&&(command.request.effectKind==='RBRIDGE_SEND'||command.request.effectKind==='RBRIDGE_RESULT_SEND'))await capture(command.request,admit);
     },
     onDisconnected:close,onProtocolError:close,
   });
   link.connect();
-  return {link,get ready(){return ready();},get lastCapture(){return lastCapture?structuredClone(lastCapture):null;}};
+  return {link,get ready(){return ready();},get lastCapture(){return lastCapture?structuredClone(lastCapture):null;},get stopped(){return stops.stopped;},requestScopeStop:input=>stops.requestStop(input)};
 }
