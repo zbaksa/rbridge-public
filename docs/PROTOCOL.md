@@ -363,6 +363,36 @@ Bounds include:
 
 APP_RUN requires the compatible controller broker.
 
+### Separate COCWIN privileged maintenance receipts
+
+If a separately authorized application workflow uses COCWIN's existing
+privileged maintenance ingress, **RBridge does not become the ROOT worker**.
+Do not add a ROOT operation or copy that worker into RBridge.
+
+- `COCWIN_REMOTE_BRIDGE_RESULT_V2.status=PASS` means the APP_RUN transport /
+  application job completed. It does **not** prove the underlying
+  `RUN_ROOT_SCRIPT` operation succeeded.
+- The separately verified `COCWIN_MAINTENANCE_RECEIPT_V2` must match its
+  request ID, actual target app ID, request SHA-256 and script SHA-256, and
+  be read through the authorized existing ingress / receipt verifier.
+  The transport user is not interchangeable with the target app's authorization.
+- `PASS` of that verified ROOT receipt is successful ROOT execution.
+  `FAIL` is a completed failed execution; `BLOCKED` is an authorization
+  or pre-execution denial and must preserve its original reason.
+- `PENDING` / `NOT_YET_PUBLISHED` are **not** success. Only a validated,
+  accepted request warrants bounded status polling. Absent proof of accepted
+  submission, preserve `UNKNOWN` or `UNCERTAIN` rather than inventing a result.
+- A ROOT receipt with `executionStarted=false` explicitly confirms that
+  the protected worker did not begin executing the rejected request.
+  Never retry a historical action with an uncertain outcome.
+- Preserve the original durable terminal outcome and reason when the same
+  RBridge request is republished after transport failure or restart.
+  A transport replay is not a new ROOT execution and must never replace
+  the original denial reason with a generic replay label.
+
+The privileged worker's authorization and protection policy remains authoritative.
+A successful APP_RUN itself neither changes nor extends those permissions.
+
 ## Results
 
 V2 result schema:
@@ -387,9 +417,9 @@ Status may be:
 - `PASS`
 - `FAIL`
 - `BLOCKED`
-- `UNKNOWN`
+- `UNCERTAIN`
 
-### Why UNKNOWN exists
+### Why UNCERTAIN exists
 
 If RBridge cannot safely determine whether a side effect already happened, it avoids a blind retry and surfaces uncertainty instead.
 
