@@ -143,6 +143,10 @@ export function createAppExecutionClient(options:AppExecutionClientOptions={}){
           throw new Error('APP_EXECUTION_FAILED');
         }
         if(current==='UNCERTAIN')throw new Error('APP_EXECUTION_UNCERTAIN');
+        if(current==='BLOCKED'){
+          const detail=typeof state.reason==='string'?state.reason.replace(/\s+/g,' ').trim().slice(0,256):'';
+          throw new Error(detail?`APP_EXECUTION_BLOCKED:${detail}`:'APP_EXECUTION_BLOCKED');
+        }
         if(current!=='QUEUED'&&current!=='RUNNING')throw new Error('APP_EXECUTION_STATE_INVALID');
         if(now().getTime()>deadline)throw new Error('APP_EXECUTION_DEADLINE_EXCEEDED');
         await delay(pollIntervalMs);
