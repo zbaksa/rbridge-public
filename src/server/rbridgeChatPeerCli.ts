@@ -7,7 +7,7 @@ import {canonicalJson,parseV3Scope} from '../domain/rbridgeEffectProtocol.js';
 import {RbridgeChatPeerStoreV3} from './rbridgeChatPeerStore.js';
 import {runRbridgeChatStdio} from './rbridgeChatStdio.js';
 
-const OPERATIONS=new Set(['stage-chunk','commit-command','read-result','read-event','inspect-peer','submit-query','read-query']);
+const OPERATIONS=new Set(['stage-chunk','commit-command','read-result','read-event','inspect-peer','submit-query','read-query','request-scope-stop','read-scope-stop']);
 const CONFIG='/etc/rbridge/chat-peer-v3.json';
 function fail(code:string):never{throw Error(code);}
 function fields(value:unknown,keys:readonly string[]):Record<string,unknown>{
@@ -48,9 +48,11 @@ export async function executeRbridgeChatPeerCli(store:RbridgeChatPeerStoreV3,arg
   else if(operation==='read-event'){const row=fields(input,['afterSequence']);if(!Number.isSafeInteger(row.afterSequence)||Number(row.afterSequence)<0)fail('RBRIDGE_PEER_CLI_CURSOR_INVALID');value=await store.readEvent(Number(row.afterSequence));}
   else if(operation==='submit-query'){fields(input,['scope','command']);value=await store.submitReadQuery(input);}
   else if(operation==='read-query'){const row=fields(input,['commandId','scope']);if(typeof row.commandId!=='string')fail('RBRIDGE_PEER_CLI_COMMAND_ID_INVALID');value=await store.readQuery(row.commandId,parseV3Scope(row.scope));}
+  else if(operation==='request-scope-stop'){fields(input,['request','queryId','queryNonce']);value=await store.requestScopeStop(input);}
+  else if(operation==='read-scope-stop'){fields(input,['scope','requestId','requestDigest','queryId','queryNonce']);value=await store.readScopeStop(input);}
   else{fields(input,[]);value=await store.peer();}
   const result={schema:'RBRIDGE_CHAT_FIXED_PEER_CLI_V3' as const,status:'PASS' as const,operation,value};
-  if(Buffer.byteLength(canonicalJson(result))>131072)fail('RBRIDGE_PEER_CLI_OUTPUT_BUDGET_EXCEEDED');return result;
+  if(Buffer.byteLength(canonicalJson(result))>(operation==='request-scope-stop'||operation==='read-scope-stop'?65536:131072))fail('RBRIDGE_PEER_CLI_OUTPUT_BUDGET_EXCEEDED');return result;
 }
 /** Task11 installs this root-owned configuration and approved immutable release; an absent route stays BLOCKED. */
 async function installedStore():Promise<RbridgeChatPeerStoreV3>{

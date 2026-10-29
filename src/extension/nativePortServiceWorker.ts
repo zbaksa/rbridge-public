@@ -1,3 +1,4 @@
+import {parseScopeQuiescenceQuery,parseWorkerQuiescenceReport,RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY,type RbridgeScopeQuiescenceQueryV1} from '../domain/rbridgeScopeQuiescence.js';
 import {negotiateHello,parseHello,type NegotiatedHelloV1,type RbridgeChatEventV1,type RbridgeChatHelloV1,validateEventEnvelope} from '../domain/rbridgeChatCore.js';
 import {parseRbridgeChatCommandResultV1,type RbridgeChatCommandResultV1,type RbridgeChatCommandV1} from '../domain/rbridgeChatCommand.js';
 import {parseEffectResult,V3_CAPABILITIES,type RbridgeChatEffectCommandV1} from '../domain/rbridgeEffectProtocol.js';
@@ -25,6 +26,7 @@ export interface ExtensionNativeLinkHooksV1{
   onServerCommand?:(command:RbridgeChatCommandV1)=>void|Promise<void>;
   /** Transport only; the caller still supplies its authenticated scope/effect store. */
   onServerEffectCommand?:(command:RbridgeChatEffectCommandV1)=>void|Promise<void>;
+  onServerScopeQuiescence?:(query:RbridgeScopeQuiescenceQueryV1)=>void|Promise<void>;
   onDisconnected?:()=>void|Promise<void>;
   onProtocolError?:(error:Error)=>void|Promise<void>;
 }
@@ -38,6 +40,10 @@ export class ExtensionNativePortLinkV1{
   private epoch=0;
   private v3ValidationTail:Promise<void>=Promise.resolve();
   private v3Pending=0;
+  private handlerCount=0;
+  private controlCount=0;
+  private activitySequence=0;
+  private readonly queryContexts=new WeakMap<RbridgeScopeQuiescenceQueryV1,{port:ExtensionNativePortV1;negotiated:NegotiatedHelloV1;epoch:number;query:RbridgeScopeQuiescenceQueryV1}>();
   private readonly effectContexts=new WeakMap<RbridgeChatEffectCommandV1,{port:ExtensionNativePortV1;negotiated:NegotiatedHelloV1;epoch:number;command:RbridgeChatEffectCommandV1}>();
   private readonly localHello:RbridgeChatHelloV1;
 
@@ -115,6 +121,34 @@ export class ExtensionNativePortLinkV1{
     port.postMessage(validated);
   }
 
+  admittedQuiescence(query:RbridgeScopeQuiescenceQueryV1):{query:RbridgeScopeQuiescenceQueryV1;assertCurrent:()=>void;pendingHandlers:()=>number;activityRevision:()=>number}{
+    const context=this.queryContexts.get(query);if(!context)throw Error('RBRIDGE_SCOPE_QUERY_NOT_RECEIVED');
+    const assertCurrent=()=>{if(this.port!==context.port||this.epoch!==context.epoch||this.negotiated!==context.negotiated)throw Error('RBRIDGE_PEER_CONNECTION_CHANGED');this.requireQuiescence(context.negotiated);};
+    assertCurrent();return {query:structuredClone(context.query),assertCurrent,pendingHandlers:()=>this.handlerCount+Math.max(0,this.controlCount-1),activityRevision:()=>this.activitySequence};
+  }
+  async sendQuiescenceReport(original:RbridgeScopeQuiescenceQueryV1,input:unknown,finalAdmission:()=>void):Promise<void>{
+    const context=this.queryContexts.get(original);if(!context)throw Error('RBRIDGE_SCOPE_QUERY_NOT_RECEIVED');
+    const admission=this.admittedQuiescence(original),report=await parseWorkerQuiescenceReport(input,context.query);
+    if(new TextEncoder().encode(JSON.stringify(report)).byteLength>context.negotiated.maxMessageBytes)throw Error('RBRIDGE_SCOPE_QUIESCENCE_BUDGET_EXCEEDED');
+    admission.assertCurrent();finalAdmission();context.port.postMessage(report);
+  }
+  private requireQuiescence(negotiated:NegotiatedHelloV1):void{
+    this.requireV3(negotiated);if(!negotiated.capabilities.includes(RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY))throw Error('RBRIDGE_SCOPE_QUIESCENCE_NOT_NEGOTIATED');
+  }
+  private receiveQuiescence(port:ExtensionNativePortV1,input:unknown,epoch:number):Promise<{pending:void|Promise<void>}|undefined>{
+    const negotiated=this.negotiated;if(!negotiated)throw Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');this.requireQuiescence(negotiated);
+    const handler=this.hooks.onServerScopeQuiescence;if(typeof handler!=='function')throw Error('RBRIDGE_SCOPE_QUIESCENCE_UNAVAILABLE');
+    if(this.v3Pending>=128)throw Error('RBRIDGE_V3_BACKPRESSURE_EXCEEDED');
+    const immutable=snapshotNativeMessage(input,negotiated.maxMessageBytes);this.v3Pending++;
+    const current=()=>this.port===port&&this.epoch===epoch&&this.negotiated===negotiated;
+    const work=this.v3ValidationTail.then(async()=>{
+      try{if(!current())return;const query=await parseScopeQuiescenceQuery(immutable);if(!current())return;
+        this.queryContexts.set(query,{port,negotiated,epoch,query:structuredClone(query)});return {pending:handler(query)};
+      }catch(error){this.rejectProtocol(port,epoch,error);throw error;}finally{this.v3Pending--;}
+    });
+    this.v3ValidationTail=work.then(()=>undefined,()=>undefined);return work;
+  }
+
   private requireV3(negotiated:NegotiatedHelloV1):void{
     if(negotiated.protocolMinor<1||V3_CAPABILITIES.some(cap=>!negotiated.capabilities.includes(cap)))throw new Error('RBRIDGE_V3_NOT_NEGOTIATED');
   }
@@ -153,10 +187,14 @@ export class ExtensionNativePortLinkV1{
 
   private async handleInbound(port:ExtensionNativePortV1,value:unknown):Promise<void>{
     if(this.port!==port)return;
-    let epoch=this.epoch;
+    let epoch=this.epoch,counted=false,control=false;
     try{
       const schema=value&&typeof value==='object'?Object.getOwnPropertyDescriptor(value,'schema'):undefined;
       if(schema&&!('value' in schema))throw new Error('RBRIDGE_NATIVE_INPUT_INVALID');
+      if(schema?.value==='RBRIDGE_SCOPE_QUIESCENCE_QUERY_V1'){
+        control=true;this.controlCount++;if(this.controlCount>128)throw Error('RBRIDGE_V3_BACKPRESSURE_EXCEEDED');const dispatched=await this.receiveQuiescence(port,value,epoch);if(dispatched)await dispatched.pending;return;
+      }
+      if(this.handlerCount>=128)throw Error('RBRIDGE_V3_BACKPRESSURE_EXCEEDED');counted=true;this.handlerCount++;this.activitySequence++;
       if(schema?.value==='RBRIDGE_CHAT_EFFECT_COMMAND_V1'){
         const dispatched=await this.receiveEffect(port,value,epoch);
         if(dispatched)await dispatched.pending;
@@ -178,7 +216,7 @@ export class ExtensionNativePortLinkV1{
       await this.hooks.onServerCommand?.(routed.value);
     }catch(error){
       this.rejectProtocol(port,epoch,error);
-    }
+    }finally{if(counted)this.handlerCount--;if(control)this.controlCount--;}
   }
 
   private invoke(fn:()=>void|Promise<void>|undefined):void{

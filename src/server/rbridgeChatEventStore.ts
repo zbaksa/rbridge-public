@@ -77,6 +77,22 @@ export class RbridgeChatEventStoreV1{
     return this.events.map(cloneEvent);
   }
 
+  /** Revalidate the complete persisted chain after earlier appends; cached metadata is not evidence. */
+  async readDurableHead():Promise<{sequence:number;eventSha256:string|null}>{
+    let release!:()=>void;
+    const prior=this.queue;this.queue=new Promise<void>(resolve=>{release=resolve;});await prior;
+    try{
+      const reader=new RbridgeChatEventStoreV1({root:this.root,maxEvents:this.maxEvents,maxBytes:this.maxBytes});
+      const events=await reader.load();
+      if(events.length<this.events.length||this.events.some((event,index)=>events[index]?.eventSha256!==event.eventSha256))fail('RBRIDGE_EVENT_STORE_READBACK_MISMATCH');
+      if(process.platform!=='win32'){
+        const directory=await open(this.root,fsConstants.O_RDONLY|fsConstants.O_DIRECTORY|fsConstants.O_NOFOLLOW);
+        try{await directory.sync();}finally{await directory.close();}
+      }
+      const latest=events.at(-1);return {sequence:latest?.sequence??0,eventSha256:latest?.eventSha256??null};
+    }finally{release();}
+  }
+
   async append(eventInput:RbridgeChatEventV1):Promise<RbridgeChatEventV1>{
     let resolveQueue!:()=>void;
     const previousQueue=this.queue;

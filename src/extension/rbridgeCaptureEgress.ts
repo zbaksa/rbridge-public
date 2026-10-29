@@ -1,10 +1,11 @@
-import {canonicalDigest,canonicalJson,sha256Hex,type CocwinRbridgeEffectRequestV1,type RbridgeChatEventV1} from '../domain/rbridgeEffectProtocol.js';
+import {canonicalDigest,canonicalJson,sha256Hex,type CocwinRbridgeEffectRequestV1,type RbridgeChatEventV1,type V3Scope} from '../domain/rbridgeEffectProtocol.js';
 import {validateEventEnvelope} from '../domain/rbridgeChatCore.js';
 import type {SiteMarkdownObservationV3} from '../browser/chatgptAssistantMarkdownCapture.js';
 import type {BrowserAuthorityRuntimeV1} from './browserAuthorityRuntime.js';
 import type {BrowserAuthoritySnapshotV1,ChromeStorageAreaV1} from './browserAuthorityStore.js';
 import {snapshotEffectData,type RbridgeEffectStoreV1} from './rbridgeEffectStore.js';
-import type {SiteMarkdownReaderV3} from './chromeAuthorityAdapters.js';
+import type {SiteMarkdownReaderV3,SiteCaptureWorkV1,SiteMarkdownReadResultV3} from './chromeAuthorityAdapters.js';
+import {SiteCaptureActivityStoreV1,type SiteCaptureActivityFactsV1,type SiteCaptureRawOutcomeV1} from './siteCaptureActivityStore.js';
 import type {ChatgptDeliveryAdapterV3} from '../browser/chatgptDeliveryAdapter.js';
 
 export interface ChromeCaptureSenderV3{id:string;tabId:number;frameId:number;url:string}
@@ -17,6 +18,7 @@ export interface CaptureEgressOptionsV3{
   extensionId:string;browserInstanceId:string;browserProfileId:string;ownerAppId:string;maxMessageBytes:number;
   initialHistory:readonly RbridgeChatEventV1[];publish:(event:RbridgeChatEventV1)=>Promise<void>;
   siteReader?:SiteMarkdownReaderV3;delivery?:ChatgptDeliveryAdapterV3;
+  freshSendAdmission?:(request:CocwinRbridgeEffectRequestV1)=>void;
 }
 export interface CaptureMessageApiV3{
   onMessage:{addListener(listener:(message:unknown,sender:unknown,respond:(reply:unknown)=>void)=>boolean|void):void};
@@ -24,7 +26,7 @@ export interface CaptureMessageApiV3{
 interface Owner{extensionId:string;browserInstanceId:string;browserProfileId:string;ownerAppId:string;maxMessageBytes:number}
 interface RecordV3{notificationDigest:string;requestDigest:string;captureToken:string;assistantTurnId:string;event:RbridgeChatEventV1;siteAcquired?:true}
 interface Outbox{schema:'RBRIDGE_CAPTURE_OUTBOX_V3';owner:Owner;history:RbridgeChatEventV1[];records:RecordV3[];sha256:string}
-interface Authority{queue:Promise<void>;poisoned:boolean;seen:Outbox|null;sitePending:Map<string,Promise<CaptureAckV3>>;siteQuarantined:boolean;siteMutationFence:symbol}
+interface Authority{queue:Promise<void>;poisoned:boolean;seen:Outbox|null;sitePending:Map<string,Promise<CaptureAckV3>>;siteQuarantined:boolean;siteMutationFence:symbol;pendingEgress:number}
 const authorities=new WeakMap<ChromeStorageAreaV1,Authority>();
 const KEY='rbridgeCaptureOutboxV3',LIMIT=8*1024*1024,MAX_EVENTS=4096;
 const SHA=/^[0-9a-f]{64}$/,ID=/^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -36,7 +38,7 @@ function id(value:unknown,max:number):string{if(typeof value!=='string'||!ID.tes
 function same(a:unknown,b:unknown):boolean{return canonicalJson(a)===canonicalJson(b);}
 function bytes(value:unknown):number{return encoder.encode(canonicalJson(value)).byteLength;}
 function authority(storage:ChromeStorageAreaV1):Authority{
-  let value=authorities.get(storage);if(!value){value={queue:Promise.resolve(),poisoned:false,seen:null,sitePending:new Map(),siteQuarantined:false,siteMutationFence:Symbol()};authorities.set(storage,value);}return value;
+  let value=authorities.get(storage);if(!value){value={queue:Promise.resolve(),poisoned:false,seen:null,sitePending:new Map(),siteQuarantined:false,siteMutationFence:Symbol(),pendingEgress:0};authorities.set(storage,value);}return value;
 }
 export function captureTokenV3(request:CocwinRbridgeEffectRequestV1,captureEpoch:number):string{
   if(!SHA.test(request.requestDigest)||!Number.isSafeInteger(captureEpoch)||captureEpoch<1)fail();
@@ -88,11 +90,14 @@ export class RbridgeCaptureEgressV3{
   private readonly owner:Owner;
   private readonly history:RbridgeChatEventV1[];
   private readonly shared:Authority;
+  private readonly activities:SiteCaptureActivityStoreV1;
+  private readonly freshSendAdmission:CaptureEgressOptionsV3['freshSendAdmission'];
   constructor(private readonly options:CaptureEgressOptionsV3){
     this.owner=snapshotEffectData({extensionId:options.extensionId,browserInstanceId:options.browserInstanceId,browserProfileId:options.browserProfileId,ownerAppId:options.ownerAppId,maxMessageBytes:options.maxMessageBytes});
     if(!/^[a-p]{32}$/.test(this.owner.extensionId)||!Number.isSafeInteger(this.owner.maxMessageBytes)||this.owner.maxMessageBytes<4096||this.owner.maxMessageBytes>65536)fail();
     id(this.owner.browserInstanceId,128);id(this.owner.browserProfileId,128);id(this.owner.ownerAppId,192);
     this.history=snapshotEffectData([...options.initialHistory]);this.shared=authority(options.storage);
+    this.activities=new SiteCaptureActivityStoreV1(options.storage,this.owner);this.freshSendAdmission=options.freshSendAdmission;
   }
   async acquireSite(captureLeaseToken:string,sender:ChromeCaptureSenderV3):Promise<CaptureAckV3>{
     const token=id(captureLeaseToken,192),source=parseSender(sender);
@@ -119,11 +124,30 @@ export class RbridgeCaptureEgressV3{
     };
     if(cached)return await this.completeSiteCapture(context,cached);
     if(this.shared.siteQuarantined||state.activeSend?.state==='RESPONSE_VERIFIED')fail();
-    const delivery=await this.options.delivery!.observeExactDelivery(request);if(delivery.kind!=='MATCHED')fail();
-    const acquired=await this.options.siteReader!.acquire(request,delivery,admission).catch(error=>{
-      if(error instanceof Error&&error.message==='RBRIDGE_SITE_CAPTURE_TIMEOUT')this.shared.siteQuarantined=true;
+    const reader=this.options.siteReader!;
+    if(typeof reader.startAcquire!=='function')throw Error('RBRIDGE_SITE_CAPTURE_SETTLEMENT_UNSUPPORTED');
+    const lease=await this.activities.begin(request,capture.epoch,this.freshSendAdmission?()=>this.freshSendAdmission!(snapshotEffectData(request)):undefined);
+    let work:SiteCaptureWorkV1;
+    try{
+      const delivery=await this.options.delivery!.observeExactDelivery(request);if(delivery.kind!=='MATCHED')fail();
+      const readPermit=await admission();
+      work=reader.startAcquire(request,delivery,async()=>{await lease.armCopy();return await admission();},readPermit);
+      if(!work||typeof work.result?.then!=='function'||typeof work.settled?.then!=='function')throw Error('RBRIDGE_SITE_CAPTURE_SETTLEMENT_UNSUPPORTED');
+    }catch(error){this.shared.siteQuarantined=true;await lease.quarantine('RBRIDGE_SITE_CAPTURE_START_UNSETTLED');throw error;}
+    const raw={value:null as SiteCaptureRawOutcomeV1|null};
+    const settlement=work.settled.then(async outcome=>{raw.value=outcome;await lease.settle(outcome);});
+    void settlement.catch(()=>{this.shared.siteQuarantined=true;});
+    let acquired:SiteMarkdownReadResultV3;
+    try{
+      acquired=await work.result;await settlement;
+      if(raw.value?.outcome!=='COMPLETED'||raw.value.copyIssued!==true)throw Error('RBRIDGE_SITE_CAPTURE_SETTLEMENT_UNSUPPORTED');
+    }catch(error){
+      await Promise.resolve();
+      if(error instanceof Error&&error.message==='RBRIDGE_SITE_CAPTURE_TIMEOUT'||raw.value===null){
+        this.shared.siteQuarantined=true;await lease.quarantine(error instanceof Error&&error.message==='RBRIDGE_SITE_CAPTURE_TIMEOUT'?'RBRIDGE_SITE_CAPTURE_TIMEOUT':'RBRIDGE_SITE_CAPTURE_RESULT_UNSETTLED');
+      }else await settlement;
       throw error;
-    });
+    }
     (await admission())();
     const ack=await this.persistCapture({schema:'RBRIDGE_CONTENT_CAPTURE_V3',captureToken:token,assistantTurnId:acquired.assistantTurnId,observation:acquired.observation},source,true);
     return await this.completeSiteCapture(context,ack);
@@ -212,11 +236,16 @@ export class RbridgeCaptureEgressV3{
       return this.ack(nextEvent);
     }).catch(()=>fail());
   }
+  async siteActivityFacts(scope:V3Scope):Promise<SiteCaptureActivityFactsV1>{return await this.activities.facts(scope);}
   async events():Promise<readonly RbridgeChatEventV1[]>{return await this.exclusive(async()=>snapshotEffectData((await this.load())?.records.map(record=>record.event)??[]));}
+  get pendingEgress():number{return this.shared.pendingEgress;}
+  async retainedEvents():Promise<readonly RbridgeChatEventV1[]>{return await this.exclusive(async()=>{const current=await this.load();return snapshotEffectData([...(current?.history??this.history),...(current?.records.map(record=>record.event)??[])]);});}
   async flush():Promise<void>{
+    this.shared.pendingEgress++;try{
     // Disconnects preserve every original event and its chain; posting is never a durable Native ack.
     const events=await this.events();
     for(const event of events){if(bytes(event)>this.owner.maxMessageBytes)break;try{await this.options.publish(snapshotEffectData(event));}catch{break;}}
+    }finally{this.shared.pendingEgress--;}
   }
   private ack(event:RbridgeChatEventV1):CaptureAckV3{return {eventId:event.eventId,eventSha256:event.eventSha256,durable:true};}
   private async write(next:Outbox,state:BrowserAuthoritySnapshotV1):Promise<void>{

@@ -67,6 +67,7 @@ export class NativeHostRuntimeV1 {
         }
       },
     },config.v3?{
+      scope:config.v3.scope,peerPins:config.v3.peerPins,
       results:new RbridgeEffectResultStoreV3({eventStoreRoot:config.eventStoreRoot,scope:config.v3.scope,maxMessageBytes:config.v3.peerPins.maxMessageBytes}),
       authority:new NativeV3PeerAuthority({eventStoreRoot:config.eventStoreRoot,appId:config.v3.scope.appId,peerPins:config.v3.peerPins,initialHistory:config.v3.initialHistory}),
     }:undefined);
@@ -79,6 +80,7 @@ export class NativeHostRuntimeV1 {
           try{
             const accepted=await this.relay.acceptServerMessage(value);
             if(!this.started||!this.relay.protocolReady)throw Error('RBRIDGE_NATIVE_RUNTIME_STALE_OUTPUT');
+            if(accepted.message.kind==='SCOPE_QUIESCENCE_QUERY')this.relay.assertScopeQuiescenceOutputCurrent(accepted.message.value);
             this.output.write(encodeNativeMessage(accepted.message.value));
           }catch(cause){
             await this.invokeHook(this.hooks.onProtocolError,error(cause));

@@ -1,21 +1,23 @@
 import {negotiateHello,type NegotiatedHelloV1,type RbridgeChatEventV1,type RbridgeChatHelloV1} from '../domain/rbridgeChatCore.js';
 import type {RbridgeChatCommandResultV1} from '../domain/rbridgeChatCommand.js';
-import type {RbridgeChatEffectResultV1} from '../domain/rbridgeEffectProtocol.js';
+import {canonicalDigest,canonicalJson,parseV3Scope,requireV3Peer,type RbridgeChatEffectResultV1,type V3Scope,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
+import {RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY,assertScopeQuiescenceQueryCurrent,buildScopeResultInventory,buildNativeQuiescenceReport,type RbridgeScopeQuiescenceQueryV1,type RbridgeNativeQuiescenceReportV1} from '../domain/rbridgeScopeQuiescence.js';
 import {RbridgeChatEventStoreV1} from '../server/rbridgeChatEventStore.js';
-import {routeBrowserToNative,routeServerToNativeV3,snapshotNativeMessage,type ServerToNativeMessageV3} from './nativeHostProtocol.js';
+import {routeBrowserToNative,routeBrowserToNativeV3,routeServerToNativeV3,snapshotNativeMessage,type ServerToNativeMessageV3} from './nativeHostProtocol.js';
 import {NativeV3PeerAuthority} from './nativeV3PeerAuthority.js';
 import {RbridgeEffectResultStoreV3} from './rbridgeEffectResultStore.js';
 
 export interface NativeHostPeerV1{
-  send(value:RbridgeChatHelloV1|RbridgeChatEventV1|RbridgeChatCommandResultV1|RbridgeChatEffectResultV1):Promise<void>;
+  send(value:RbridgeChatHelloV1|RbridgeChatEventV1|RbridgeChatCommandResultV1|RbridgeChatEffectResultV1|RbridgeNativeQuiescenceReportV1):Promise<void>;
 }
 export type BrowserRelayResultV1=
   |'HELLO_CACHED'|'HELLO_FORWARDED'|'EVENT_DURABLE_QUEUED'|'EVENT_DURABLE_FORWARDED'
-  |'COMMAND_RESULT_FORWARDED'|'EFFECT_RESULT_DURABLE_QUEUED'|'EFFECT_RESULT_DURABLE_FORWARDED';
+  |'COMMAND_RESULT_FORWARDED'|'EFFECT_RESULT_DURABLE_QUEUED'|'EFFECT_RESULT_DURABLE_FORWARDED'|'QUIESCENCE_REPORT_FORWARDED';
 export interface ServerRelayResultV1{
   message:ServerToNativeMessageV3;negotiated:NegotiatedHelloV1;replayedEvents:number;replayedResults:number;
 }
-export interface NativeHostV3RelayOptions {results:RbridgeEffectResultStoreV3;authority:NativeV3PeerAuthority}
+export interface NativeHostV3RelayOptions {results:RbridgeEffectResultStoreV3;authority:NativeV3PeerAuthority;scope?:V3Scope;peerPins?:VerifiedPeerV3}
+interface PendingQuiescence {query:RbridgeScopeQuiescenceQueryV1;epoch:number;negotiated:NegotiatedHelloV1;workerSha256:string|null;nativeReport:RbridgeNativeQuiescenceReportV1|null}
 function isV3(hello:RbridgeChatHelloV1):boolean{return hello.capabilities.includes('CHAT_EFFECT_REQUEST_V1')||hello.capabilities.includes('CHAT_ASSISTANT_TURN_CAPTURE_V2');}
 
 export class NativeHostRelayV1{
@@ -24,12 +26,63 @@ export class NativeHostRelayV1{
   private negotiated:NegotiatedHelloV1|null=null;
   private epoch=0;
   private queue:Promise<void>=Promise.resolve();
-  constructor(private readonly store:RbridgeChatEventStoreV1,private readonly peer:NativeHostPeerV1,private readonly v3?:NativeHostV3RelayOptions){}
+  private readonly quiescenceScope:V3Scope|null;
+  private readonly quiescencePins:VerifiedPeerV3|null;
+  private quiescencePinsSha256:string|null=null;
+  // Bounded immutable originals survive connection changes in memory; Linux owns durable query evidence.
+  private readonly pendingQuiescence=new Map<string,PendingQuiescence>();
+  constructor(private readonly store:RbridgeChatEventStoreV1,private readonly peer:NativeHostPeerV1,private readonly v3?:NativeHostV3RelayOptions){
+    this.quiescenceScope=v3?.scope===undefined?null:parseV3Scope(v3.scope);
+    this.quiescencePins=v3?.peerPins===undefined?null:structuredClone(v3.peerPins);
+    if(this.quiescencePins)requireV3Peer(this.quiescencePins);
+  }
   get protocolReady():boolean{return this.transportConnected&&this.negotiated!==null;}
   private serial<T>(fn:()=>Promise<T>):Promise<T>{const work=this.queue.then(fn);this.queue=work.then(()=>{},()=>{});return work;}
   private async admit():Promise<void>{if(this.v3)await this.v3.authority.initialize(this.store,this.v3.results);}
   private current(epoch:number,negotiated?:NegotiatedHelloV1):void{
     if(epoch!==this.epoch||!this.transportConnected||(negotiated&&this.negotiated!==negotiated))throw Error('RBRIDGE_PEER_CONNECTION_CHANGED');
+  }
+  private async currentQuiescence(query:RbridgeScopeQuiescenceQueryV1,epoch:number,negotiated:NegotiatedHelloV1):Promise<void>{
+    this.current(epoch,negotiated);
+    if(!this.v3||!this.quiescenceScope||!this.quiescencePins)throw Error('RBRIDGE_SCOPE_QUIESCENCE_CONFIG_REQUIRED');
+    if(!negotiated.capabilities.includes(RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY)||!this.quiescencePins.capabilities.includes(RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY))throw Error('RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY_REQUIRED');
+    const peerPinsSha256=await canonicalDigest(this.quiescencePins);this.current(epoch,negotiated);
+    // Linux channelId is opaque correlation data. Native authority comes from its private epoch and pins.
+    assertScopeQuiescenceQueryCurrent(query,{scope:this.quiescenceScope,channelId:query.channelId,peerPinsSha256,now:Date.now()});
+    this.quiescencePinsSha256=peerPinsSha256;
+  }
+  /** Synchronous final fence: Runtime must not yield between this assertion and browser output. */
+  assertScopeQuiescenceOutputCurrent(query:RbridgeScopeQuiescenceQueryV1):void{
+    const pending=this.pendingQuiescence.get(query.queryId);
+    if(!pending)throw Error('RBRIDGE_SCOPE_QUIESCENCE_QUERY_REQUIRED');
+    if(canonicalJson(pending.query)!==canonicalJson(query))throw Error('REQUEST_ID_COLLISION');
+    this.current(pending.epoch,pending.negotiated);
+    if(!this.quiescenceScope||!this.quiescencePinsSha256)throw Error('RBRIDGE_SCOPE_QUIESCENCE_CONFIG_REQUIRED');
+    assertScopeQuiescenceQueryCurrent(query,{scope:this.quiescenceScope,channelId:pending.query.channelId,peerPinsSha256:this.quiescencePinsSha256,now:Date.now()});
+  }
+  private async acceptWorkerQuiescence(input:unknown):Promise<BrowserRelayResultV1>{
+    const querySha256=(input as {querySha256?:unknown}).querySha256;
+    const pending=[...this.pendingQuiescence.values()].find(entry=>entry.query.sha256===querySha256);
+    if(!pending)throw Error('RBRIDGE_SCOPE_QUIESCENCE_QUERY_REQUIRED');
+    const {query,epoch,negotiated}=pending;
+    await this.currentQuiescence(query,epoch,negotiated);
+    const routed=await routeBrowserToNativeV3(input,this.v3!.authority.maxMessageBytes,query);this.current(epoch,negotiated);
+    if(routed.kind!=='WORKER_QUIESCENCE_REPORT')throw Error('RBRIDGE_NATIVE_MESSAGE_SCHEMA_DENIED');
+    if(pending.nativeReport){
+      if(pending.workerSha256!==routed.value.sha256)throw Error('REQUEST_ID_COLLISION');
+      await this.currentQuiescence(query,epoch,negotiated);
+      this.assertScopeQuiescenceOutputCurrent(query);
+      await this.peer.send(structuredClone(pending.nativeReport));this.current(epoch,negotiated);return 'QUIESCENCE_REPORT_FORWARDED';
+    }
+    const retained=await this.v3!.results.readScopeInventory(this.quiescenceScope!);this.current(epoch,negotiated);
+    const resultInventory=await buildScopeResultInventory({scope:retained.scope,entryCount:retained.entryCount,unresolvedCount:retained.unresolvedCount,entriesSha256:retained.entriesSha256});this.current(epoch,negotiated);
+    const eventHead=await this.store.readDurableHead();this.current(epoch,negotiated);
+    const report=await buildNativeQuiescenceReport(query,{worker:routed.value,resultInventory,eventHead,observedAt:new Date().toISOString()});this.current(epoch,negotiated);
+    await this.currentQuiescence(query,epoch,negotiated);
+    this.assertScopeQuiescenceOutputCurrent(query);
+    // Retain the exact original even if transport completion becomes uncertain. Never manufacture PASS.
+    pending.workerSha256=routed.value.sha256;pending.nativeReport=structuredClone(report);
+    await this.peer.send(report);this.current(epoch,negotiated);return 'QUIESCENCE_REPORT_FORWARDED';
   }
   async peerConnected():Promise<'WAITING_BROWSER_HELLO'|'HELLO_SENT'>{
     const epoch=++this.epoch;this.transportConnected=true;this.negotiated=null;
@@ -52,6 +105,7 @@ export class NativeHostRelayV1{
         const epoch=this.epoch,negotiated=this.negotiated!;
         await this.peer.send(result);this.current(epoch,negotiated);return 'EFFECT_RESULT_DURABLE_FORWARDED';
       }
+      if((immutable as {schema?:unknown})?.schema==='RBRIDGE_SCOPE_QUIESCENCE_WORKER_V1')return this.acceptWorkerQuiescence(immutable);
       const routed=await routeBrowserToNative(immutable);
       if(routed.kind==='HELLO'){
         this.negotiated=null;
@@ -82,6 +136,18 @@ export class NativeHostRelayV1{
       const message=await routeServerToNativeV3(immutable,this.v3?.authority.maxMessageBytes??65536);this.current(epoch);
       if(message.kind!=='HELLO'){
         const negotiated=this.negotiated;if(!negotiated)throw Error('RBRIDGE_PROTOCOL_NOT_NEGOTIATED');
+        if(message.kind==='SCOPE_QUIESCENCE_QUERY'){
+          await this.currentQuiescence(message.value,epoch,negotiated);
+          const old=this.pendingQuiescence.get(message.value.queryId);
+          if(old){
+            if(canonicalJson(old.query)!==canonicalJson(message.value))throw Error('REQUEST_ID_COLLISION');
+            this.current(old.epoch,old.negotiated);
+          }else{
+            if(this.pendingQuiescence.size>=128)throw Error('RBRIDGE_SCOPE_QUIESCENCE_PENDING_LIMIT');
+            this.pendingQuiescence.set(message.value.queryId,{query:structuredClone(message.value),epoch,negotiated,workerSha256:null,nativeReport:null});
+          }
+          return {message,negotiated:structuredClone(negotiated),replayedEvents:0,replayedResults:0};
+        }
         if(message.kind==='EFFECT_COMMAND'){
           if(!this.v3)throw Error('RBRIDGE_V3_NOT_CONFIGURED');
           this.v3.authority.validateTarget(message.value.request.payload.target);

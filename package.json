@@ -25,7 +25,7 @@
     "build": "tsc -p tsconfig.json",
     "build:server": "tsc -p tsconfig.json",
     "lint": "eslint .",
-    "test": "npm run build:server && node dist/tests/w1-ssh-platform-paths.js && node dist/tests/run.js && node dist/tests/native-host-runtime-runner.js && node dist/tests/w1-command-downlink.js && node dist/tests/w1-failure-campaign.js && node dist/tests/w1-v3-contract.js && node dist/tests/w1-v3-effect-ledger.js && node dist/tests/w1-v3-browser-binding.js && node dist/tests/w1-v3-browser-effects.js && node dist/tests/w1-v3-delivery-content.js && node dist/tests/w1-v3-assistant-markdown.js && node dist/tests/w1-v3-site-copy.js && node dist/tests/w1-v3-site-reader.js && node dist/tests/w1-v3-capture-completion.js && node dist/tests/w1-v3-capture-egress.js && node dist/tests/w1-v3-native-results.js && node dist/tests/w1-v3-native-transport.js && node dist/tests/w1-v3-transport.js && node dist/tests/w1-v3-fixed-stdio.js && node dist/tests/w1-v3-native-port.js && node dist/tests/w1-v3-worker-composition.js && node dist/tests/w1-v3-native-install.js && node dist/tests/w1-v3-worker-startup.js && node dist/tests/w1-v3-peer-install.js && npm run test:v3:read-query && npm run test:v3:native-inventory",
+    "test": "npm run build:server && node dist/tests/w1-ssh-platform-paths.js && node dist/tests/run.js && node dist/tests/native-host-runtime-runner.js && node dist/tests/w1-command-downlink.js && node dist/tests/w1-failure-campaign.js && node dist/tests/w1-v3-contract.js && node dist/tests/w1-v3-effect-ledger.js && node dist/tests/w1-v3-browser-binding.js && node dist/tests/w1-v3-browser-effects.js && node dist/tests/w1-v3-delivery-content.js && node dist/tests/w1-v3-assistant-markdown.js && node dist/tests/w1-v3-site-copy.js && node dist/tests/w1-v3-site-reader.js && node dist/tests/w1-v3-capture-completion.js && node dist/tests/w1-v3-capture-egress.js && node dist/tests/w1-v3-native-results.js && node dist/tests/w1-v3-native-transport.js && node dist/tests/w1-v3-transport.js && node dist/tests/w1-v3-fixed-stdio.js && node dist/tests/w1-v3-native-port.js && node dist/tests/w1-v3-worker-composition.js && node dist/tests/w1-v3-native-install.js && node dist/tests/w1-v3-worker-startup.js && node dist/tests/w1-v3-peer-install.js && npm run test:v3:read-query && npm run test:v3:native-inventory && npm run test:v3:scope-quiescence && npm run test:v3:native-quiescence && npm run test:v3:linux-scope-stop && npm run test:v3:stop-capture && npm run test:v3:scope-integration",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify": "npm run typecheck && npm test && npm run lint && npm run build:server && npm run build:extension && npm run build:native-host && node scripts/test-v3-startup-bundle.mjs",
     "build:extension:content": "vite build --config vite.content.config.ts",
@@ -52,7 +52,12 @@
     "test:v3:startup-bundle": "npm run build:server && node scripts/test-v3-startup-bundle.mjs",
     "test:ssh-paths": "npm run build:server && node dist/tests/w1-ssh-platform-paths.js",
     "test:v3:read-query": "vitest run tests/w1-v3-read-query.test.ts",
-    "test:v3:native-inventory": "vitest run tests/w1-v3-native-inventory.test.ts"
+    "test:v3:native-inventory": "vitest run tests/w1-v3-native-inventory.test.ts",
+    "test:v3:scope-quiescence": "vitest run tests/w1-v3-scope-quiescence.test.ts",
+    "test:v3:native-quiescence": "vitest run tests/w1-v3-native-quiescence.test.ts",
+    "test:v3:linux-scope-stop": "vitest run tests/w1-v3-linux-scope-stop.test.ts",
+    "test:v3:stop-capture": "node dist/tests/w1-v3-stop-capture.js",
+    "test:v3:scope-integration": "vitest run tests/w1-v3-scope-quiescence-integration.test.ts"
   },
   "type": "module",
   "version": "0.1.0-dev"

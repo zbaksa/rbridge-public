@@ -4,6 +4,7 @@ import {
   type RbridgeChatCommandResultV1,type RbridgeChatCommandV1,
 } from '../domain/rbridgeChatCommand.js';
 import {parseEffectCommand,type RbridgeChatEffectCommandV1} from '../domain/rbridgeEffectProtocol.js';
+import {parseScopeQuiescenceQuery,parseWorkerQuiescenceReport,type RbridgeScopeQuiescenceQueryV1,type RbridgeWorkerQuiescenceReportV1} from '../domain/rbridgeScopeQuiescence.js';
 
 export type BrowserToNativeMessageV1=
   | {kind:'HELLO';value:RbridgeChatHelloV1}
@@ -13,7 +14,8 @@ export type BrowserToNativeMessageV1=
 export type ServerToNativeMessageV1=
   | {kind:'HELLO';value:RbridgeChatHelloV1}
   | {kind:'COMMAND';value:RbridgeChatCommandV1};
-export type ServerToNativeMessageV3=ServerToNativeMessageV1|{kind:'EFFECT_COMMAND';value:RbridgeChatEffectCommandV1};
+export type BrowserToNativeMessageV3=BrowserToNativeMessageV1|{kind:'WORKER_QUIESCENCE_REPORT';value:RbridgeWorkerQuiescenceReportV1};
+export type ServerToNativeMessageV3=ServerToNativeMessageV1|{kind:'EFFECT_COMMAND';value:RbridgeChatEffectCommandV1}|{kind:'SCOPE_QUIESCENCE_QUERY';value:RbridgeScopeQuiescenceQueryV1};
 
 export function snapshotNativeMessage(input:unknown,maxBytes:number):unknown{
   const visit=(value:unknown,depth:number):void=>{
@@ -48,6 +50,15 @@ export async function routeBrowserToNative(input:unknown):Promise<BrowserToNativ
   throw new Error('RBRIDGE_NATIVE_MESSAGE_SCHEMA_DENIED');
 }
 
+/** V3 observations require the retained complete query; the frozen V1 parser stays unchanged. */
+export async function routeBrowserToNativeV3(input:unknown,maxBytes:number,query?:RbridgeScopeQuiescenceQueryV1):Promise<BrowserToNativeMessageV3>{
+  if(schemaOf(input)==='RBRIDGE_SCOPE_QUIESCENCE_WORKER_V1'){
+    if(!query)throw Error('RBRIDGE_SCOPE_QUIESCENCE_QUERY_REQUIRED');
+    return {kind:'WORKER_QUIESCENCE_REPORT',value:await parseWorkerQuiescenceReport(snapshotNativeMessage(input,maxBytes),query)};
+  }
+  return routeBrowserToNative(input);
+}
+
 export function routeServerToNative(input:unknown):ServerToNativeMessageV1{
   const schema=schemaOf(input);
   if(schema==='RBRIDGE_CHAT_HELLO_V1')return {kind:'HELLO',value:parseHello(input)};
@@ -57,6 +68,7 @@ export function routeServerToNative(input:unknown):ServerToNativeMessageV1{
 
 /** Async V3 validation is separate from the frozen synchronous V1 parser. */
 export async function routeServerToNativeV3(input:unknown,maxBytes:number):Promise<ServerToNativeMessageV3>{
+  if(schemaOf(input)==='RBRIDGE_SCOPE_QUIESCENCE_QUERY_V1')return {kind:'SCOPE_QUIESCENCE_QUERY',value:await parseScopeQuiescenceQuery(snapshotNativeMessage(input,maxBytes))};
   if(schemaOf(input)==='RBRIDGE_CHAT_EFFECT_COMMAND_V1')return {kind:'EFFECT_COMMAND',value:await parseEffectCommand(input,maxBytes)};
   return routeServerToNative(input);
 }
