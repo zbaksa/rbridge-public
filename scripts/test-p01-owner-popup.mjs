@@ -98,7 +98,7 @@ async function proofHarness(options={}){
       async setAccessLevel(){access++;},
     }},
   };
-  const context=vm.createContext({chrome,crypto:webcrypto,TextEncoder,Uint8Array,ArrayBuffer,URL,Date,
+  const context=vm.createContext({chrome,crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,URL,Date,
     btoa:value=>Buffer.from(value,'latin1').toString('base64'),
     navigator:{clipboard:{async writeText(value){clipboard.push(value);}}},
     document:{getElementById:id=>id==='activate'?activate:id==='status'?status:null,createElement:tag=>{assert.equal(tag,'button');return button();}},
@@ -108,7 +108,7 @@ async function proofHarness(options={}){
       assert.ok(packagePaths.includes(relative),'fixed allowlisted resource only');requests.push(relative);
       if(options.failResource===relative)return {ok:false,status:404};
       const bytes=options.oversizeResource===relative?Buffer.alloc(524289):packageBytes.get(relative);
-      return {ok:true,status:200,text:async()=>bytes.toString('utf8'),arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)};
+      return new Response(bytes,{status:200});
     },
   });
   vm.runInContext(source,context,{timeout:3000});
