@@ -249,3 +249,30 @@ describe('app-execution incomplete failed output',()=>{
     expect(submits).toBe(1);expect(reads).toBe(120);
   });
 });
+
+describe('terminal admission rejection compatibility',()=>{
+  it.each(['submit','status'] as const)(
+    'stops immediately when the %s path returns definite BLOCKED',async(stage)=>{
+      const job='root-rejection-'+stage,actions:string[]=[];
+      const client=createAppExecutionClient({pollIntervalMs:0,
+        exchange:async(request)=>{
+          actions.push(request.action);
+          const state=request.action==='app-submit'&&stage==='status'?'QUEUED':'BLOCKED';
+          return outer({schema:'COCWIN_APP_EXECUTION_STATUS_V1',
+            app:'bai',job,state,
+            reason:'APP_EXECUTION_IDENTITY_UNAVAILABLE'});
+        }});
+      await expect(client.run('bai',job,submitPayload,{deadlineMs:1000}))
+        .rejects.toThrow('APP_EXECUTION_BLOCKED:APP_EXECUTION_IDENTITY_UNAVAILABLE');
+      expect(actions).toEqual(stage==='submit'?['app-submit']:
+        ['app-submit','app-status']);
+    });
+  it('bounds a broker denial reason without turning it into an unknown state',async()=>{
+    const job='root-rejection-reason';
+    const client=createAppExecutionClient({pollIntervalMs:0,
+      exchange:async()=>outer({schema:'COCWIN_APP_EXECUTION_STATUS_V1',
+        app:'bai',job,state:'BLOCKED',reason:'AUTH_DENIED'+String.fromCharCode(10)+'NOT_EXECUTED'})});
+    await expect(client.run('bai',job,submitPayload,{deadlineMs:1000}))
+      .rejects.toThrow('APP_EXECUTION_BLOCKED:AUTH_DENIED NOT_EXECUTED');
+  });
+});
