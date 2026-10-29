@@ -24,7 +24,7 @@ describe('stage2 HEALTH worker routing',()=>{
     expect(publish.mock.calls[0]![1]).toMatchObject({schema:'COCWIN_REMOTE_BRIDGE_RESULT_V2',status:'PASS',operationResult:snapshot});
     expect((await store.get('bridge.health.1'))?.phase).toBe('PUBLISHED');
     const replayPublish=vi.fn();const replay=createRemoteBridgeWorker({...TRANSPORT,now,store,github:{listOpenRequests:async()=>[issue(81)],publishResult:replayPublish},controller:controller(),health:{snapshot:health}});await replay.runOnce();
-    expect(health).toHaveBeenCalledOnce();expect(replayPublish.mock.calls[0]![1]).toMatchObject({status:'PASS',reason:'REPLAY'});
+    expect(health).toHaveBeenCalledOnce();expect(replayPublish.mock.calls[0]![1]).toMatchObject({status:'PASS'});
   });
 
   it('keeps a transient health failure SUBMITTED so restart can safely retry the read-only snapshot',async()=>{

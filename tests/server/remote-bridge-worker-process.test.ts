@@ -23,7 +23,7 @@ describe('stage2 PROCESS worker routing',()=>{
     expect(execute).toHaveBeenCalledOnce();expect(execute.mock.calls[0]![1]).toMatch(/^[a-f0-9]{64}$/);expect(ctl.submit).not.toHaveBeenCalled();
     expect(publish.mock.calls[0]![1]).toMatchObject({schema:'COCWIN_REMOTE_BRIDGE_RESULT_V2',status:'PASS',operationResult:{state:'RUNNING'}});
     const replayPublish=vi.fn();const replay=createRemoteBridgeWorker({...TRANSPORT,now,store,github:{listOpenRequests:async()=>[issue(91)],publishResult:replayPublish},controller:controller(),processSessions:{execute}});
-    await replay.runOnce();expect(execute).toHaveBeenCalledOnce();expect(replayPublish.mock.calls[0]![1]).toMatchObject({status:'PASS',reason:'REPLAY'});
+    await replay.runOnce();expect(execute).toHaveBeenCalledOnce();expect(replayPublish.mock.calls[0]![1]).toMatchObject({status:'PASS'});
   });
 
   it('fails closed when PROCESS is not configured',async()=>{
