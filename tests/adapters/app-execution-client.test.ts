@@ -271,7 +271,7 @@ describe('terminal admission rejection compatibility',()=>{
     const job='root-rejection-reason';
     const client=createAppExecutionClient({pollIntervalMs:0,
       exchange:async()=>outer({schema:'COCWIN_APP_EXECUTION_STATUS_V1',
-        app:'bai',job,state:'BLOCKED',reason:'AUTH_DENIED\\nNOT_EXECUTED'})});
+        app:'bai',job,state:'BLOCKED',reason:'AUTH_DENIED'+String.fromCharCode(10)+'NOT_EXECUTED'})});
     await expect(client.run('bai',job,submitPayload,{deadlineMs:1000}))
       .rejects.toThrow('APP_EXECUTION_BLOCKED:AUTH_DENIED NOT_EXECUTED');
   });
