@@ -162,7 +162,7 @@ function P01-PrivateAcl([string]$Path) {
 }
 function P01-NewLeaf([string]$Path,[byte[]]$Bytes,[string]$AclPath='',[bool]$Delete=$false,[bool]$Exclusive=$false) {
  Pin-Parents $Path
- $Handle=$Native::CreateFileW((Volume-Path $Path),[uint32]3221291008,[uint32]0,[IntPtr]::Zero,[uint32]1,[uint32]35651584,[IntPtr]::Zero)
+ $Handle=$Native::CreateFileW((Volume-Path $Path),[uint32]3221553152,[uint32]0,[IntPtr]::Zero,[uint32]1,[uint32]35651584,[IntPtr]::Zero)
  Need (-not $Handle.IsInvalid) 'TRANSACTION_CREATE_COLLISION'
  $Id=(Handle-Info $Handle).id;$Writer=New-Object IO.FileStream($Handle,[IO.FileAccess]::ReadWrite)
  try {
@@ -293,7 +293,7 @@ function P01-Journal([string]$Stage,[string]$Binding,[int]$Prefix,[bool]$Complet
 function Invoke-P01NativePristineTransaction {
  [CmdletBinding()]param([Parameter(Mandatory=$true)]$Context,[switch]$Reconcile,[switch]$StatusOnly)
  $Directories=@{};$Leaves=@{};$AllEntries=New-Object Collections.ArrayList
- $Utf8=New-Object Text.UTF8Encoding($false);$Native=$null;$Held=$false;$Mutex=$null;$HadStage=$false;$Publication=$false
+ $Utf8=New-Object Text.UTF8Encoding($false);$Native=$null;$Held=$false;$Mutex=$null;$HadStage=$false;$Publication=$false;$Phase='PREFLIGHT'
  try {
   Need ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $PSVersionTable.PSVersion.Major -eq 5) 'WINDOWS_POWERSHELL_51_REQUIRED'
   $Native=Initialize-Native;$CurrentSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -330,7 +330,7 @@ function Invoke-P01NativePristineTransaction {
    P01-Processes;$Protected=P01-Protected $Context
    if ($StatusOnly) {return P01-Result 'NONE' 'PRISTINE_PREDECESSOR' $false}
    Need (-not $Reconcile) 'NO_TRANSACTION_TO_RECONCILE'
-   [void](New-Item -ItemType Directory -Path $Stage -ErrorAction Stop);[void](Pin-Directory $Stage);[void](P01-PrivateAcl $Stage)
+   $Phase='CANDIDATE_STAGING';[void](New-Item -ItemType Directory -Path $Stage -ErrorAction Stop);[void](Pin-Directory $Stage);[void](P01-PrivateAcl $Stage)
    $Package.stream.Position=0;$Memory=New-Object IO.MemoryStream
    try {$Package.stream.CopyTo($Memory);$ExecutableBytes=$Memory.ToArray()} finally {$Memory.Dispose();$Package.stream.Position=0}
    [void](P01-NewLeaf (Join-Path $Stage 'candidate.exe') $ExecutableBytes (Join-Path $Context.root 'rbridge-native-host.exe') $true $true)
@@ -340,7 +340,7 @@ function Invoke-P01NativePristineTransaction {
    [void](Pin-Directory $Stage);[void](P01-PrivateAcl $Stage)
    Need (Test-Path -LiteralPath (Join-Path $Stage 'intent.json')) 'UNKNOWN_TRANSACTION_WITHOUT_INTENT'
   }
-  $Slots=P01-Slots $Context $Tuples $Stage;$Protected=P01-Protected $Context;$OldAcl=@{}
+  $Phase='JOURNAL_VALIDATION';$Slots=P01-Slots $Context $Tuples $Stage;$Protected=P01-Protected $Context;$OldAcl=@{}
   foreach($T in $Tuples) {$OldAcl[$T.kind]=P01-PrivateAcl $Slots.old[$T.kind].full}
   $IntentText=(P01-Canonical @{schema='COCWIN_P01_NATIVE_PRISTINE_INTENT_V1';binding=$Binding;rootIdentity=(Pin-Directory $Context.root).id;protected=$Protected;oldAcl=$OldAcl})+[char]10
   if ($HadStage) {Need ((Entry-Text (Open-Leaf (Join-Path $Stage 'intent.json') 65536)) -ceq $IntentText) 'TRANSACTION_INTENT_CHANGED'}
@@ -359,7 +359,7 @@ function Invoke-P01NativePristineTransaction {
   # Run the identical pinned package image, keeping installed/staged images exclusive.
   $CE=$Slots.new['config'];$ConfigId=$CE.id
   if ($CE.deleteAccess) {$Path=$CE.full;Close-Entry $CE;$CE=Open-Leaf $Path 65536;Need ($CE.id -ceq $ConfigId) 'CANDIDATE_CONFIG_IDENTITY_CHANGED'}
-  P01-CheckCandidate $Package $CE $CP.sha256
+  $Phase='READ_ONLY_CONFIG_CHECK';P01-CheckCandidate $Package $CE $CP.sha256
   $Path=$CE.full;Close-Entry $CE;$CE=Open-Leaf $Path 65536 $true
   Need ($CE.id -ceq $ConfigId -and (Entry-Hash $CE) -ceq $CP.sha256) 'CANDIDATE_CONFIG_IDENTITY_CHANGED'
   $Slots=P01-Slots $Context $Tuples $Stage
@@ -369,6 +369,7 @@ function Invoke-P01NativePristineTransaction {
    if (-not (Test-Path -LiteralPath $Path)) {[void](P01-NewLeaf $Path ($Utf8.GetBytes((P01-StepText $Binding $I))))}
   }
   for($I=$Slots.prefix;$I -lt 6;$I++) {
+   $Phase='PUBLICATION_STEP_'+$I
    P01-Layout $Context $true;Need ((P01-Protected $Context) -ceq $Protected) 'PROTECTED_SNAPSHOT_CHANGED';P01-Processes
    $Slots=P01-Slots $Context $Tuples $Stage;Need ($Slots.prefix -eq $I) 'CONCURRENT_PUBLICATION_CHANGED'
    $T=$Tuples[[int][Math]::Floor($I/2)]
@@ -380,17 +381,20 @@ function Invoke-P01NativePristineTransaction {
    $Publication=$true;Rename-Entry $E $Destination
    [void](P01-NewLeaf (Join-Path $Stage ('step-'+$I+'.json')) ($Utf8.GetBytes((P01-StepText $Binding $I))))
   }
-  $Slots=P01-Slots $Context $Tuples $Stage;P01-Layout $Context $true
+  $Phase='INSTALLED_READBACK';$Slots=P01-Slots $Context $Tuples $Stage;P01-Layout $Context $true
   Need ($Slots.prefix -eq 6 -and (P01-Protected $Context) -ceq $Protected) 'INSTALLED_PAIR_READBACK_FAILED'
   foreach($T in $Tuples) {Need ((P01-PrivateAcl $Slots.new[$T.kind].full) -ceq $OldAcl[$T.kind] -and (P01-PrivateAcl $Slots.old[$T.kind].full) -ceq $OldAcl[$T.kind]) 'INSTALLED_OR_BACKUP_ACL_CHANGED'}
   P01-Journal $Stage $Binding 6 $false;P01-Processes
-  [void](P01-NewLeaf (Join-Path $Stage 'COMPLETE.json') ($Utf8.GetBytes($CompleteText)))
+  $Phase='COMPLETE_READBACK';[void](P01-NewLeaf (Join-Path $Stage 'COMPLETE.json') ($Utf8.GetBytes($CompleteText)))
   Need ((Entry-Text (Open-Leaf (Join-Path $Stage 'COMPLETE.json') 16384)) -ceq $CompleteText -and (P01-Protected $Context) -ceq $Protected) 'COMPLETE_READBACK_FAILED'
   [void](P01-Slots $Context $Tuples $Stage);P01-Layout $Context $true
   return P01-Result 'COMPLETE' 'PUBLISHED_AND_READ_BACK' $Publication
  } catch {
   $Reason=[string]$_.Exception.Message
   if ($Reason -cnotmatch '^[A-Z][A-Z0-9_]{1,100}$') {$Reason='P01_NATIVE_TRANSACTION_FAILED'}
+  $Diagnostic=$_.Exception;for($Depth=0;$Depth -lt 4 -and $null -ne $Diagnostic.InnerException;$Depth++) {$Diagnostic=$Diagnostic.InnerException}
+  $Type=$Diagnostic.GetType().FullName;if ($Type.Length -gt 160) {$Type=$Type.Substring(0,160)}
+  Write-Verbose ('P01_NATIVE_DIAGNOSTIC phase='+$Phase+' type='+$Type+' hresult='+$Diagnostic.HResult.ToString('x8')+' line='+$_.InvocationInfo.ScriptLineNumber+' reason='+$Reason)
   $Status=if ($HadStage -or $Publication) {'UNKNOWN'} else {'BLOCKED'};return P01-Result $Status $Reason $Publication
  } finally {
   for($I=$AllEntries.Count-1;$I -ge 0;$I--) {Close-Entry $AllEntries[$I]}
@@ -412,6 +416,12 @@ function New-P01PinnedContext([string]$PackageRoot,[string]$ManifestPin) {
  $Scope=@{appId='cocwin';baseSha='2f17ffcf5d8aefbb7bd3d3e4506f8fee965fd6db';sessionId='exta-4786c8bd94d2feecc1e26a031b0693d6';generation='7e7d5e17-2c44-4094-a6c8-0cf470ed564c'}
  P01-Keys $M.scope @('appId','baseSha','sessionId','generation')
  Need ((P01-Canonical $M.scope) -ceq (P01-Canonical $Scope)) 'ORIGINAL_SCOPE_REQUIRED'
+ P01-Keys $M.peer @('peerId','releaseSha','browserInstanceId','browserProfileId','protocolMinor','maxMessageBytes','capabilities')
+ Need ($M.peer.releaseSha -ceq $M.source.canonicalCommit) 'PEER_SOURCE_PROOF_INVALID'
+ foreach($K in @('peerId','browserInstanceId','browserProfileId')) {Need ($M.peer.$K -is [string] -and $M.peer.$K -cmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$') 'PEER_IDENTITY_INVALID'}
+ Need ($M.peer.protocolMinor -eq 1 -and $M.peer.maxMessageBytes -eq 65536) 'PEER_PROTOCOL_INVALID'
+ $Capabilities=@('CHAT_TARGET_DISCOVERY_V1','CHAT_BINDING_V1','CHAT_WRITE_LEADER_V1','CHAT_CAPTURE_V1','CHAT_SEND_TX_V1','CHAT_QUOTA_OBSERVATION_V1','CHAT_ROLLOVER_V1','REPLAY_SEQUENCE_V1','CHAT_EFFECT_REQUEST_V1','CHAT_ASSISTANT_TURN_CAPTURE_V2','CHAT_SCOPE_QUIESCENCE_V1')
+ Need ((P01-Canonical $M.peer.capabilities) -ceq (P01-Canonical $Capabilities)) 'PEER_CAPABILITIES_INVALID'
  P01-Keys $M.predecessor @('startup','nativeConfig','nativeManifest','nativeExecutable','ownerMarker')
  $Expected=@{
   startup=@{bytes=1095;sha256='fc4d970903a94d6c49fc6dd5a9edf6f4aec4a61ccbfaf8c149974b203d2649d5'}
@@ -426,13 +436,15 @@ function New-P01PinnedContext([string]$PackageRoot,[string]$ManifestPin) {
  P01-Keys $M.startup @('path','bytes','sha256')
  Need ($M.startup.path -ceq 'extension/p01-startup.json' -and @($M.resources).Count -eq 6) 'KIT_RESOURCE_CONTRACT_INVALID'
  $Files=@(@{path=$ManifestPath;bytes=$Raw.Length;sha256=$ManifestPin})
- $Seen=@{}
- foreach($R in @($M.startup)+@($M.resources)) {
+ $Seen=@{};$StartupResource=$null
+ foreach($R in @($M.resources)) {
   P01-Keys $R @('path','bytes','sha256')
-  Need ($R.path -is [string] -and $R.path -cmatch '^extension/[a-zA-Z0-9._/-]+$' -and $R.path -notmatch '(^|/)\.\.?(/|$)' -and $R.path -notmatch '//' -and $R.sha256 -cmatch '^[a-f0-9]{64}$' -and $R.bytes -ge 1 -and $R.bytes -le 134217728) 'KIT_RESOURCE_PIN_INVALID'
+  Need ($R.path -cin @('manifest.json','serviceWorker.js','contentScript.js','p01-startup.json','setup.html','setup.js') -and $R.sha256 -cmatch '^[a-f0-9]{64}$' -and $R.bytes -ge 1 -and $R.bytes -le 134217728) 'KIT_RESOURCE_PIN_INVALID'
   Need (-not $Seen.ContainsKey($R.path)) 'DUPLICATE_KIT_RESOURCE'
-  $Seen[$R.path]=$true;$Files+=@{path=(Join-Path $PackageRoot ($R.path.Replace('/','\')));bytes=$R.bytes;sha256=$R.sha256}
+  $Seen[$R.path]=$true;$Files+=@{path=(Join-Path $PackageRoot ('extension\'+$R.path));bytes=$R.bytes;sha256=$R.sha256}
+  if ($R.path -ceq 'p01-startup.json') {$StartupResource=$R}
  }
+ Need ($null -ne $StartupResource -and $M.startup.bytes -eq $StartupResource.bytes -and $M.startup.sha256 -ceq $StartupResource.sha256) 'STARTUP_RESOURCE_PIN_MISMATCH'
  $MetadataPath=Join-Path $PackageRoot 'native\rbridge-native-host.metadata.json'
  $MetadataRaw=[IO.File]::ReadAllBytes($MetadataPath)
  Need ($MetadataRaw.Length -ge 2 -and $MetadataRaw.Length -le 16384 -and (P01-HashBytes $MetadataRaw) -ceq $M.native.metadataSha256) 'NATIVE_METADATA_CHANGED'

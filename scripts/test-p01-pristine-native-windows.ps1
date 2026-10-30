@@ -1,5 +1,6 @@
 # Synthetic disposable Windows filesystem/registry qualification; never owner acceptance.
 $ErrorActionPreference='Stop'
+$VerbosePreference='Continue'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {throw 'ACTUAL_WINDOWS_REQUIRED'}
 $Executor=Join-Path $PSScriptRoot 'upgrade-p01-pristine-native-windows.ps1'
 if (-not (Test-Path -LiteralPath $Executor)) {throw 'P01_PRISTINE_NATIVE_EXECUTOR_NOT_IMPLEMENTED'}
@@ -165,6 +166,53 @@ try {
  try {Block-Unchanged $C 'FOREIGN_WRITABLE_ACL'} finally {Set-Acl -LiteralPath $Path -AclObject $SavedAcl}
  $C=New-Fixture;$R=Invoke-P01NativePristineTransaction -Context $C -StatusOnly
  Assert-P01 ($R.status -ceq 'NONE' -and -not $R.publicationStarted -and -not (Test-Path -LiteralPath (Join-Path $C.root '.p01-pristine-upgrade'))) 'NONE_STATUS_CREATED_TRANSACTION'
+
+
+ # Constructor fixtures contain public predecessor pins and synthetic peer IDs.
+ # Every expected rejection occurs before any original-owner file read.
+ function New-ManifestFixture {
+  return [ordered]@{
+   schema='COCWIN_P01_PRISTINE_OWNER_KIT_V1'
+   source=@{appCommit=('1'*40);canonicalCommit=('9'*40);tree=('a'*40)}
+   scope=@{appId='cocwin';baseSha='2f17ffcf5d8aefbb7bd3d3e4506f8fee965fd6db';sessionId='exta-4786c8bd94d2feecc1e26a031b0693d6';generation='7e7d5e17-2c44-4094-a6c8-0cf470ed564c'}
+   peer=@{peerId='SYNTHETIC-peer';releaseSha=('9'*40);browserInstanceId='SYNTHETIC-browser';browserProfileId='SYNTHETIC-profile';protocolMinor=1;maxMessageBytes=65536;capabilities=@('CHAT_TARGET_DISCOVERY_V1','CHAT_BINDING_V1','CHAT_WRITE_LEADER_V1','CHAT_CAPTURE_V1','CHAT_SEND_TX_V1','CHAT_QUOTA_OBSERVATION_V1','CHAT_ROLLOVER_V1','REPLAY_SEQUENCE_V1','CHAT_EFFECT_REQUEST_V1','CHAT_ASSISTANT_TURN_CAPTURE_V2','CHAT_SCOPE_QUIESCENCE_V1')}
+   predecessor=@{
+    startup=@{bytes=1095;sha256='fc4d970903a94d6c49fc6dd5a9edf6f4aec4a61ccbfaf8c149974b203d2649d5'}
+    nativeConfig=@{bytes=1553;sha256='648e5d88a3eb3a98dd0c7c2508a7071eeaf642176b3587f5ecd22f4d43e0a70a'}
+    nativeManifest=@{bytes=372;sha256='537717d92a24d8cf696e7b506fbdaeb745cbbc6627f16566e346e7c7056424a3'}
+    nativeExecutable=@{bytes=87200256;sha256='c4d9317d84dbd7ac2f0d73df3c939fe2452eb6a78e56a142d17c83876228e5ee'}
+    ownerMarker=@{bytes=696;sha256='81ab1ca55f715567c56e2efda611f12f23398b68023062db2740bb8e8103d3de'}
+   }
+   startup=@{path='extension/p01-startup.json';bytes=3;sha256=('f'*64)}
+   native=@{path='native/rbridge-native-host.exe';bytes=1234;sha256=('e'*64);metadataPath='native/rbridge-native-host.metadata.json';metadataSha256=('d'*64);sourceCommit=('9'*40);sourceTree=('a'*40)}
+   resources=@(foreach($Name in @('manifest.json','serviceWorker.js','contentScript.js','p01-startup.json','setup.html','setup.js')) {@{path=$Name;bytes=3;sha256=('f'*64)}})
+  }
+ }
+ function Reject-Constructor($M,[string]$Reason,[bool]$WrongPin=$false) {
+  $Package=Join-Path $Sandbox ('SYNTHETIC-package-'+[guid]::NewGuid().ToString('N'));[void][IO.Directory]::CreateDirectory($Package)
+  $Path=Join-Path $Package 'MANIFEST.json';Write-QA $Path ($M|ConvertTo-Json -Depth 20)
+  $Pin=(Pin-QA $Path).sha256;if ($WrongPin) {$Pin='0'*64}
+  $Caught=''
+  try {[void](New-P01PinnedContext $Package $Pin)} catch {$Caught=$_.Exception.Message}
+  Assert-P01 ($Caught -ceq $Reason) ('CONSTRUCTOR_REJECTION_WRONG expected='+$Reason+' actual='+$Caught)
+  Assert-P01 (@(Get-ChildItem -LiteralPath $Package -Force).Count -eq 1) 'CONSTRUCTOR_MUTATED_PACKAGE'
+ }
+ $M=New-ManifestFixture;$M.extra='SYNTHETIC unknown field';Reject-Constructor $M 'CLOSED_OBJECT_FIELDS_CHANGED'
+ $M=New-ManifestFixture;$M.source.canonicalCommit='SYNTHETIC invalid source';Reject-Constructor $M 'SOURCE_PROOF_INVALID'
+ $M=New-ManifestFixture;$M.scope.generation='SYNTHETIC different scope';Reject-Constructor $M 'ORIGINAL_SCOPE_REQUIRED'
+ $M=New-ManifestFixture;$M.peer.capabilities=$M.peer.capabilities[0..9];Reject-Constructor $M 'PEER_CAPABILITIES_INVALID'
+ $M=New-ManifestFixture;$M.peer.capabilities+=@('CHAT_SCOPE_QUIESCENCE_V1');Reject-Constructor $M 'PEER_CAPABILITIES_INVALID'
+ $M=New-ManifestFixture;$M.peer.releaseSha='8'*40;Reject-Constructor $M 'PEER_SOURCE_PROOF_INVALID'
+ $M=New-ManifestFixture;$M.native.sourceTree='b'*40;Reject-Constructor $M 'NATIVE_ARTIFACT_PROOF_INVALID'
+ $M=New-ManifestFixture;$M.predecessor.nativeExecutable.sha256='630ea7b69c12283ac311cbf137adfaf8078f091071697bab355282d080997b95';Reject-Constructor $M 'ORIGINAL_PREDECESSOR_REQUIRED'
+ $M=New-ManifestFixture;$M.resources[0].path='../SYNTHETIC-escape';Reject-Constructor $M 'KIT_RESOURCE_PIN_INVALID'
+ $M=New-ManifestFixture;$M.startup.sha256='b'*64;Reject-Constructor $M 'STARTUP_RESOURCE_PIN_MISMATCH'
+ $M=New-ManifestFixture;Reject-Constructor $M 'PACKAGE_MANIFEST_CHANGED' $true
+ # This process-control fixture proves the synthetic predecessor is executable
+ # before attempts to launch it are refused by the held kernel image gates.
+ $Control=New-Fixture
+ & (Join-Path $Control.root 'rbridge-native-host.exe') --check-config (Join-Path $Control.root 'rbridge-native-host.config.json') | Out-Null
+ Assert-P01 ($LASTEXITCODE -eq 0) 'SYNTHETIC_IMAGE_CONTROL_DID_NOT_RUN'
 
  [pscustomobject]@{schema='COCWIN_P01_SYNTHETIC_WINDOWS_QA_V1';status='PASS';passed=$Passed;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0}
 } finally {
