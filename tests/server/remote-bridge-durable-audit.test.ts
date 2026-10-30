@@ -70,6 +70,35 @@ describe('V1 durable-state cutover audit',()=>{
     expect(out.openTrusted[0]).toMatchObject({requestId:'req-15',phase:'WAITING'});
   });
 
+  it('does not consider a PUBLISHED record without its durable result cutover-safe',async()=>{
+    const dir=await root();
+    await durable(dir,{requestId:'req-published-no-result',issueNumber:101,phase:'PUBLISHED'});
+    // A normal markPublished follows markTerminal(result). This crafted
+    // corrupt state has no persisted result, yet the old audit ignores it.
+    const out=await auditRemoteBridgeDurableState({
+      stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({}),
+    });
+    expect(out.cutoverGate).toBe('BLOCKED');
+  });
+
+  it('does not consider an unexpired OPEN CHUNK transfer cutover-safe',async()=>{
+    const dir=await root();
+    const name='transfer-open-review',transfer=join(dir,'transfers',name);
+    await mkdir(transfer,{recursive:true});
+    await writeFile(join(transfer,'manifest.json'),JSON.stringify({
+      schema:'COCWIN_REMOTE_BRIDGE_TRANSFER_V1',transferId:name,
+      count:1,objectSha256:'a'.repeat(64),
+      expiresAt:'2030-01-01T00:00:00.000Z',
+      createdAt:'2026-10-30T00:00:00.000Z',
+      updatedAt:'2026-10-30T00:00:00.000Z',
+      phase:'OPEN',chunks:[],
+    })+'\n');
+    const out=await auditRemoteBridgeDurableState({
+      stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({}),
+    });
+    expect(out.cutoverGate).toBe('BLOCKED');
+  });
+
   it('blocks identity mismatches instead of trusting issue state alone',async()=>{
     const dir=await root();await durable(dir,{requestId:'req-5',issueNumber:5,phase:'SUBMITTED'});
     const out=await auditRemoteBridgeDurableState({stateRoot:dir,expectedAuthor:'bridge-owner',issueLookup:lookup({5:{state:'closed',author:'other'}})});
