@@ -71,6 +71,7 @@ describe('owner-controlled exact-app HOLD manifest, source-only',()=>{
       (x:OwnerHoldManifest)=>{x.originals[0]!.issueNumber=999;},
       (x:OwnerHoldManifest)=>{x.originals[1]!.requestId=x.originals[0]!.requestId;},
       (x:OwnerHoldManifest)=>{x.originals[3]!.appId='aplall';},
+      (x:OwnerHoldManifest)=>{x.originals[0]!.appId='constructor';},
       (x:OwnerHoldManifest)=>{x.originals[0]!.phase='TERMINAL' as 'WAITING';},
       (x:OwnerHoldManifest)=>{x.originals[0]!.scope='SCOPED' as 'UNSCOPED';},
       (x:OwnerHoldManifest)=>{x.originals[0]!.requestSha256='0';},
