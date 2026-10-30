@@ -44,6 +44,9 @@ class ProposedReadOnlyRootLeaseTests(unittest.TestCase):
     def issue_fixture(self):
         # Do NOT weaken the physical verifier in production. This is an
         # isolated source test of the new private state machine.
+        if self.handle not in self.live._approved_reviews:
+            self.handle=self.live._ProcessLocalApprovedReview(self.live._ISSUE_SEAL)
+            self.live._approved_reviews[self.handle]=dict(self.snapshot)
         with patch.object(self.mod,'_physical_revalidate'):
             return self.mod.issue_one_root_readonly_qualification_lease(self.handle)
 
@@ -68,8 +71,6 @@ class ProposedReadOnlyRootLeaseTests(unittest.TestCase):
         self.assertIs(check['operational_admission_authorized'],False)
         self.assertEqual(check['status'],
                          'SOURCE_ONLY_PROPOSED_ORIGINAL_ORPHAN_READONLY_AUDIT')
-        with self.assertRaises(ValueError):
-            self.validate_fixture(lease,'MAINTENANCE_REGISTRY','ORPHAN')
         args=list(self.argv[1:])
         self.assertEqual(self.validate_fixture(
             lease,'HELPER_JOURNAL','PRECHECK',
@@ -78,14 +79,15 @@ class ProposedReadOnlyRootLeaseTests(unittest.TestCase):
         self.validate_fixture(
             lease,'HELPER_JOURNAL','ORPHAN',self.pin,args,b'',())
         self.assertEqual(self.mod._live[lease]['state'],'CONSUMED')
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_SEQUENCE_INVALID'):
             self.validate_fixture(lease,'HELPER_JOURNAL','ORPHAN',
                                   self.pin,args,b'',())
+        self.assertNotIn(lease,self.mod._live)
         self.mod.revoke_root_readonly_lease(lease)
         with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_NOT_LIVE'):
             self.validate_fixture(lease,'HELPER_JOURNAL','PRECHECK')
 
-    def test_non_readonly_operations_are_always_refused_before_consuming(self):
+    def test_non_readonly_operations_are_refused_and_revoke_lease(self):
         samples=(
             (SimpleNamespace(path='/usr/bin/systemctl',sha256=self.driver),
              ['restart','rbridge.service'],b'',()),
@@ -97,14 +99,17 @@ class ProposedReadOnlyRootLeaseTests(unittest.TestCase):
             (SimpleNamespace(path=self.argv[0],sha256='f'*64),
              list(self.argv[1:]),b'',()),
         )
-        lease=self.issue_fixture()
-        self.validate_fixture(lease,'MAINTENANCE_REGISTRY','ORPHAN')
         for pin,args,data,specs in samples:
+            lease=self.issue_fixture()
+            self.validate_fixture(lease,'MAINTENANCE_REGISTRY','ORPHAN')
             with self.subTest(args=args,pin=pin),self.assertRaisesRegex(
                     ValueError,'ORPHAN_READONLY_HELPER_OPERATION_UNQUALIFIED'):
                 self.validate_fixture(lease,'HELPER_JOURNAL','ORPHAN',
                                       pin,args,data,specs)
-            self.assertEqual(self.mod._live[lease]['state'],'REGISTRY_OBSERVED')
+            self.assertNotIn(lease,self.mod._live)
+            with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_NOT_LIVE'):
+                self.validate_fixture(lease,'HELPER_JOURNAL','ORPHAN',
+                                      self.pin,list(self.argv[1:]),b'',())
 
     def test_bad_or_pretend_owner_receipt_never_issues_lease(self):
         with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_SIGNED_REVIEW_REQUIRED'):
@@ -118,16 +123,53 @@ class ProposedReadOnlyRootLeaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_NOT_LIVE'):
             self.validate_fixture(forged,'HELPER_JOURNAL','PRECHECK')
 
-    def test_not_exact_original_or_wrong_guard_or_phase_is_denied(self):
-        lease=self.issue_fixture()
+    def test_not_exact_original_or_wrong_guard_or_phase_revokes_lease(self):
         for kwargs in (
             {'guard':'PRODUCTION_SWITCH','journal_name':self.orphan,'phase':'PRECHECK'},
             {'guard':'MAINTENANCE_REGISTRY','journal_name':'helper-'+'f'*32,'phase':'PRECHECK'},
             {'guard':'MAINTENANCE_REGISTRY','journal_name':self.orphan,'phase':'IGNORE_ALL'},
         ):
+            lease=self.issue_fixture()
             with self.subTest(kwargs=kwargs),patch.object(self.mod,'_physical_revalidate'):
                 with self.assertRaises(ValueError):
                     self.mod._validate_live_lease(lease,**kwargs)
+            self.assertNotIn(lease,self.mod._live)
+
+    def test_failed_physical_revalidation_revokes_lease(self):
+        lease=self.issue_fixture()
+        with patch.object(self.mod,'_physical_revalidate',
+                          side_effect=ValueError('PHYSICAL_SOURCE_CHANGED')):
+            with self.assertRaisesRegex(ValueError,'PHYSICAL_SOURCE_CHANGED'):
+                self.mod._validate_live_lease(
+                    lease,guard='MAINTENANCE_REGISTRY',
+                    journal_name=self.orphan,phase='ORPHAN')
+        self.assertNotIn(lease,self.mod._live)
+        with patch.object(self.mod,'_physical_revalidate') as physical:
+            with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_NOT_LIVE'):
+                self.mod._validate_live_lease(
+                    lease,guard='MAINTENANCE_REGISTRY',
+                    journal_name=self.orphan,phase='ORPHAN')
+            physical.assert_not_called()
+
+    def test_out_of_order_helper_guard_revokes_signed_lease(self):
+        lease=self.issue_fixture()
+        with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_SEQUENCE_INVALID'):
+            self.validate_fixture(
+                lease,'HELPER_JOURNAL','PRECHECK',self.pin,
+                list(self.argv[1:]),b'',())
+        self.assertNotIn(lease,self.mod._live)
+        with self.assertRaisesRegex(ValueError,'ORPHAN_READONLY_LEASE_NOT_LIVE'):
+            self.validate_fixture(lease,'MAINTENANCE_REGISTRY','ORPHAN')
+
+    def test_interruption_during_revalidation_revokes_lease(self):
+        lease=self.issue_fixture()
+        with patch.object(self.mod,'_physical_revalidate',
+                          side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.mod._validate_live_lease(
+                    lease,guard='MAINTENANCE_REGISTRY',
+                    journal_name=self.orphan,phase='PRECHECK')
+        self.assertNotIn(lease,self.mod._live)
 
     def test_wrong_signed_driver_rejected_and_review_consumed(self):
         self.snapshot['driver_sha256']='f'*64

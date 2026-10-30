@@ -105,39 +105,50 @@ def issue_one_root_readonly_qualification_lease(signed_review):
 def _validate_live_lease(lease,*,guard,journal_name,
                          phase='PRECHECK',pin=None,args=None,
                          input_bytes=None,child_specs=None):
-    """Private operative Root guard verifier for exactly one original orphan."""
-    if (type(lease) is not _OneRootReadOnlyQualificationLease
-            or lease not in _live):
-        _fail('ORPHAN_READONLY_LEASE_NOT_LIVE')
-    if journal_name!=ORPHAN_NAME:
-        _fail('ORPHAN_READONLY_LEASE_OTHER_JOURNAL')
-    if guard not in ('MAINTENANCE_REGISTRY','HELPER_JOURNAL'):
-        _fail('ORPHAN_READONLY_LEASE_GUARD_INVALID')
-    if phase not in ('PRECHECK','ORPHAN'):
-        _fail('ORPHAN_READONLY_LEASE_PHASE_INVALID')
+    """Private source-only lease verifier; a rejected attempt revokes the lease.
+
+    Every check and transition is serialized. A wrong command, sequence,
+    source, Root process or kernel observation must NOT leave a signed lease
+    reusable for a subsequent helper attempt.
+    """
     with _guard_lock:
-        row=_live[lease]
-        if ((guard=='MAINTENANCE_REGISTRY' and row['state']!='NEW')
-                or (guard=='HELPER_JOURNAL' and row['state']!='REGISTRY_OBSERVED')):
-            _fail('ORPHAN_READONLY_LEASE_SEQUENCE_INVALID')
-        if guard=='HELPER_JOURNAL':
-            _readonly_helper_args(pin,args,input_bytes,child_specs)
-        # A serialized proof cannot replace this live Root physical read.
-        _physical_revalidate(row,fresh_kernel=phase=='ORPHAN')
-        if phase=='ORPHAN':
-            row['state']=('REGISTRY_OBSERVED' if guard=='MAINTENANCE_REGISTRY'
-                          else 'CONSUMED')
-        return {
-            'schema':'RBRIDGE_SINGLE_ROOT_READONLY_LEASE_GUARD_RESULT_V1',
-            'status':'SOURCE_ONLY_PROPOSED_ORIGINAL_ORPHAN_READONLY_AUDIT',
-            'operational_admission_authorized':False,
-            'journal_name':ORPHAN_NAME,
-            'guard':guard,'phase':phase,
-            'old_journal_settled':False,
-            'owner_identity_independently_authenticated':False,
-            'may_change_production':False,
-            'service_action_authorized':False,
-        }
+        if (type(lease) is not _OneRootReadOnlyQualificationLease
+                or lease not in _live):
+            _fail('ORPHAN_READONLY_LEASE_NOT_LIVE')
+        try:
+            if journal_name!=ORPHAN_NAME:
+                _fail('ORPHAN_READONLY_LEASE_OTHER_JOURNAL')
+            if guard not in ('MAINTENANCE_REGISTRY','HELPER_JOURNAL'):
+                _fail('ORPHAN_READONLY_LEASE_GUARD_INVALID')
+            if phase not in ('PRECHECK','ORPHAN'):
+                _fail('ORPHAN_READONLY_LEASE_PHASE_INVALID')
+            row=_live[lease]
+            if ((guard=='MAINTENANCE_REGISTRY' and row['state']!='NEW')
+                    or (guard=='HELPER_JOURNAL' and row['state']!='REGISTRY_OBSERVED')):
+                _fail('ORPHAN_READONLY_LEASE_SEQUENCE_INVALID')
+            if guard=='HELPER_JOURNAL':
+                _readonly_helper_args(pin,args,input_bytes,child_specs)
+            # Physical checks cannot be replaced by serialized proof.
+            _physical_revalidate(row,fresh_kernel=phase=='ORPHAN')
+            if phase=='ORPHAN':
+                row['state']=('REGISTRY_OBSERVED' if guard=='MAINTENANCE_REGISTRY'
+                              else 'CONSUMED')
+            return {
+                'schema':'RBRIDGE_SINGLE_ROOT_READONLY_LEASE_GUARD_RESULT_V1',
+                'status':'SOURCE_ONLY_PROPOSED_ORIGINAL_ORPHAN_READONLY_AUDIT',
+                'operational_admission_authorized':False,
+                'journal_name':ORPHAN_NAME,
+                'guard':guard,'phase':phase,
+                'old_journal_settled':False,
+                'owner_identity_independently_authenticated':False,
+                'may_change_production':False,
+                'service_action_authorized':False,
+            }
+        except BaseException:
+            # Fail closed on every refusal, including a changed physical
+            # preimage or interruption. Never retry under the same approval.
+            _live.pop(lease,None)
+            raise
 
 def revoke_root_readonly_lease(lease):
     """Poison the one-use lease after a helper attempt, successful or not."""
