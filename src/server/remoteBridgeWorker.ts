@@ -88,7 +88,31 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
       await publishStored(request.requestId,digest,issue,completedV2(request,issue.number,digest,value,now()),summary);
     }catch(error){const code=errorCode(error);if(request.operation.kind==='PROCESS'&&processErrorMayHaveExecuted(code))await publishStored(request.requestId,digest,issue,uncertainV2(issue,request.requestId,digest,code,now()),summary);else if(code==='REMOTE_BRIDGE_STAGE2_CHUNK_NOT_CONFIGURED'||code==='REMOTE_BRIDGE_STAGE2_HEALTH_NOT_CONFIGURED'||code==='REMOTE_BRIDGE_STAGE2_PROCESS_NOT_CONFIGURED'||code.startsWith('REMOTE_BRIDGE_CHUNK_')||code.startsWith('REMOTE_BRIDGE_HEALTH_')||code.startsWith('REMOTE_BRIDGE_PROCESS_'))await publishStored(request.requestId,digest,issue,blockedV2(issue,request.requestId,digest,code,now()),summary);else{summary.pending++;summary.errors++;}}
   }
-  async function handleV1(issue:GitHubBridgeIssue,summary:RemoteBridgeRunSummary){let request:RemoteBridgeRequest,digest:string;try{request=parseRemoteBridgeRequest({title:issue.title,body:issue.body,authorLogin:issue.authorLogin,expectedAuthorLogin:authorLogin,now:now()});digest=remoteBridgeRequestDigest(request);}catch(error){const result=blockedV1(issue,sha(issue.body),errorCode(error),now());try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}return;}const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,issueNumber:issue.number,jobId:request.jobId});if(claim.state==='COLLISION'){try{await options.github.publishResult(issue.number,blockedV1(issue,digest,'REQUEST_ID_COLLISION',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}return;}if(claim.state==='REPLAY'&&(claim.record.phase==='TERMINAL'||claim.record.phase==='PUBLISHED')&&claim.record.result){await publishReplay(claim.record.result,issue,request.requestId,digest,claim.record.phase,summary);return;}if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){await reconcileV1(request,issue,digest,summary);return;}if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}
+  async function handleV1(issue:GitHubBridgeIssue,summary:RemoteBridgeRunSummary){
+    let request:RemoteBridgeRequest,digest:string;
+    try{
+      request=parseRemoteBridgeRequest({title:issue.title,body:issue.body,authorLogin:issue.authorLogin,expectedAuthorLogin:authorLogin,now:now()});
+      digest=remoteBridgeRequestDigest(request);
+    }catch(error){
+      const code=errorCode(error);
+      if(code==='REMOTE_BRIDGE_REQUEST_EXPIRED'){
+        try{
+          request=parseRemoteBridgeRequest({title:issue.title,body:issue.body,authorLogin:issue.authorLogin,expectedAuthorLogin:authorLogin,now:now(),allowExpired:true});
+          digest=remoteBridgeRequestDigest(request);
+          const existing=await options.store.get(request.requestId);
+          if(!existing||existing.requestSha256!==digest){
+            const result=blockedV1(issue,sha(issue.body),code,now());
+            try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}
+            return;
+          }
+        }catch{summary.errors++;return;}
+      }else{
+        const result=blockedV1(issue,sha(issue.body),code,now());
+        try{await options.github.publishResult(issue.number,result);summary.published++;summary.blocked++;}catch{summary.errors++;}
+        return;
+      }
+    }
+    const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,issueNumber:issue.number,jobId:request.jobId});if(claim.state==='COLLISION'){try{await options.github.publishResult(issue.number,blockedV1(issue,digest,'REQUEST_ID_COLLISION',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}return;}if(claim.state==='REPLAY'&&(claim.record.phase==='TERMINAL'||claim.record.phase==='PUBLISHED')&&claim.record.result){await publishReplay(claim.record.result,issue,request.requestId,digest,claim.record.phase,summary);return;}if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){await reconcileV1(request,issue,digest,summary);return;}if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}
     // V1 is held before durable SUBMITTED and before any controller effect.
     if(options.admissionHold){
       try{
