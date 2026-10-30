@@ -78,7 +78,7 @@ function Open-Leaf([string]$Path,[long]$Maximum,[bool]$Delete=$false,[bool]$Excl
   Need (-not $Handle.IsInvalid) 'MANAGED_FILE_OPEN_FAILED'
   $Info=Handle-Info $Handle;$Entry=[pscustomobject]@{full=$Full;guid=$Guid;handle=$Handle;stream=$null;id=$Info.id;directory=$false;deleteAccess=($Delete -or $Exclusive);exclusive=$Exclusive;closed=$false}
   [void]$AllEntries.Add($Entry);Verify-Entry $Entry
-  $Entry.stream=New-Object IO.FileStream($Handle,[IO.FileAccess]::Read)
+  $StreamAccess=if ($Exclusive) {[IO.FileAccess]::ReadWrite} else {[IO.FileAccess]::Read};$Entry.stream=New-Object IO.FileStream($Handle,$StreamAccess)
   Need ($Entry.stream.Length -ge 1 -and $Entry.stream.Length -le $Maximum) 'MANAGED_FILE_SIZE_INVALID'
   $Leaves[$Key]=$Entry;return $Entry
 }
