@@ -30,7 +30,7 @@ export function validateOwnerHoldManifest(raw:Buffer,context:OwnerHoldContext):O
   if(row.schema!=='RBRIDGE_OWNER_APP_RUN_HOLD_V1'||row.mode!=='HOLD'||row.repository!==context.repository||row.authorLogin!==context.authorLogin||row.instanceId!==context.instanceId)fail('RBRIDGE_OWNER_HOLD_SCOPE_INVALID');
   if(!Array.isArray(row.apps)||row.apps.length!==3||row.apps.some(x=>typeof x!=='string'||!APP.test(x))||JSON.stringify([...row.apps].sort())!==JSON.stringify(REQUIRED_APPS))fail('RBRIDGE_OWNER_HOLD_APPS_INVALID');
   if(!Array.isArray(row.originals)||row.originals.length!==9)fail('RBRIDGE_OWNER_HOLD_ORIGINALS_INVALID');
-  const byApp:Record<string,number>={aplall:0,dart:0,editor:0},issues=new Set<number>(),ids=new Set<string>(),jobs=new Set<string>();
+  const byApp:Record<string,number>={aplall:0,dart:0,editor:0},issues=new Set<number>(),ids=new Set<string>(),jobs=new Set<string>(),requestDigests=new Set<string>(),recordDigests=new Set<string>();
   let previous=0;
   for(const item of row.originals){
     const r=object(item);fields(r,['appId','requestId','jobId','issueNumber','requestSha256','storeSha256','phase','scope']);
@@ -39,8 +39,8 @@ export function validateOwnerHoldManifest(raw:Buffer,context:OwnerHoldContext):O
        ||typeof r.requestSha256!=='string'||!SHA.test(r.requestSha256)
        ||typeof r.storeSha256!=='string'||!SHA.test(r.storeSha256)
        ||r.phase!=='WAITING'||r.scope!=='UNSCOPED'
-       ||issues.has(Number(r.issueNumber))||ids.has(r.requestId)||jobs.has(r.appId+'\0'+r.jobId))fail('RBRIDGE_OWNER_HOLD_ORIGINALS_INVALID');
-    previous=Number(r.issueNumber);issues.add(previous);ids.add(r.requestId);jobs.add(r.appId+'\0'+r.jobId);byApp[r.appId]=(byApp[r.appId]??0)+1;
+       ||issues.has(Number(r.issueNumber))||ids.has(r.requestId)||jobs.has(r.appId+'\0'+r.jobId)||requestDigests.has(r.requestSha256)||recordDigests.has(r.storeSha256))fail('RBRIDGE_OWNER_HOLD_ORIGINALS_INVALID');
+    previous=Number(r.issueNumber);issues.add(previous);ids.add(r.requestId);jobs.add(r.appId+'\0'+r.jobId);requestDigests.add(r.requestSha256);recordDigests.add(r.storeSha256);byApp[r.appId]=(byApp[r.appId]??0)+1;
   }
   if(REQUIRED_APPS.some(app=>byApp[app]!==EXPECTED_COUNTS[app]))fail('RBRIDGE_OWNER_HOLD_ORIGINALS_INVALID');
   if(raw.toString('utf8')!==JSON.stringify(canonical(parsed))+'\n')fail('RBRIDGE_OWNER_HOLD_CANONICAL_INVALID');
