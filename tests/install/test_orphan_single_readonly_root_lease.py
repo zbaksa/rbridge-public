@@ -129,6 +129,17 @@ class ProposedReadOnlyRootLeaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.mod._validate_live_lease(lease,**kwargs)
 
+    def test_red_rejected_physical_verification_must_poison_lease(self):
+        lease=self.issue_fixture()
+        with patch.object(self.mod,'_physical_revalidate',
+                          side_effect=ValueError('PHYSICAL_SOURCE_CHANGED')):
+            with self.assertRaisesRegex(ValueError,'PHYSICAL_SOURCE_CHANGED'):
+                self.mod._validate_live_lease(
+                    lease,guard='MAINTENANCE_REGISTRY',
+                    journal_name=self.orphan,phase='ORPHAN')
+        # Expected RED on parent #63: old code leaves the same signed lease live.
+        self.assertNotIn(lease,self.mod._live)
+
     def test_wrong_signed_driver_rejected_and_review_consumed(self):
         self.snapshot['driver_sha256']='f'*64
         with patch.object(self.mod,'_physical_revalidate'):
