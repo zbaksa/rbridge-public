@@ -1,4 +1,4 @@
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,describe,expect,it,vi} from 'vitest';
@@ -224,6 +224,32 @@ describe('APP_RUN occupied-writer durable admission',()=>{
     expect(controller.submit).toHaveBeenCalledOnce();
     expect((await store.get('bridge.keyb-v9-4'))?.phase).toBe('PUBLISHED');
     expect(published).toHaveBeenCalledOnce();
+  });
+
+  it('RED: existing unscoped historic WAITING cannot be published CLOSED before app owner HOLD',async()=>{
+    const store=await durable(),entry=issue('keyb-v9-5',804),published=vi.fn(async()=>{});
+    const controller={
+      submit:vi.fn(async()=>({state:'BLOCKED',reason:'application already has an active or uncertain writer'})),
+      status:vi.fn(async()=>({state:'UNCERTAIN'})),
+      result:vi.fn(async()=>success('keyb-v9-5')),
+    };
+    const github={listOpenRequests:async()=>[entry],publishResult:published};
+    await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller}).runOnce();
+    const path=join(roots.at(-1)!,'bridge.keyb-v9-5.json');
+    const scoped=JSON.parse(await readFile(path,'utf8')) as Record<string,unknown>;
+    expect(scoped.phase).toBe('WAITING');
+    expect(scoped.scopeSha256).toMatch(/^[a-f0-9]{64}$/);
+    delete scoped.scopeSha256; // model the authentic 9/9 unscoped legacy store records
+    await writeFile(path,JSON.stringify(scoped)+'\n');
+    const preimage=await readFile(path,'utf8');
+    const admissionHold=vi.fn(async()=>true);
+    clock=LATER;
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller,admissionHold}).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0});
+    expect(published).not.toHaveBeenCalled();
+    expect(controller.submit).toHaveBeenCalledOnce();
+    expect(await readFile(path,'utf8')).toBe(preimage);
+    expect((await store.get('bridge.keyb-v9-5'))?.scopeSha256).toBeUndefined();
   });
 
 });
