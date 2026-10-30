@@ -168,4 +168,62 @@ describe('APP_RUN occupied-writer durable admission',()=>{
     expect(published).not.toHaveBeenCalled();
   });
 
+  it('HOLD: fresh app request remains WAITING without any controller effect',async()=>{
+    const store=await durable(),entry=issue('keyb-v9-2',801);
+    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    const controller={
+      submit:vi.fn(async(_app:string,job:string)=>success(job)),
+      status:vi.fn(async()=>({state:'SUCCEEDED'})),
+      result:vi.fn(async(_app:string,job:string)=>success(job)),
+    };
+    const seen:unknown[]=[];
+    const admissionHold=async(value:{appId:string;issueNumber:number;requestSha256:string})=>{
+      seen.push(value);
+      return value.appId==='games2d'&&value.issueNumber===801&&/^[a-f0-9]{64}$/.test(value.requestSha256);
+    };
+    const github={listOpenRequests:async()=>[entry],publishResult:published};
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller,admissionHold}).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0,errors:0});
+    expect(seen).toHaveLength(1);
+    expect(controller.submit).not.toHaveBeenCalled();
+    expect((await store.get('bridge.keyb-v9-2'))?.phase).toBe('WAITING');
+    expect(published).not.toHaveBeenCalled();
+  });
+
+  it('HOLD: inability to verify owner policy fails closed without controller or Issue mutation',async()=>{
+    const store=await durable(),entry=issue('keyb-v9-3',802);
+    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    const controller={
+      submit:vi.fn(async(_app:string,job:string)=>success(job)),
+      status:vi.fn(async()=>({state:'SUCCEEDED'})),
+      result:vi.fn(async(_app:string,job:string)=>success(job)),
+    };
+    const admissionHold=vi.fn(async():Promise<boolean>=>{throw Error('OWNER_HOLD_PROOF_UNAVAILABLE');});
+    const github={listOpenRequests:async()=>[entry],publishResult:published};
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller,admissionHold}).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0,errors:1});
+    expect(admissionHold).toHaveBeenCalledOnce();
+    expect(controller.submit).not.toHaveBeenCalled();
+    expect((await store.get('bridge.keyb-v9-3'))?.phase).toBe('WAITING');
+    expect(published).not.toHaveBeenCalled();
+  });
+
+  it('HOLD: an explicit not-held decision preserves ordinary APP_RUN execution',async()=>{
+    const store=await durable(),entry=issue('keyb-v9-4',803);
+    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    const controller={
+      submit:vi.fn(async(_app:string,job:string)=>success(job)),
+      status:vi.fn(async()=>({state:'SUCCEEDED'})),
+      result:vi.fn(async(_app:string,job:string)=>success(job)),
+    };
+    const admissionHold=vi.fn(async():Promise<boolean>=>false);
+    const github={listOpenRequests:async()=>[entry],publishResult:published};
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller,admissionHold}).runOnce())
+      .toMatchObject({pending:0,published:1,blocked:0,errors:0});
+    expect(admissionHold).toHaveBeenCalledOnce();
+    expect(controller.submit).toHaveBeenCalledOnce();
+    expect((await store.get('bridge.keyb-v9-4'))?.phase).toBe('PUBLISHED');
+    expect(published).toHaveBeenCalledOnce();
+  });
+
 });
