@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 export type RemoteBridgeTool='probe'|'git'|'npm'|'node'|'opencode'|'verify';
 export interface RemoteBridgePayload {tool:RemoteBridgeTool;cwd:string;args:string[];timeout_ms:number;max_bytes:number;}
 export interface RemoteBridgeRequest {schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1';requestId:string;createdAt:string;expiresAt:string;appId:string;jobId:string;operation:'RUN';payload:RemoteBridgePayload;}
-export interface RemoteBridgeIssueInput {title:string;body:string;authorLogin:string;expectedAuthorLogin:string;now?:Date;}
+export interface RemoteBridgeIssueInput {title:string;body:string;authorLogin:string;expectedAuthorLogin:string;now?:Date;allowExpired?:boolean;}
 
 const REQUEST_PREFIX='[COCWIN BRIDGE REQUEST] ';
 const REQUEST_ID_RE=/^[a-z0-9][a-z0-9._:-]{0,127}$/;
@@ -38,7 +38,7 @@ export function parseRemoteBridgeRequest(input:RemoteBridgeIssueInput):RemoteBri
   const created=iso(row.createdAt,'REMOTE_BRIDGE_CREATED_AT_INVALID'),expires=iso(row.expiresAt,'REMOTE_BRIDGE_EXPIRES_AT_INVALID');
   if(expires.ms<=created.ms)fail('REMOTE_BRIDGE_TIME_ORDER_INVALID');
   if(expires.ms-created.ms>MAX_TTL_MS)fail('REMOTE_BRIDGE_TTL_INVALID');
-  const now=input.now??new Date();if(!Number.isFinite(now.getTime()))fail('REMOTE_BRIDGE_NOW_INVALID');if(expires.ms<=now.getTime())fail('REMOTE_BRIDGE_REQUEST_EXPIRED');
+  const now=input.now??new Date();if(!Number.isFinite(now.getTime()))fail('REMOTE_BRIDGE_NOW_INVALID');if(!input.allowExpired&&expires.ms<=now.getTime())fail('REMOTE_BRIDGE_REQUEST_EXPIRED');
   const rawPayload=record(row.payload,'REMOTE_BRIDGE_PAYLOAD_INVALID');exactFields(rawPayload,PAYLOAD_FIELDS,'REMOTE_BRIDGE_PAYLOAD_FIELDS_INVALID');
   if(typeof rawPayload.tool!=='string'||!TOOLS.has(rawPayload.tool as RemoteBridgeTool))fail('REMOTE_BRIDGE_TOOL_INVALID');
   const tool=rawPayload.tool as RemoteBridgeTool;
