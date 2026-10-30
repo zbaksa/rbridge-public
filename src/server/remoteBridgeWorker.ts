@@ -135,6 +135,14 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
     }
     if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){await reconcileV1(request,issue,digest,summary);return;}
     if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}
+    // V1 shares the same owner HOLD decision as V2 before any controller effect.
+    // A held V1 remains in the durable CLAIMED phase without publishing an Issue result.
+    if(options.admissionHold){
+      try{
+        const held=await options.admissionHold({appId:request.appId,requestId:request.requestId,jobId:request.jobId,requestSha256:digest,issueNumber:issue.number});
+        if(held!==false){summary.pending++;if(held!==true)summary.errors++;return;}
+      }catch{summary.pending++;summary.errors++;return;}
+    }
     await options.store.markSubmitted(request.requestId,digest);
     let status:Record<string,unknown>;
     try{status=await options.controller.submit(request.appId,request.jobId,request.payload);}catch{summary.pending++;summary.errors++;return;}
