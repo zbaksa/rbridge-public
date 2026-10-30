@@ -1,0 +1,12 @@
+@echo off
+setlocal DisableDelayedExpansion
+set "P01_MODE=APPLY"
+if "%~1"=="" goto run
+if /I "%~1"=="STATUS" (set "P01_MODE=STATUS") else if /I "%~1"=="RECONCILE" (set "P01_MODE=RECONCILE") else (goto usage)
+if not "%~2"=="" goto usage
+:run
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0upgrade-p01-pristine-native-windows.ps1" -ExpectedManifestSha256 "__MANIFEST_SHA256__" -Mode "%P01_MODE%"
+exit /b %ERRORLEVEL%
+:usage
+echo Usage: INSTALL_NATIVE.cmd [STATUS^|RECONCILE]
+exit /b 2

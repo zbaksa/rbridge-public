@@ -36,8 +36,11 @@ $Provider.Dispose()
 function New-Fixture {
  $Root=Join-Path $Sandbox ([guid]::NewGuid().ToString('N'));[void][IO.Directory]::CreateDirectory($Root)
  [void][IO.Directory]::CreateDirectory((Join-Path $Root 'events'))
+ [void][IO.Directory]::CreateDirectory((Join-Path $Root 'events\v3-results'))
  [void][IO.Directory]::CreateDirectory((Join-Path $Root 'keys'))
- Write-QA (Join-Path $Root 'rbridge-native-host.exe') 'SYNTHETIC old executable; never executable owner bytes'
+ [IO.File]::Copy($Candidate,(Join-Path $Root 'rbridge-native-host.exe'),$false)
+ $Overlay=New-Object IO.FileStream((Join-Path $Root 'rbridge-native-host.exe'),[IO.FileMode]::Append,[IO.FileAccess]::Write)
+ try {$B=$Utf8.GetBytes('SYNTHETIC predecessor PE overlay');$Overlay.Write($B,0,$B.Length)} finally {$Overlay.Dispose()}
  Write-QA (Join-Path $Root 'rbridge-native-host.config.json') '{"schema":"SYNTHETIC_P01_CONFIG","old":true}'
  Write-QA (Join-Path $Root 'com.cocwin.rbridge_chat_v1.json') '{"schema":"SYNTHETIC_P01_MANIFEST"}'
  Write-QA (Join-Path $Root 'events\v3-peer-owner.json') '{"schema":"SYNTHETIC_P01_OWNER","originalScope":true}'
@@ -81,7 +84,7 @@ try {
  try {$R=Run-P01 $C;Assert-P01 ($R.status -ceq 'BLOCKED' -and -not $R.publicationStarted) 'REPARSE_ACCEPTED'} finally {[IO.Directory]::Delete($Junction,$false)}
  $C=New-Fixture
  $Held=New-Object IO.FileStream((Join-Path $C.root 'rbridge-native-host.exe'),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::Read)
- try {Block-Unchanged $C 'ACTIVE_WRITER'} finally {$Held.Dispose()}
+ try {$R=Run-P01 $C;Assert-P01 ($R.status -ceq 'BLOCKED' -and -not $R.publicationStarted) 'ACTIVE_WRITER_ACCEPTED'} finally {$Held.Dispose()}
  $C=New-Fixture
  $Key=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($Registry,$true)
  try {$Key.SetValue('','C:\synthetic-wrong-binding.json')} finally {$Key.Dispose()}
@@ -106,6 +109,63 @@ try {
  Assert-P01 ($R.status -ceq 'COMPLETE' -and -not $R.publicationStarted -and (Snap-Fixture $C) -ceq $Before) 'COMPLETE_REPLAY_MUTATED'
  Write-QA (Join-Path $C.root 'rbridge-native-host.config.json') 'SYNTHETIC post-complete tamper'
  $R=Run-P01 $C;Assert-P01 ($R.status -ceq 'UNKNOWN') 'TAMPERED_COMPLETE_ACCEPTED'
+
+ # Real CreateProcess attempts must fail while either installed image gate is held.
+ $script:RealRename=(Get-Command Rename-Entry).ScriptBlock
+ $script:LaunchAttempts=0;$script:LaunchEscaped=$false;$script:FaultAfter=0;$script:RenameCount=0
+ function Rename-Entry($Entry,[string]$Destination) {
+  foreach($Moment in @('before','after')) {
+   if ($Moment -ceq 'after') {& $script:RealRename $Entry $Destination;$script:RenameCount++}
+   $Installed=Join-Path $script:FaultContext.root 'rbridge-native-host.exe'
+   if (Test-Path -LiteralPath $Installed) {
+    $Start=New-Object Diagnostics.ProcessStartInfo;$Start.FileName=$Installed
+    $Start.Arguments='--check-config "'+(Join-Path $script:FaultContext.root 'rbridge-native-host.config.json')+'"';$Start.UseShellExecute=$false;$Start.CreateNoWindow=$true
+    $P=New-Object Diagnostics.Process;$P.StartInfo=$Start;$Started=$false;$script:LaunchAttempts++
+    try {[void]$P.Start();$Started=$true;$script:LaunchEscaped=$true;[void]$P.WaitForExit(3000)}
+    catch [ComponentModel.Win32Exception] {
+     if ($_.Exception.NativeErrorCode -notin @(5,32)) {throw}
+    } finally {if ($Started -and -not $P.HasExited) {$P.Kill()};$P.Dispose()}
+   }
+  }
+  if ($script:FaultAfter -gt 0 -and $script:RenameCount -eq $script:FaultAfter) {throw 'SYNTHETIC_CRASH_AFTER_HELD_RENAME'}
+ }
+ $script:InstrumentedRename=(Get-Command Rename-Entry).ScriptBlock
+ try {
+  for($Crash=1;$Crash -le 6;$Crash++) {
+   $C=New-Fixture;$script:FaultContext=$C;$script:FaultAfter=$Crash;$script:RenameCount=0
+   $R=Run-P01 $C
+   Assert-P01 ($R.status -ceq 'UNKNOWN' -and $R.publicationStarted) ('CRASH_NOT_RETAINED_'+$Crash)
+   $Before=Snap-Fixture $C;$R=Run-P01 $C
+   Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and (Snap-Fixture $C) -ceq $Before) ('PARTIAL_AUTOMATICALLY_RETRIED_'+$Crash)
+   Set-Item -Path Function:\Rename-Entry -Value $script:RealRename
+   $R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
+   Assert-P01 ($R.status -ceq 'COMPLETE') ('FORWARD_RECONCILIATION_FAILED_'+$Crash+' '+($R|ConvertTo-Json -Compress))
+   Assert-P01 ((Get-FileHash -LiteralPath (Join-Path $C.root 'rbridge-native-host.config.json')).Hash.ToLowerInvariant() -ceq (P01-HashBytes $C.configBytes)) 'RECONCILED_CONFIG_WRONG'
+   Assert-P01 ((Get-FileHash -LiteralPath (Join-Path $C.root 'events\v3-peer-owner.json')).Hash.ToLowerInvariant() -ceq (P01-HashBytes $C.ownerBytes)) 'RECONCILED_OWNER_WRONG'
+   Set-Item -Path Function:\Rename-Entry -Value $script:InstrumentedRename
+  }
+  $C=New-Fixture;$script:FaultContext=$C;$script:FaultAfter=1;$script:RenameCount=0;$R=Run-P01 $C
+  Set-Item -Path Function:\Rename-Entry -Value $script:RealRename
+  Write-QA (Join-Path $C.root 'rbridge-native-host.exe') 'SYNTHETIC foreign occupied publication slot'
+  $Before=Snap-Fixture $C;$R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
+  Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and (Snap-Fixture $C) -ceq $Before) 'FOREIGN_SLOT_OVERWRITTEN'
+  Set-Item -Path Function:\Rename-Entry -Value $script:InstrumentedRename
+  $C=New-Fixture;$script:FaultContext=$C;$script:FaultAfter=2;$script:RenameCount=0;$R=Run-P01 $C
+  Set-Item -Path Function:\Rename-Entry -Value $script:RealRename
+  Write-QA (Join-Path $C.root 'events\events.ndjson') ''
+  $Before=Snap-Fixture $C;$R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
+  Assert-P01 ($R.status -cin @('UNKNOWN','BLOCKED') -and -not $R.publicationStarted -and (Snap-Fixture $C) -ceq $Before) 'RECONCILIATION_ADOPTED_HISTORY'
+ } finally {Set-Item -Path Function:\Rename-Entry -Value $script:RealRename}
+ Assert-P01 ($script:LaunchAttempts -gt 0 -and -not $script:LaunchEscaped) 'FRESH_CREATEPROCESS_NOT_EXCLUDED'
+ $C=New-Fixture
+ $Path=Join-Path $C.root 'rbridge-native-host.config.json';$SavedAcl=Get-Acl -LiteralPath $Path;$BadAcl=Get-Acl -LiteralPath $Path
+ $Foreign=New-Object Security.Principal.SecurityIdentifier('S-1-5-11')
+ $Rule=New-Object Security.AccessControl.FileSystemAccessRule($Foreign,[Security.AccessControl.FileSystemRights]::Write,[Security.AccessControl.AccessControlType]::Allow)
+ $BadAcl.AddAccessRule($Rule);Set-Acl -LiteralPath $Path -AclObject $BadAcl
+ try {Block-Unchanged $C 'FOREIGN_WRITABLE_ACL'} finally {Set-Acl -LiteralPath $Path -AclObject $SavedAcl}
+ $C=New-Fixture;$R=Invoke-P01NativePristineTransaction -Context $C -StatusOnly
+ Assert-P01 ($R.status -ceq 'NONE' -and -not $R.publicationStarted -and -not (Test-Path -LiteralPath (Join-Path $C.root '.p01-pristine-upgrade'))) 'NONE_STATUS_CREATED_TRANSACTION'
+
  [pscustomobject]@{schema='COCWIN_P01_SYNTHETIC_WINDOWS_QA_V1';status='PASS';passed=$Passed;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0}
 } finally {
  [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($Registry,$false)
