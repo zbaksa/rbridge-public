@@ -34,6 +34,14 @@ Do not put private hostnames, credentials, private repository names, tokens or i
 
 ---
 
+## 2026-10-30 — RB-002 durable cutover false-PASS findings (RED; not fixed)
+
+Issue [#91](https://github.com/zbaksa/rbridge-public/issues/91) documents four source-fixture counterexamples in the release-readiness audit. A matching closed GitHub Issue is not evidence of settlement for an outstanding `CLAIMED` or `WAITING` reservation; a `PUBLISHED` record without its result and an unexpired OPEN CHUNK transfer also require independent release-gate treatment.
+
+Two isolated test-only branches reproduced the defects without modifying runtime source: [CI #41021102713](https://github.com/zbaksa/rbridge-public/actions/runs/41021102713) and [CI #41023440233](https://github.com/zbaksa/rbridge-public/actions/runs/41023440233), each with 297 existing tests passing and two newly added negative tests failing as expected. This establishes negative test evidence, **not** a source fix, transfer loss or qualified production readiness.
+
+**Source correction:** BLOCKED / not published. **Production activation:** NOT RUN. Existing historical durable evidence and protected release state are not to be altered to make a readiness gate pass. Full risk and acceptance criteria are documented under RB-002 in `docs/KNOWN_ISSUES.md`.
+
 ## 2026-10-04 — Shared intent argument guard
 
 P2 preparation reproduced a shared-contract normalization defect: an own JSON `__proto__` argument could become an inherited handler value while its intent digest collapsed to the empty-argument digest. The MCP adapter already rejected this input; the shared P0 parser now rejects the same prototype-sensitive keys recursively for FILE, PROCESS and CHUNK arguments before either intent or scope hashing. String values and ordinary semantic digests remain unchanged.
