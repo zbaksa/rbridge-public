@@ -75,6 +75,8 @@ describe('owner-controlled exact-app HOLD manifest, source-only',()=>{
       (x:OwnerHoldManifest)=>{x.originals[0]!.phase='TERMINAL' as 'WAITING';},
       (x:OwnerHoldManifest)=>{x.originals[0]!.scope='SCOPED' as 'UNSCOPED';},
       (x:OwnerHoldManifest)=>{x.originals[0]!.requestSha256='0';},
+      (x:OwnerHoldManifest)=>{x.originals[1]!.requestSha256=x.originals[0]!.requestSha256;},
+      (x:OwnerHoldManifest)=>{x.originals[2]!.storeSha256=x.originals[0]!.storeSha256;},
     ]){
       const row=structuredClone(fixture());
       mutate(row);expect(()=>accept(row)).toThrow('RBRIDGE_OWNER_HOLD_ORIGINALS_INVALID');
