@@ -69,6 +69,32 @@ function Snap-Fixture($C) {
 }
 function Run-P01($C) {return Invoke-P01NativePristineTransaction -Context $C}
 function Block-Unchanged($C,[string]$Name) {$Before=Snap-Fixture $C;$R=Run-P01 $C;Assert-P01 ($R.status -ceq 'BLOCKED' -and -not $R.publicationStarted) ($Name+'_ACCEPTED');Assert-P01 ((Snap-Fixture $C) -ceq $Before) ($Name+'_MUTATED')}
+
+function GateAcl-QA([string]$FinalAcl) {
+ $Raw=New-Object Security.AccessControl.RawSecurityDescriptor($FinalAcl)
+ $Everyone=New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
+ $Deny=New-Object Security.AccessControl.CommonAce([Security.AccessControl.AceFlags]::None,[Security.AccessControl.AceQualifier]::AccessDenied,32,$Everyone,$false,$null)
+ $Raw.DiscretionaryAcl.InsertAce(0,$Deny)
+ return Acl-State ($Raw.GetSddlForm([Security.AccessControl.AccessControlSections]::All))
+}
+function Launch-QA([string]$Path,[string]$Config,[bool]$Blocked) {
+ $Exists=Test-Path -LiteralPath $Path
+ $Start=New-Object Diagnostics.ProcessStartInfo;$Start.FileName=$Path;$Start.Arguments='--check-config "'+$Config+'"';$Start.UseShellExecute=$false;$Start.CreateNoWindow=$true
+ $P=New-Object Diagnostics.Process;$P.StartInfo=$Start;$Started=$false;$Code=0
+ try {[void]$P.Start();$Started=$true;[void]$P.WaitForExit(3000)}
+ catch [ComponentModel.Win32Exception] {$Code=$_.Exception.NativeErrorCode}
+ finally {if ($Started -and -not $P.HasExited) {$P.Kill()};$P.Dispose()}
+ if ($Blocked) {Assert-P01 (-not $Started -and (($Exists -and $Code -eq 5) -or (-not $Exists -and $Code -in @(2,3)))) 'CRASH_RELEASED_IMAGE_EXECUTABLE'}
+ else {Assert-P01 $Started 'RESTORED_IMAGE_NOT_EXECUTABLE'}
+}
+function Assert-CrashGate($C,[string]$FinalAcl) {
+ $Tx=Join-Path $C.root '.p01-pristine-upgrade'
+ $CandidatePath=if (Test-Path -LiteralPath (Join-Path $Tx 'candidate.exe')) {Join-Path $Tx 'candidate.exe'} else {Join-Path $C.root 'rbridge-native-host.exe'}
+ Assert-P01 ((Acl-State (Get-Acl -LiteralPath $CandidatePath).Sddl) -ceq (GateAcl-QA $FinalAcl)) 'DURABLE_EXECUTE_GATE_CHANGED'
+ Launch-QA (Join-Path $C.root 'rbridge-native-host.exe') (Join-Path $C.root 'rbridge-native-host.config.json') $true
+ Launch-QA $CandidatePath (Join-Path $C.root 'rbridge-native-host.config.json') $true
+}
+
 try {
  # Every predecessor is independently required, including the qualified c4d executable.
  foreach($Name in @('rbridge-native-host.exe','rbridge-native-host.config.json','com.cocwin.rbridge_chat_v1.json','events\v3-peer-owner.json')) {
@@ -133,14 +159,17 @@ try {
  $script:InstrumentedRename=(Get-Command Rename-Entry).ScriptBlock
  try {
   for($Crash=1;$Crash -le 6;$Crash++) {
-   $C=New-Fixture;$script:FaultContext=$C;$script:FaultAfter=$Crash;$script:RenameCount=0
+   $C=New-Fixture;$FinalAcl=Acl-State (Get-Acl -LiteralPath (Join-Path $C.root 'rbridge-native-host.exe')).Sddl;$script:FaultContext=$C;$script:FaultAfter=$Crash;$script:RenameCount=0
    $R=Run-P01 $C
    Assert-P01 ($R.status -ceq 'UNKNOWN' -and $R.publicationStarted) ('CRASH_NOT_RETAINED_'+$Crash)
+   Assert-CrashGate $C $FinalAcl
    $Before=Snap-Fixture $C;$R=Run-P01 $C
    Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and (Snap-Fixture $C) -ceq $Before) ('PARTIAL_AUTOMATICALLY_RETRIED_'+$Crash)
    Set-Item -Path Function:\Rename-Entry -Value $script:RealRename
    $R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
    Assert-P01 ($R.status -ceq 'COMPLETE') ('FORWARD_RECONCILIATION_FAILED_'+$Crash+' '+($R|ConvertTo-Json -Compress))
+   Assert-P01 ((Acl-State (Get-Acl -LiteralPath (Join-Path $C.root 'rbridge-native-host.exe')).Sddl) -ceq $FinalAcl) 'RECONCILED_FINAL_ACL_CHANGED'
+   Launch-QA (Join-Path $C.root 'rbridge-native-host.exe') (Join-Path $C.root 'rbridge-native-host.config.json') $false
    Assert-P01 ((Get-FileHash -LiteralPath (Join-Path $C.root 'rbridge-native-host.config.json')).Hash.ToLowerInvariant() -ceq (P01-HashBytes $C.configBytes)) 'RECONCILED_CONFIG_WRONG'
    Assert-P01 ((Get-FileHash -LiteralPath (Join-Path $C.root 'events\v3-peer-owner.json')).Hash.ToLowerInvariant() -ceq (P01-HashBytes $C.ownerBytes)) 'RECONCILED_OWNER_WRONG'
    Set-Item -Path Function:\Rename-Entry -Value $script:InstrumentedRename
@@ -157,6 +186,36 @@ try {
   $Before=Snap-Fixture $C;$R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
   Assert-P01 ($R.status -cin @('UNKNOWN','BLOCKED') -and -not $R.publicationStarted -and (Snap-Fixture $C) -ceq $Before) 'RECONCILIATION_ADOPTED_HISTORY'
  } finally {Set-Item -Path Function:\Rename-Entry -Value $script:RealRename}
+
+ # Crash after durable COMPLETE but before execute-gate restoration. All transaction
+ # handles are released by the normal finally path before CreateProcess is attempted.
+ $script:RealNewLeaf=(Get-Command P01-NewLeaf).ScriptBlock
+ function P01-NewLeaf([string]$Path,[byte[]]$Bytes,[string]$AclPath='',[bool]$Delete=$false,[bool]$Exclusive=$false) {
+  $E=& $script:RealNewLeaf $Path $Bytes $AclPath $Delete $Exclusive
+  if ([IO.Path]::GetFileName($Path) -ceq 'COMPLETE.json') {throw 'SYNTHETIC_CRASH_AFTER_DURABLE_COMPLETE'}
+  return $E
+ }
+ try {
+  $C=New-Fixture;$FinalAcl=Acl-State (Get-Acl -LiteralPath (Join-Path $C.root 'rbridge-native-host.exe')).Sddl
+  $R=Run-P01 $C
+  Assert-P01 ($R.status -ceq 'UNKNOWN' -and (Test-Path -LiteralPath (Join-Path $C.root '.p01-pristine-upgrade\COMPLETE.json'))) 'COMPLETE_GATE_CRASH_NOT_RETAINED'
+ } finally {Set-Item -Path Function:\P01-NewLeaf -Value $script:RealNewLeaf}
+ Assert-CrashGate $C $FinalAcl
+ $Before=Snap-Fixture $C;$R=Run-P01 $C
+ Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and (Snap-Fixture $C) -ceq $Before) 'GATED_COMPLETE_REPLAY_READY'
+ $R=Invoke-P01NativePristineTransaction -Context $C -StatusOnly
+ Assert-P01 ($R.status -ceq 'UNKNOWN') 'GATED_COMPLETE_STATUS_READY'
+ $R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
+ Assert-P01 ($R.status -ceq 'COMPLETE' -and (Acl-State (Get-Acl -LiteralPath (Join-Path $C.root 'rbridge-native-host.exe')).Sddl) -ceq $FinalAcl) 'GATED_COMPLETE_RECONCILIATION_FAILED'
+ Launch-QA (Join-Path $C.root 'rbridge-native-host.exe') (Join-Path $C.root 'rbridge-native-host.config.json') $false
+ # An extra foreign execute deny is not the known gate and must never be reset.
+ $Path=Join-Path $C.root 'rbridge-native-host.exe';$BadAcl=Get-Acl -LiteralPath $Path
+ $Foreign=New-Object Security.Principal.SecurityIdentifier('S-1-5-11')
+ $BadAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($Foreign,[Security.AccessControl.FileSystemRights]::ExecuteFile,[Security.AccessControl.AccessControlType]::Deny)))
+ Set-Acl -LiteralPath $Path -AclObject $BadAcl
+ $Before=Snap-Fixture $C;$R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
+ Assert-P01 ($R.status -ceq 'UNKNOWN' -and (Snap-Fixture $C) -ceq $Before) 'FOREIGN_COMPLETE_ACL_RESET'
+
  Assert-P01 ($script:LaunchAttempts -gt 0 -and -not $script:LaunchEscaped) 'FRESH_CREATEPROCESS_NOT_EXCLUDED'
  $C=New-Fixture
  $Path=Join-Path $C.root 'rbridge-native-host.config.json';$SavedAcl=Get-Acl -LiteralPath $Path;$BadAcl=Get-Acl -LiteralPath $Path
