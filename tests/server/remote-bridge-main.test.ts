@@ -1,7 +1,16 @@
+import {readFileSync} from 'node:fs';
 import {describe,expect,it,vi} from 'vitest';
 import {resolveRemoteBridgeGitHubConfig,resolveRemoteBridgeInstanceId,resolveRemoteBridgeRuntimeConfig,runRemoteBridgeLoop} from '../../src/server/remoteBridgeMain.js';
 
 describe('remote bridge main loop',()=>{
+ it('requires a protected pinned owner HOLD at runtime bootstrap and wires it to V1/V2 worker',()=>{
+   const main=readFileSync(new URL('../../src/server/remoteBridgeMain.ts',import.meta.url),'utf8');
+   expect(main).toContain("createProtectedOwnerHold({expectedSha256:process.env.RBRIDGE_OWNER_HOLD_SHA256");
+   expect(main).toContain('instanceId,admissionHold});');
+   expect(main.indexOf('const admissionHold=createProtectedOwnerHold('))
+     .toBeLessThan(main.indexOf('createRemoteBridgeWorker({'));
+ });
+
  it('requires an explicit matching non-root runtime identity',()=>{const env={RBRIDGE_RUNTIME_USER:'bridge-runtime'};expect(resolveRemoteBridgeRuntimeConfig(env,{username:'bridge-runtime',homedir:'/srv/bridge-runtime',uid:1200})).toEqual({runtimeUser:'bridge-runtime',stateRoot:'/srv/bridge-runtime/.local/state/rbridge'});expect(()=>resolveRemoteBridgeRuntimeConfig({}, {username:'bridge-runtime',homedir:'/srv/bridge-runtime',uid:1200})).toThrow('REMOTE_BRIDGE_RUNTIME_USER_CONFIG_INVALID');expect(()=>resolveRemoteBridgeRuntimeConfig(env,{username:'other',homedir:'/srv/other',uid:1201})).toThrow('REMOTE_BRIDGE_RUNTIME_USER_REQUIRED');expect(()=>resolveRemoteBridgeRuntimeConfig(env,{username:'bridge-runtime',homedir:'/srv/bridge-runtime',uid:0})).toThrow('REMOTE_BRIDGE_RUNTIME_USER_REQUIRED');expect(()=>resolveRemoteBridgeRuntimeConfig(env,{username:'bridge-runtime',homedir:'relative',uid:1200})).toThrow('REMOTE_BRIDGE_HOME_INVALID');});
  it('requires explicit valid GitHub repository and author configuration',()=>{expect(resolveRemoteBridgeGitHubConfig({RBRIDGE_GITHUB_REPOSITORY:'example/rbridge-control',RBRIDGE_GITHUB_AUTHOR:'bridge-owner'})).toEqual({repository:'example/rbridge-control',authorLogin:'bridge-owner'});expect(()=>resolveRemoteBridgeGitHubConfig({})).toThrow('REMOTE_BRIDGE_GITHUB_REPOSITORY_CONFIG_INVALID');expect(()=>resolveRemoteBridgeGitHubConfig({RBRIDGE_GITHUB_REPOSITORY:'bad repo',RBRIDGE_GITHUB_AUTHOR:'bridge-owner'})).toThrow('REMOTE_BRIDGE_GITHUB_REPOSITORY_CONFIG_INVALID');expect(()=>resolveRemoteBridgeGitHubConfig({RBRIDGE_GITHUB_REPOSITORY:'example/rbridge-control',RBRIDGE_GITHUB_AUTHOR:'bad author!'})).toThrow('REMOTE_BRIDGE_GITHUB_AUTHOR_CONFIG_INVALID');});
  it('binds durable scope to an explicit or machine-derived instance identity',()=>{
