@@ -34,7 +34,7 @@ export function validateOwnerHoldManifest(raw:Buffer,context:OwnerHoldContext):O
   let previous=0;
   for(const item of row.originals){
     const r=object(item);fields(r,['appId','requestId','jobId','issueNumber','requestSha256','storeSha256','phase','scope']);
-    if(typeof r.appId!=='string'||!(r.appId in byApp)||typeof r.requestId!=='string'||!REQUEST.test(r.requestId)||typeof r.jobId!=='string'||!JOB.test(r.jobId)
+    if(typeof r.appId!=='string'||!Object.hasOwn(byApp,r.appId)||typeof r.requestId!=='string'||!REQUEST.test(r.requestId)||typeof r.jobId!=='string'||!JOB.test(r.jobId)
        ||!Number.isSafeInteger(r.issueNumber)||Number(r.issueNumber)<=previous
        ||typeof r.requestSha256!=='string'||!SHA.test(r.requestSha256)
        ||typeof r.storeSha256!=='string'||!SHA.test(r.storeSha256)
