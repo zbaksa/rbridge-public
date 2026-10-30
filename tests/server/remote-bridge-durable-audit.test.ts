@@ -57,6 +57,21 @@ describe('V1 durable-state cutover audit',()=>{
     expect(out).toMatchObject({cutoverGate:'PASS',unresolvedRecords:2,unresolvedClosedTrusted:2});
   });
 
+  it.each(['CLAIMED','WAITING'] as const)(
+    'does not accept a closed trusted %s durable phase as cutover-safe',async phase=>{
+      const dir=await root();
+      await durable(dir,{requestId:'req-closed-phase',issueNumber:43,phase,scope:true});
+      const out=await auditRemoteBridgeDurableState({
+        stateRoot:dir,expectedAuthor:'bridge-owner',
+        issueLookup:lookup({43:{state:'closed',title:'[COCWIN BRIDGE REQUEST] req-closed-phase'}}),
+      });
+      expect(out).toMatchObject({
+        auditStatus:'PASS',cutoverGate:'BLOCKED',unresolvedRecords:1,
+        unresolvedOpenTrusted:0,unresolvedClosedTrusted:1,
+      });
+    }
+  );
+
   it('treats durable WAITING as unresolved and blocks cutover while its trusted issue is open',async()=>{
     const dir=await root();
     await durable(dir,{requestId:'req-15',issueNumber:15,phase:'WAITING',scope:true});
