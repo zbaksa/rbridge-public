@@ -125,4 +125,48 @@ describe('APP_RUN occupied-writer durable admission',()=>{
     expect((await store.get('bridge.keyb-v9-1'))?.phase).toBe('WAITING');
     expect(controller.submit).toHaveBeenCalledOnce();
   });
+  it('RED: a verified app-scoped owner HOLD must prevent stale WAITING dispatch after the original writer clears',async()=>{
+    const store=await durable(),old=issue(),originalJob='keyb-v9-1';
+    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    let writerBusy=true;
+    const controller={
+      submit:vi.fn(async(_app:string,job:string)=>writerBusy
+        ?{state:'BLOCKED',reason:'application already has an active or uncertain writer'}
+        :{state:'RUNNING',job}),
+      status:vi.fn(async()=>({state:'RUNNING'})),
+      result:vi.fn(async()=>success(originalJob)),
+    };
+    const github={listOpenRequests:async()=>[old],publishResult:published};
+    // Baseline: genuine durable WAITING was accepted while the existing writer was uncertain.
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller}).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0});
+    const before=await store.get('bridge.keyb-v9-1');
+    expect(before).toMatchObject({phase:'WAITING',issueNumber:800,jobId:originalJob});
+    expect(controller.submit).toHaveBeenCalledOnce();
+
+    // Source-level proposed input: a separately qualified, exact-identity,
+    // application-scoped owner policy must hold the original job BEFORE submit.
+    // No real owner credentials, ROOT operation or host state are involved.
+    const holdObserved:unknown[]=[];
+    const admissionHold=async(value:{
+      appId:string;requestId:string;jobId:string;requestSha256:string;issueNumber:number
+    }):Promise<boolean>=>{
+      holdObserved.push(value);
+      return value.appId==='games2d'
+        &&value.requestId==='bridge.keyb-v9-1'
+        &&value.jobId===originalJob&&value.issueNumber===800
+        &&value.requestSha256===before?.requestSha256;
+    };
+    writerBusy=false;
+    clock=LATER; // Original intake TTL has now expired, but the durable claim remains.
+    const withHold={...TRANSPORT,now,store,github,controller,admissionHold}
+      as unknown as Parameters<typeof createRemoteBridgeWorker>[0];
+    expect(await createRemoteBridgeWorker(withHold).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0});
+    expect(holdObserved).toHaveLength(1);
+    expect(controller.submit).toHaveBeenCalledOnce();
+    expect(await store.get('bridge.keyb-v9-1')).toEqual(before);
+    expect(published).not.toHaveBeenCalled();
+  });
+
 });
