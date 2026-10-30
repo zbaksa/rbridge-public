@@ -21,6 +21,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify original P01 pristine Native transaction (synthetic Windows)
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -NonInteractive -File scripts/test-p01-pristine-native-windows.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'P01_PRISTINE_NATIVE_QA_FAILED' }
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.3'
