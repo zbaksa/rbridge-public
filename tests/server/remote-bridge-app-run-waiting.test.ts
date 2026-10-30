@@ -252,4 +252,31 @@ describe('APP_RUN occupied-writer durable admission',()=>{
     expect((await store.get('bridge.keyb-v9-5'))?.scopeSha256).toBeUndefined();
   });
 
+  it('RED: owner HOLD must intercept legacy V1 APP_RUN before its controller submission',async()=>{
+    const store=await durable(),requestId='bridge.legacy-v1-1';
+    const old={
+      number:805,title:'[COCWIN BRIDGE REQUEST] '+requestId,
+      authorLogin:'bridge-owner',url:'https://github.com/example/rbridge-control/issues/805',
+      body:JSON.stringify({
+        schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1',requestId,
+        createdAt:'2026-10-26T10:00:00.000Z',expiresAt:'2026-10-26T10:10:00.000Z',
+        appId:'editor',jobId:'legacy-v1-1',operation:'RUN',
+        payload:{tool:'probe',cwd:'/home/editor/backend',args:[],timeout_ms:30000,max_bytes:65536},
+      }),
+    };
+    const published=vi.fn(async()=>{}),held=vi.fn(async()=>true);
+    const controller={
+      submit:vi.fn(async()=>({state:'SUCCEEDED'})),
+      status:vi.fn(async()=>({state:'SUCCEEDED'})),
+      result:vi.fn(async()=>success('legacy-v1-1')),
+    };
+    const github={listOpenRequests:async()=>[old],publishResult:published};
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller,admissionHold:held}).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0,errors:0});
+    expect(held).toHaveBeenCalledOnce();
+    expect(controller.submit).not.toHaveBeenCalled();
+    expect(published).not.toHaveBeenCalled();
+    expect((await store.get(requestId))?.phase).toBe('CLAIMED');
+  });
+
 });
