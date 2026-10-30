@@ -117,6 +117,66 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Build original P01 owner kit from exact Windows checkout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import {createHash} from 'node:crypto';
+          import {mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
+          import {join,resolve} from 'node:path';
+          import {spawnSync} from 'node:child_process';
+          const need=(ok,code)=>{if(!ok)throw Error(code);};
+          const git=args=>{
+            const result=spawnSync('git',args,{maxBuffer:1048576});
+            need(!result.error&&result.status===0,'P01_CI_GIT_CHECK_FAILED');
+            return result.stdout;
+          };
+          const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
+          const commit=git(['rev-parse','HEAD']).toString('utf8').trim();
+          const tree=git(['rev-parse','HEAD^{tree}']).toString('utf8').trim();
+          need(/^[a-f0-9]{40}$/.test(commit)&&commit===process.env.GITHUB_SHA,'P01_CI_CHECKOUT_MISMATCH');
+          need(/^[a-f0-9]{40}$/.test(tree),'P01_CI_TREE_INVALID');
+          need(git(['status','--porcelain','--untracked-files=all']).length===0,'P01_CI_SOURCE_DIRTY');
+          const canonicalCommit=git(['cat-file','commit',commit]);
+          // Read Windows-native environment paths inside Node; no MSYS path arguments.
+          need(process.env.RUNNER_TEMP&&process.env.GITHUB_WORKSPACE,'P01_CI_PATHS_REQUIRED');
+          need(resolve(process.cwd())===resolve(process.env.GITHUB_WORKSPACE),'P01_CI_WORKSPACE_MISMATCH');
+          const proofRoot=mkdtempSync(join(resolve(process.env.RUNNER_TEMP),'p01-owner-proof-'));
+          const sourceProofPath=join(proofRoot,'source-proof.json');
+          const nativeProofPath=join(proofRoot,'native-proof.json');
+          const nativeExecutable=resolve('dist-native-host/rbridge-native-host.exe');
+          const nativeMetadata=resolve('dist-native-host/rbridge-native-host.metadata.json');
+          const executableBytes=readFileSync(nativeExecutable);
+          const metadataBytes=readFileSync(nativeMetadata);
+          writeFileSync(sourceProofPath,JSON.stringify({
+            schema:'COCWIN_P01_CANONICAL_SOURCE_PROOF_V1',
+            appCommit:commit,canonicalCommit:commit,tree,
+            canonicalCommitBase64:canonicalCommit.toString('base64'),
+          })+'\n',{flag:'wx'});
+          // The checkout binds these actual SEA bytes to source; metadata has no source fields.
+          writeFileSync(nativeProofPath,JSON.stringify({
+            schema:'COCWIN_P01_NATIVE_ARTIFACT_PROOF_V1',
+            sourceCommit:commit,sourceTree:tree,
+            bytes:executableBytes.length,sha256:sha256(executableBytes),
+            metadataSha256:sha256(metadataBytes),
+          })+'\n',{flag:'wx'});
+          const build=spawnSync(process.execPath,[
+            'scripts/p01-owner-v3-kit.mjs',
+            '--source-proof',sourceProofPath,'--native-proof',nativeProofPath,
+            '--native-executable',nativeExecutable,'--native-metadata',nativeMetadata,
+          ],{stdio:'inherit'});
+          need(!build.error&&build.status===0,'P01_CI_OWNER_KIT_BUILD_FAILED');
+          NODE
+
+      - name: Upload original P01 pristine owner kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: cocwin-p01-pristine-owner-${{ github.sha }}
+          path: dist-p01-owner-v3-kit/
+          if-no-files-found: error
+          retention-days: 7
+
   publish-qualified-windows-package:
     needs: windows-native-host
     if: github.event_name == 'push' && github.repository == 'zbaksa/rbridge-public' && github.ref == 'refs/heads/topplan/cocwin092-windows-owner-setup-r1'

@@ -25,6 +25,8 @@ export interface QualifiedV3WorkerOptions{
   bootstrap:ExtensionBootstrapConfigV1;scope:V3Scope;peer:VerifiedPeerV3;initialHistory:readonly RbridgeChatEventV1[];
   /** Caller supplies an independently qualified representation, never a content-message claim. */
   siteReader:SiteMarkdownReaderV3;captureTimeoutMs?:number;capturePollMs?:number;
+  /** Rejection-only trusted provisioner guard, run after initialization and immediately before Native connection. */
+  beforeNativeConnect?:()=>Promise<void>;
 }
 export interface WorkerCaptureStatusV3{
   requestDigest:string;state:'WAITING'|'CAPTURED'|'TERMINAL'|'TIMED_OUT'|'PEER_CHANGED'|'BLOCKED';reason?:string;
@@ -183,6 +185,7 @@ export async function startQualifiedExtensionServiceWorkerV3(api:QualifiedV3Work
     },
     onDisconnected:close,onProtocolError:close,
   });
+  if(options.beforeNativeConnect)await options.beforeNativeConnect();
   link.connect();
   return {link,get ready(){return ready();},get lastCapture(){return lastCapture?structuredClone(lastCapture):null;},get stopped(){return stops.stopped;},requestScopeStop:input=>stops.requestStop(input)};
 }

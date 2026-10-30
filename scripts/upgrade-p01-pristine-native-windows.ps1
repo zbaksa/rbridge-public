@@ -73,7 +73,7 @@ function Close-Entry($Entry) {
 function Open-Leaf([string]$Path,[long]$Maximum,[bool]$Delete=$false,[bool]$Exclusive=$false) {
   $Full=Local-Path $Path;$Key=$Full.ToUpperInvariant();Pin-Parents $Full
   if ($Leaves.ContainsKey($Key) -and -not $Leaves[$Key].closed) {Need (-not $Delete -or $Leaves[$Key].deleteAccess) 'FILE_ACCESS_MISMATCH';Need (-not $Exclusive -or $Leaves[$Key].exclusive) 'EXCLUSIVE_IMAGE_GATE_REQUIRED';Verify-Entry $Leaves[$Key];return $Leaves[$Key]}
-  $Guid=Volume-Path $Full;$Access=if ($Exclusive) {[uint32]3221291008} elseif ($Delete) {[uint32]2147549184} else {[uint32]2147483648}
+  $Guid=Volume-Path $Full;$Access=if ($Exclusive) {[uint32]3221553152} elseif ($Delete) {[uint32]2147549184} else {[uint32]2147483648}
   $Share=if ($Exclusive) {[uint32]0} else {[uint32]1};$Handle=$Native::CreateFileW($Guid,$Access,$Share,[IntPtr]::Zero,[uint32]3,[uint32]35651584,[IntPtr]::Zero)
   Need (-not $Handle.IsInvalid) 'MANAGED_FILE_OPEN_FAILED'
   $Info=Handle-Info $Handle;$Entry=[pscustomobject]@{full=$Full;guid=$Guid;handle=$Handle;stream=$null;id=$Info.id;directory=$false;deleteAccess=($Delete -or $Exclusive);exclusive=$Exclusive;closed=$false}
@@ -176,6 +176,35 @@ function P01-NewLeaf([string]$Path,[byte[]]$Bytes,[string]$AclPath='',[bool]$Del
  $Entry=Open-Leaf $Path ([Math]::Max(1,$Bytes.Length)) $Delete $Exclusive
  Need ($Entry.id -ceq $Id -and (Entry-Hash $Entry) -ceq (P01-HashBytes $Bytes)) 'CREATED_OBJECT_CHANGED'
  [void](P01-PrivateAcl $Path);return $Entry
+}
+function P01-ExecuteGateAcl([string]$FinalAcl) {
+ $Raw=New-Object Security.AccessControl.RawSecurityDescriptor($FinalAcl)
+ Need ($null -ne $Raw.DiscretionaryAcl) 'NULL_DACL_REJECTED'
+ $Everyone=New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
+ $Deny=New-Object Security.AccessControl.CommonAce([Security.AccessControl.AceFlags]::None,[Security.AccessControl.AceQualifier]::AccessDenied,32,$Everyone,$false,$null)
+ $Raw.DiscretionaryAcl.InsertAce(0,$Deny)
+ return Acl-State ($Raw.GetSddlForm([Security.AccessControl.AccessControlSections]::All))
+}
+function P01-ImageAcl($Entry) {
+ Verify-Entry $Entry;Need $Entry.exclusive 'EXCLUSIVE_IMAGE_GATE_REQUIRED'
+ $Acl=Acl-State ($Entry.stream.GetAccessControl().Sddl);Verify-Entry $Entry;return $Acl
+}
+function P01-SetImageAcl($Entry,[string]$Expected,[string]$Target) {
+ Need ((P01-ImageAcl $Entry) -ceq $Expected) 'EXECUTE_GATE_ACL_CHANGED'
+ $Access=New-Object Security.AccessControl.FileSecurity
+ # Change only the access DACL; owner/group remain pinned and are read back.
+ $Access.SetSecurityDescriptorSddlForm($Target,[Security.AccessControl.AccessControlSections]::Access)
+ $Entry.stream.SetAccessControl($Access);$Entry.stream.Flush($true)
+ Need ((P01-ImageAcl $Entry) -ceq $Target) 'EXECUTE_GATE_ACL_READBACK_FAILED'
+}
+function P01-SlotAcls($Slots,$OldAcl,$Gate,[bool]$Complete) {
+ foreach($Kind in @('exe','config','owner')) {
+  Need ((P01-PrivateAcl $Slots.old[$Kind].full) -ceq $OldAcl[$Kind]) 'BACKUP_ACL_CHANGED'
+  if ($Kind -cne 'exe') {Need ((P01-PrivateAcl $Slots.new[$Kind].full) -ceq $OldAcl[$Kind]) 'TARGET_ACL_CHANGED'}
+ }
+ Need ($Slots.new['exe'].id -ceq $Gate.identity) 'EXECUTE_GATE_IDENTITY_CHANGED'
+ $Acl=P01-ImageAcl $Slots.new['exe']
+ Need ($Acl -ceq $Gate.gatedAcl -or ($Complete -and $Acl -ceq $Gate.finalAcl)) 'EXECUTE_GATE_ACL_CHANGED'
 }
 function P01-Registration($C) {
  $Rows=@()
@@ -293,7 +322,7 @@ function P01-Journal([string]$Stage,[string]$Binding,[int]$Prefix,[bool]$Complet
 function Invoke-P01NativePristineTransaction {
  [CmdletBinding()]param([Parameter(Mandatory=$true)]$Context,[switch]$Reconcile,[switch]$StatusOnly)
  $Directories=@{};$Leaves=@{};$AllEntries=New-Object Collections.ArrayList
- $Utf8=New-Object Text.UTF8Encoding($false);$Native=$null;$Held=$false;$Mutex=$null;$HadStage=$false;$Publication=$false;$Phase='PREFLIGHT'
+ $Utf8=New-Object Text.UTF8Encoding($false);$Native=$null;$Held=$false;$Mutex=$null;$HadStage=$false;$Publication=$false;$TransactionStarted=$false;$Phase='PREFLIGHT'
  try {
   Need ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $PSVersionTable.PSVersion.Major -eq 5) 'WINDOWS_POWERSHELL_51_REQUIRED'
   $Native=Initialize-Native;$CurrentSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -330,7 +359,7 @@ function Invoke-P01NativePristineTransaction {
    P01-Processes;$Protected=P01-Protected $Context
    if ($StatusOnly) {return P01-Result 'NONE' 'PRISTINE_PREDECESSOR' $false}
    Need (-not $Reconcile) 'NO_TRANSACTION_TO_RECONCILE'
-   $Phase='CANDIDATE_STAGING';[void](New-Item -ItemType Directory -Path $Stage -ErrorAction Stop);[void](Pin-Directory $Stage);[void](P01-PrivateAcl $Stage)
+   $Phase='CANDIDATE_STAGING';[void](New-Item -ItemType Directory -Path $Stage -ErrorAction Stop);$TransactionStarted=$true;[void](Pin-Directory $Stage);[void](P01-PrivateAcl $Stage)
    $Package.stream.Position=0;$Memory=New-Object IO.MemoryStream
    try {$Package.stream.CopyTo($Memory);$ExecutableBytes=$Memory.ToArray()} finally {$Memory.Dispose();$Package.stream.Position=0}
    [void](P01-NewLeaf (Join-Path $Stage 'candidate.exe') $ExecutableBytes (Join-Path $Context.root 'rbridge-native-host.exe') $true $true)
@@ -342,16 +371,38 @@ function Invoke-P01NativePristineTransaction {
   }
   $Phase='JOURNAL_VALIDATION';$Slots=P01-Slots $Context $Tuples $Stage;$Protected=P01-Protected $Context;$OldAcl=@{}
   foreach($T in $Tuples) {$OldAcl[$T.kind]=P01-PrivateAcl $Slots.old[$T.kind].full}
-  $IntentText=(P01-Canonical @{schema='COCWIN_P01_NATIVE_PRISTINE_INTENT_V1';binding=$Binding;rootIdentity=(Pin-Directory $Context.root).id;protected=$Protected;oldAcl=$OldAcl})+[char]10
+  $Identities=@{old=@{};new=@{}}
+  foreach($T in $Tuples) {$Identities.old[$T.kind]=$Slots.old[$T.kind].id;$Identities.new[$T.kind]=$Slots.new[$T.kind].id}
+  $Gate=@{schema='COCWIN_P01_NATIVE_EXECUTE_GATE_V1';identity=$Slots.new['exe'].id;finalAcl=$OldAcl['exe'];gatedAcl=(P01-ExecuteGateAcl $OldAcl['exe'])}
+  $IntentText=(P01-Canonical @{schema='COCWIN_P01_NATIVE_PRISTINE_INTENT_V2';binding=$Binding;rootIdentity=(Pin-Directory $Context.root).id;protected=$Protected;oldAcl=$OldAcl;slotIdentities=$Identities;executeGate=$Gate})+[char]10
   if ($HadStage) {Need ((Entry-Text (Open-Leaf (Join-Path $Stage 'intent.json') 65536)) -ceq $IntentText) 'TRANSACTION_INTENT_CHANGED'}
   else {[void](P01-NewLeaf (Join-Path $Stage 'intent.json') ($Utf8.GetBytes($IntentText)))}
-  $CompleteText=(P01-Canonical @{schema='COCWIN_P01_NATIVE_PRISTINE_COMPLETE_V1';binding=$Binding;rootIdentity=(Pin-Directory $Context.root).id;executable=$Context.targetExecutable;config=$CP;owner=$OP;activated=$false})+[char]10
+  Need ((Entry-Text (Open-Leaf (Join-Path $Stage 'intent.json') 65536)) -ceq $IntentText) 'TRANSACTION_INTENT_READBACK_FAILED'
+  $CompleteText=(P01-Canonical @{schema='COCWIN_P01_NATIVE_PRISTINE_COMPLETE_V2';binding=$Binding;rootIdentity=(Pin-Directory $Context.root).id;executable=$Context.targetExecutable;config=$CP;owner=$OP;slotIdentities=$Identities;executeGate=$Gate;activated=$false})+[char]10
   $Complete=Test-Path -LiteralPath (Join-Path $Stage 'COMPLETE.json')
   P01-Journal $Stage $Binding $Slots.prefix $Complete
-  foreach($T in $Tuples) {Need ((P01-PrivateAcl $Slots.new[$T.kind].full) -ceq $OldAcl[$T.kind]) 'TARGET_ACL_CHANGED'}
+  P01-SlotAcls $Slots $OldAcl $Gate $true
   P01-Processes
+  # Exact final-ACL prefix0 is the sole known crash gap before gate application.
+  # The durable intent and freshly validated slot identities/bytes bind this step.
+  $ImageAcl=P01-ImageAcl $Slots.new['exe']
+  if (-not $Complete -and $ImageAcl -ceq $Gate.finalAcl) {
+   Need ($Slots.prefix -eq 0 -and $Slots.new['exe'].full -ceq (Join-Path $Stage 'candidate.exe')) 'PRECOMPLETE_EXECUTE_GATE_MISSING'
+   if ($HadStage -and -not $Reconcile) {return P01-Result 'UNKNOWN' 'EXPLICIT_FORWARD_RECONCILIATION_REQUIRED' $false}
+   if ($StatusOnly) {return P01-Result 'UNKNOWN' 'INCOMPLETE_TRANSACTION' $false}
+   $Phase='PERSISTENT_EXECUTE_GATE';P01-SetImageAcl $Slots.new['exe'] $Gate.finalAcl $Gate.gatedAcl
+  }
+  P01-SlotAcls $Slots $OldAcl $Gate $Complete
   if ($Complete) {
    Need ($Slots.prefix -eq 6 -and (Entry-Text (Open-Leaf (Join-Path $Stage 'COMPLETE.json') 16384)) -ceq $CompleteText) 'COMPLETE_READBACK_CHANGED'
+   if ((P01-ImageAcl $Slots.new['exe']) -ceq $Gate.gatedAcl) {
+    if (-not $Reconcile -or $StatusOnly) {return P01-Result 'UNKNOWN' 'COMMITTED_EXECUTE_GATE_RECONCILIATION_REQUIRED' $false}
+    # COMPLETE linearizes installation. Usability follows only after the exact
+    # known execute gate is removed through the still-exclusive WRITE_DAC handle.
+    $Phase='COMMITTED_EXECUTE_GATE_RESTORE';P01-SetImageAcl $Slots.new['exe'] $Gate.gatedAcl $Gate.finalAcl
+   }
+   P01-SlotAcls $Slots $OldAcl $Gate $true
+   Need ((P01-ImageAcl $Slots.new['exe']) -ceq $Gate.finalAcl) 'FINAL_EXECUTABLE_ACL_CHANGED'
    return P01-Result 'COMPLETE' 'READ_BACK_COMPLETE' $false
   }
   if ($HadStage -and -not $Reconcile) {return P01-Result 'UNKNOWN' 'EXPLICIT_FORWARD_RECONCILIATION_REQUIRED' $false}
@@ -378,16 +429,21 @@ function Invoke-P01NativePristineTransaction {
     $E=$Slots.new[$T.kind];$Destination=Join-Path $Context.root $T.name
     if (-not $E.deleteAccess) {$Id=$E.id;$Path=$E.full;Close-Entry $E;$E=Open-Leaf $Path 134217728 $true ($T.kind -ceq 'exe');Need ($E.id -ceq $Id) 'PUBLICATION_IDENTITY_CHANGED'}
    }
+   P01-SlotAcls $Slots $OldAcl $Gate $false
    $Publication=$true;Rename-Entry $E $Destination
    [void](P01-NewLeaf (Join-Path $Stage ('step-'+$I+'.json')) ($Utf8.GetBytes((P01-StepText $Binding $I))))
   }
   $Phase='INSTALLED_READBACK';$Slots=P01-Slots $Context $Tuples $Stage;P01-Layout $Context $true
   Need ($Slots.prefix -eq 6 -and (P01-Protected $Context) -ceq $Protected) 'INSTALLED_PAIR_READBACK_FAILED'
-  foreach($T in $Tuples) {Need ((P01-PrivateAcl $Slots.new[$T.kind].full) -ceq $OldAcl[$T.kind] -and (P01-PrivateAcl $Slots.old[$T.kind].full) -ceq $OldAcl[$T.kind]) 'INSTALLED_OR_BACKUP_ACL_CHANGED'}
+  P01-SlotAcls $Slots $OldAcl $Gate $false
   P01-Journal $Stage $Binding 6 $false;P01-Processes
+  P01-Layout $Context $true;Need ((P01-Protected $Context) -ceq $Protected) 'PRECOMPLETE_PROTECTED_SNAPSHOT_CHANGED';P01-SlotAcls $Slots $OldAcl $Gate $false
   $Phase='COMPLETE_READBACK';[void](P01-NewLeaf (Join-Path $Stage 'COMPLETE.json') ($Utf8.GetBytes($CompleteText)))
   Need ((Entry-Text (Open-Leaf (Join-Path $Stage 'COMPLETE.json') 16384)) -ceq $CompleteText -and (P01-Protected $Context) -ceq $Protected) 'COMPLETE_READBACK_FAILED'
-  [void](P01-Slots $Context $Tuples $Stage);P01-Layout $Context $true
+  $Slots=P01-Slots $Context $Tuples $Stage;P01-Layout $Context $true;P01-SlotAcls $Slots $OldAcl $Gate $false
+  $Phase='FINAL_EXECUTE_GATE_RESTORE';P01-SetImageAcl $Slots.new['exe'] $Gate.gatedAcl $Gate.finalAcl
+  P01-SlotAcls $Slots $OldAcl $Gate $true
+  Need ((P01-ImageAcl $Slots.new['exe']) -ceq $Gate.finalAcl -and (Entry-Text (Open-Leaf (Join-Path $Stage 'COMPLETE.json') 16384)) -ceq $CompleteText) 'FINAL_COMPLETE_READBACK_FAILED'
   return P01-Result 'COMPLETE' 'PUBLISHED_AND_READ_BACK' $Publication
  } catch {
   $Reason=[string]$_.Exception.Message
@@ -395,7 +451,7 @@ function Invoke-P01NativePristineTransaction {
   $Diagnostic=$_.Exception;for($Depth=0;$Depth -lt 4 -and $null -ne $Diagnostic.InnerException;$Depth++) {$Diagnostic=$Diagnostic.InnerException}
   $Type=$Diagnostic.GetType().FullName;if ($Type.Length -gt 160) {$Type=$Type.Substring(0,160)}
   Write-Verbose ('P01_NATIVE_DIAGNOSTIC phase='+$Phase+' type='+$Type+' hresult='+$Diagnostic.HResult.ToString('x8')+' line='+$_.InvocationInfo.ScriptLineNumber+' reason='+$Reason)
-  $Status=if ($HadStage -or $Publication) {'UNKNOWN'} else {'BLOCKED'};return P01-Result $Status $Reason $Publication
+  $Status=if ($HadStage -or $Publication -or $TransactionStarted) {'UNKNOWN'} else {'BLOCKED'};return P01-Result $Status $Reason $Publication
  } finally {
   for($I=$AllEntries.Count-1;$I -ge 0;$I--) {Close-Entry $AllEntries[$I]}
   if ($Held) {$Mutex.ReleaseMutex()};if ($null -ne $Mutex) {$Mutex.Dispose()}
