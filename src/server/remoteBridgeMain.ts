@@ -12,6 +12,7 @@ import {createRemoteBridgeHealth} from './remoteBridgeHealth.js';
 import {createRemoteBridgeProcessSessions} from './remoteBridgeProcessSessions.js';
 import {acquireRemoteBridgeProcessLock,createRemoteBridgeStore} from './remoteBridgeStore.js';
 import {createRemoteBridgeWorker,type RemoteBridgeRunSummary} from './remoteBridgeWorker.js';
+import {createProtectedOwnerHold} from './remoteBridgeOwnerHold.js';
 import {resolveHostProfile} from '../domain/remoteBridgeHostProfiles.js';
 
 interface LoopLock {release():Promise<void>;}
@@ -58,6 +59,7 @@ export async function runRemoteBridgeMain():Promise<void>{
   const {stateRoot:root}=resolveRemoteBridgeRuntimeConfig(process.env,{username:user.username,homedir:user.homedir,uid});
   const instanceId=resolveRemoteBridgeInstanceId(process.env);
   const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env);
+  const admissionHold=createProtectedOwnerHold({expectedSha256:process.env.RBRIDGE_OWNER_HOLD_SHA256,repository,authorLogin,instanceId,runtimeUid:uid,runtimeGid:typeof process.getgid==='function'?process.getgid():user.gid});
   const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
   const flowPilot=createFlowPilotBridgeRuntime({root,controller,env:process.env});
   let queueCount=0,sessionCount=(await processSessions.stats()).activeSessions,transferCount=(await chunkStore.stats()).activeTransfers;
@@ -70,7 +72,7 @@ export async function runRemoteBridgeMain():Promise<void>{
     maxReadBytes:fileProfile.maxReadBytes,
     maxSearchResults:fileProfile.maxSearchResults
   });
-  const worker=createRemoteBridgeWorker({store,github,controller,chunkStore,health,processSessions,fileOps,repository,authorLogin,instanceId});let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
+  const worker=createRemoteBridgeWorker({store,github,controller,chunkStore,health,processSessions,fileOps,repository,authorLogin,instanceId,admissionHold});let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
   try{
     await runRemoteBridgeLoop({
       acquireLock:async()=>await acquireRemoteBridgeProcessLock(root),
