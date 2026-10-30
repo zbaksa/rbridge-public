@@ -95,6 +95,33 @@ function Assert-CrashGate($C,[string]$FinalAcl) {
  Launch-QA $CandidatePath (Join-Path $C.root 'rbridge-native-host.config.json') $true
 }
 
+# Observe the managed capability that .NET Framework Flush(true) uses to
+# select its OS flush path; kernel RW rights alone do not set CanWrite.
+$script:RealSetImageAcl=(Get-Command P01-SetImageAcl).ScriptBlock
+$script:CrashBeforeGate=$false;$script:GateWritableChecks=0;$script:RestoreWritableChecks=0;$script:RenameWritableChecks=0
+function P01-SetImageAcl($Entry,[string]$Expected,[string]$Target) {
+ if ($script:CrashBeforeGate) {$script:CrashBeforeGate=$false;throw 'SYNTHETIC_CRASH_AFTER_INTENT_BEFORE_GATE'}
+ Assert-P01 ($Entry.exclusive -and $Entry.stream.CanWrite) 'DURABLE_IMAGE_STREAM_NOT_WRITABLE'
+ if ($Target -ceq (GateAcl-QA $Expected)) {$script:GateWritableChecks++}
+ else {Assert-P01 ($Expected -ceq (GateAcl-QA $Target)) 'UNRECOGNIZED_ACL_TRANSITION';$script:RestoreWritableChecks++}
+ & $script:RealSetImageAcl $Entry $Expected $Target
+}
+function Snap-AllFixture($C) {
+ return (@(Get-ChildItem -LiteralPath $C.root -Recurse -Force | Sort-Object FullName | ForEach-Object {
+  $Row=[ordered]@{name=$_.FullName.Substring($C.root.Length);directory=$_.PSIsContainer;sddl=(Get-Acl -LiteralPath $_.FullName).Sddl}
+  if (-not $_.PSIsContainer) {$Row.sha=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+  $Row
+ }) | ConvertTo-Json -Depth 5 -Compress)
+}
+function New-Prefix0Fixture {
+ $C=New-Fixture;$script:CrashBeforeGate=$true;$R=Run-P01 $C
+ Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and $R.reason -ceq 'SYNTHETIC_CRASH_AFTER_INTENT_BEFORE_GATE') 'PREFIX0_CRASH_NOT_RETAINED'
+ $Tx=Join-Path $C.root '.p01-pristine-upgrade'
+ Assert-P01 ((Test-Path -LiteralPath (Join-Path $Tx 'intent.json')) -and -not (Test-Path -LiteralPath (Join-Path $Tx 'step-0.json'))) 'PREFIX0_NOT_DURABLE_INTENT_ONLY'
+ Assert-P01 ((Acl-State (Get-Acl -LiteralPath (Join-Path $Tx 'candidate.exe')).Sddl) -ceq (Acl-State (Get-Acl -LiteralPath (Join-Path $C.root 'rbridge-native-host.exe')).Sddl)) 'PREFIX0_GATE_ALREADY_APPLIED'
+ return $C
+}
+
 try {
  # Every predecessor is independently required, including the qualified c4d executable.
  foreach($Name in @('rbridge-native-host.exe','rbridge-native-host.config.json','com.cocwin.rbridge_chat_v1.json','events\v3-peer-owner.json')) {
@@ -126,6 +153,7 @@ try {
  $OriginalOwner=[IO.File]::ReadAllBytes((Join-Path $C.root 'events\v3-peer-owner.json'))
  $OlderBackup=Get-FileHash -LiteralPath (Join-Path $C.root 'rbridge-native-host.config.json.pre-p01-backup')
  $R=Run-P01 $C
+ Assert-P01 ($R.reason -cne 'DURABLE_IMAGE_STREAM_NOT_WRITABLE') 'DURABLE_IMAGE_STREAM_NOT_WRITABLE'
  Assert-P01 ($R.status -ceq 'COMPLETE' -and $R.phase -ceq 'COMPLETE' -and $R.publicationStarted -and $R.activated -eq $false) ('PRISTINE_PUBLICATION_FAILED '+($R|ConvertTo-Json -Compress))
  $Tx=Join-Path $C.root '.p01-pristine-upgrade'
  Assert-P01 ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $Tx 'original.config.json'))) -ceq [Convert]::ToBase64String($OriginalConfig)) 'CONFIG_BACKUP_CHANGED'
@@ -141,6 +169,7 @@ try {
  $script:RealRename=(Get-Command Rename-Entry).ScriptBlock
  $script:LaunchAttempts=0;$script:LaunchEscaped=$false;$script:FaultAfter=0;$script:RenameCount=0
  function Rename-Entry($Entry,[string]$Destination) {
+  if ($Entry.exclusive) {Assert-P01 $Entry.stream.CanWrite 'HELD_RENAME_IMAGE_STREAM_NOT_WRITABLE';$script:RenameWritableChecks++}
   foreach($Moment in @('before','after')) {
    if ($Moment -ceq 'after') {& $script:RealRename $Entry $Destination;$script:RenameCount++}
    $Installed=Join-Path $script:FaultContext.root 'rbridge-native-host.exe'
@@ -216,6 +245,32 @@ try {
  $Before=Snap-Fixture $C;$R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
  Assert-P01 ($R.status -ceq 'UNKNOWN' -and (Snap-Fixture $C) -ceq $Before) 'FOREIGN_COMPLETE_ACL_RESET'
 
+
+ # Durable-intent, no-publication recovery is explicit and inode/ACL exact.
+ $C=New-Prefix0Fixture;$FinalAcl=Acl-State (Get-Acl -LiteralPath (Join-Path $C.root 'rbridge-native-host.exe')).Sddl
+ $Before=Snap-AllFixture $C;$R=Run-P01 $C
+ Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and (Snap-AllFixture $C) -ceq $Before) 'PREFIX0_APPLY_MUTATED'
+ $R=Invoke-P01NativePristineTransaction -Context $C -StatusOnly
+ Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and (Snap-AllFixture $C) -ceq $Before) 'PREFIX0_STATUS_MUTATED'
+ $GateChecks=$script:GateWritableChecks;$R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
+ Assert-P01 ($R.status -ceq 'COMPLETE' -and $script:GateWritableChecks -eq $GateChecks+1 -and (Acl-State (Get-Acl -LiteralPath (Join-Path $C.root 'rbridge-native-host.exe')).Sddl) -ceq $FinalAcl) ('PREFIX0_RECONCILE_FAILED '+($R|ConvertTo-Json -Compress))
+ foreach($ForeignState in @('acl','inode','history')) {
+  $C=New-Prefix0Fixture;$Path=Join-Path $C.root '.p01-pristine-upgrade\candidate.exe'
+  if ($ForeignState -ceq 'acl') {
+   $BadAcl=Get-Acl -LiteralPath $Path;$Foreign=New-Object Security.Principal.SecurityIdentifier('S-1-5-11')
+   $BadAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($Foreign,[Security.AccessControl.FileSystemRights]::ExecuteFile,[Security.AccessControl.AccessControlType]::Deny)))
+   Set-Acl -LiteralPath $Path -AclObject $BadAcl
+  } elseif ($ForeignState -ceq 'inode') {
+   # Preserve candidate bytes/ACL but force a new inode while the pinned one exists.
+   $Replacement=Join-Path $Sandbox ('SYNTHETIC-replacement-'+[guid]::NewGuid().ToString('N')+'.exe')
+   [IO.File]::Copy($Path,$Replacement,$false);Set-Acl -LiteralPath $Replacement -AclObject (Get-Acl -LiteralPath $Path)
+   [IO.File]::Delete($Path);[IO.File]::Move($Replacement,$Path)
+  } else {Write-QA (Join-Path $C.root 'events\events.ndjson') ''}
+  $Before=Snap-AllFixture $C;$GateChecks=$script:GateWritableChecks
+  $R=Invoke-P01NativePristineTransaction -Context $C -Reconcile
+  Assert-P01 ($R.status -ceq 'UNKNOWN' -and -not $R.publicationStarted -and $script:GateWritableChecks -eq $GateChecks -and (Snap-AllFixture $C) -ceq $Before) ('PREFIX0_FOREIGN_STATE_ADOPTED_'+$ForeignState)
+ }
+
  Assert-P01 ($script:LaunchAttempts -gt 0 -and -not $script:LaunchEscaped) 'FRESH_CREATEPROCESS_NOT_EXCLUDED'
  $C=New-Fixture
  $Path=Join-Path $C.root 'rbridge-native-host.config.json';$SavedAcl=Get-Acl -LiteralPath $Path;$BadAcl=Get-Acl -LiteralPath $Path
@@ -273,6 +328,7 @@ try {
  & (Join-Path $Control.root 'rbridge-native-host.exe') --check-config (Join-Path $Control.root 'rbridge-native-host.config.json') | Out-Null
  Assert-P01 ($LASTEXITCODE -eq 0) 'SYNTHETIC_IMAGE_CONTROL_DID_NOT_RUN'
 
+ Assert-P01 ($script:GateWritableChecks -gt 0 -and $script:RestoreWritableChecks -gt 0 -and $script:RenameWritableChecks -gt 0) 'WRITABLE_GATE_RESTORE_RENAME_BOUNDARIES_NOT_OBSERVED'
  [pscustomobject]@{schema='COCWIN_P01_SYNTHETIC_WINDOWS_QA_V1';status='PASS';passed=$Passed;actualOwnerWindows='NOT_RUN';sshConnections=0;browserSends=0}
 } finally {
  [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($Registry,$false)
