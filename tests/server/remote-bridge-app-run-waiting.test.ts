@@ -279,4 +279,52 @@ describe('APP_RUN occupied-writer durable admission',()=>{
     expect((await store.get(requestId))?.phase).toBe('CLAIMED');
   });
 
+  it('unscoped legacy WAITING is preserved even with no HOLD adapter configured',async()=>{
+    const store=await durable(),entry=issue('keyb-v9-6',806),published=vi.fn(async()=>{});
+    const controller={
+      submit:vi.fn(async()=>({state:'BLOCKED',reason:'application already has an active or uncertain writer'})),
+      status:vi.fn(async()=>({state:'UNCERTAIN'})),
+      result:vi.fn(async()=>success('keyb-v9-6')),
+    };
+    const github={listOpenRequests:async()=>[entry],publishResult:published};
+    await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller}).runOnce();
+    const path=join(roots.at(-1)!,'bridge.keyb-v9-6.json');
+    const record=JSON.parse(await readFile(path,'utf8')) as Record<string,unknown>;
+    expect(record.phase).toBe('WAITING');
+    delete record.scopeSha256;
+    await writeFile(path,JSON.stringify(record)+'\n');
+    const original=await readFile(path,'utf8');
+    clock=LATER;
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller}).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0,errors:1});
+    expect(controller.submit).toHaveBeenCalledOnce();
+    expect(published).not.toHaveBeenCalled();
+    expect(await readFile(path,'utf8')).toBe(original);
+  });
+
+  it('legacy V1 HOLD verification exception preserves CLAIMED and cannot call the controller',async()=>{
+    const store=await durable(),requestId='bridge.legacy-v1-2';
+    const payload={tool:'probe',cwd:'/home/editor/backend',args:[],timeout_ms:30000,max_bytes:65536};
+    const entry={
+      number:807,title:'[COCWIN BRIDGE REQUEST] '+requestId,authorLogin:'bridge-owner',
+      url:'https://github.com/example/rbridge-control/issues/807',
+      body:JSON.stringify({schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V1',requestId,
+        createdAt:'2026-10-26T10:00:00.000Z',expiresAt:'2026-10-26T10:10:00.000Z',
+        appId:'editor',jobId:'legacy-v1-2',operation:'RUN',payload}),
+    };
+    const published=vi.fn(async()=>{}),controller={
+      submit:vi.fn(async()=>({state:'SUCCEEDED'})),
+      status:vi.fn(async()=>({state:'SUCCEEDED'})),
+      result:vi.fn(async()=>success('legacy-v1-2')),
+    };
+    const admissionHold=vi.fn(async():Promise<boolean>=>{throw Error('OWNER_POLICY_UNAVAILABLE');});
+    const github={listOpenRequests:async()=>[entry],publishResult:published};
+    expect(await createRemoteBridgeWorker({...TRANSPORT,now,store,github,controller,admissionHold}).runOnce())
+      .toMatchObject({pending:1,published:0,blocked:0,errors:1});
+    expect(admissionHold).toHaveBeenCalledOnce();
+    expect(controller.submit).not.toHaveBeenCalled();
+    expect(published).not.toHaveBeenCalled();
+    expect((await store.get(requestId))?.phase).toBe('CLAIMED');
+  });
+
 });
