@@ -195,10 +195,15 @@ await test('completed_uploads_release_pool_but_preserve_exact_replay_and_unfinis
     const result=await resultFor(command,send.result);await store.recordIncoming(result,pins);originals.push({command,result});
   }
   await store.disconnect();assert.ok(peerModule);const reopened=new peerModule.RbridgeChatPeerStoreV3(path);await ready(reopened);
-  const first=originals[0]!,t=await chunks(first.command);for(const item of t.chunks)await reopened.stageChunk(item);await reopened.commitCommand(t.commit);
-  assert.equal(await reopened.takeForDispatch(),null);assert.deepEqual((await reopened.read(first.command.commandId,scope)).result,first.result);
-  const altered=structuredClone(t.chunks[0]!);const bytes=Buffer.from(altered.dataBase64,'base64');bytes[0]=bytes[0]!^1;altered.dataBase64=bytes.toString('base64');await assert.rejects(()=>reopened.stageChunk(altered),/COLLISION/);
-  await assert.rejects(()=>reopened.commitCommand(unfinished.commit),/PARTIAL_COMMAND_UNCERTAIN/);
+  // Keep the authenticated fixture peer live across separately durable replay operations.
+  const first=originals[0]!,t=await chunks(first.command);
+  for(const item of t.chunks){await reopened.heartbeat();await reopened.stageChunk(item);}
+  await reopened.heartbeat();await reopened.commitCommand(t.commit);
+  await reopened.heartbeat();assert.equal(await reopened.takeForDispatch(),null);
+  await reopened.heartbeat();assert.deepEqual((await reopened.read(first.command.commandId,scope)).result,first.result);
+  const altered=structuredClone(t.chunks[0]!);const bytes=Buffer.from(altered.dataBase64,'base64');bytes[0]=bytes[0]!^1;altered.dataBase64=bytes.toString('base64');
+  await reopened.heartbeat();await assert.rejects(()=>reopened.stageChunk(altered),/COLLISION/);
+  await reopened.heartbeat();await assert.rejects(()=>reopened.commitCommand(unfinished.commit),/PARTIAL_COMMAND_UNCERTAIN/);
   const journal=JSON.parse(await readFile(join(path,'v3-peer','journal.json'),'utf8')) as {transfers:{commit:Commit;chunks:(string|null)[]}[];commands:unknown[]};
   assert.equal(journal.transfers.length,1);assert.equal(journal.transfers[0]?.commit.commandId,pending.commandId);assert.equal(journal.transfers[0]?.chunks[0],unfinished.chunks[0]?.dataBase64);assert.equal(journal.commands.length,130);
 }));

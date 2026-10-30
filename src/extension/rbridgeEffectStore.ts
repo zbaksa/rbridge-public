@@ -1,6 +1,7 @@
+import {buildScopeResultInventory,type RbridgeScopeResultInventoryV1} from '../domain/rbridgeScopeQuiescence.js';
 import {
   canonicalDigest,canonicalJson,parseEffectCommand,parseEffectResult,
-  type CocwinRbridgeEffectRequestV1,type EffectExecutionV3,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,
+  parseV3Scope,type V3Scope,type CocwinRbridgeEffectRequestV1,type EffectExecutionV3,type RbridgeChatEffectCommandV1,type RbridgeChatEffectResultV1,
 } from '../domain/rbridgeEffectProtocol.js';
 import type {ChromeStorageAreaV1} from './browserAuthorityStore.js';
 
@@ -137,6 +138,20 @@ export class RbridgeEffectStoreV1{
   async getCommand(input:RbridgeChatEffectCommandV1):Promise<CommandRecord|null>{
     const command=snapshotEffectData(input),current=await this.load(),record=current?.commands.find(value=>value.command.commandId===command.commandId);if(!record)return null;
     if(!same(record.command,command))fail('REQUEST_ID_COLLISION');return snapshotEffectData(record);
+  }
+  async readScopeEntries(input:V3Scope):Promise<readonly CommandRecord[]>{
+    const scope=parseV3Scope(snapshotEffectData(input)),current=await this.load();
+    return snapshotEffectData((current?.commands??[]).filter(entry=>(['appId','baseSha','sessionId','generation'] as const).every(key=>entry.command.request[key]===scope[key])).sort((a,b)=>a.command.commandId<b.command.commandId?-1:a.command.commandId>b.command.commandId?1:0));
+  }
+  async readScopeInventory(input:V3Scope):Promise<RbridgeScopeResultInventoryV1>{
+    const scope=parseV3Scope(snapshotEffectData(input)),entries=await this.readScopeEntries(scope);
+    const terminal=(entry:CommandRecord)=>entry.result?.state==='VERIFIED'||entry.result?.state==='FAILED_SAFE';
+    const reconciliations=new Map<string,string>();
+    for(const entry of entries)if(entry.command.action==='RECONCILE'&&terminal(entry)){
+      const key=canonicalJson(entry.command.request);if(!reconciliations.has(key))reconciliations.set(key,entry.command.commandId);
+    }
+    const evidence=entries.map(entry=>({command:entry.command,result:entry.result,resolvedByCommandId:terminal(entry)?entry.command.commandId:reconciliations.get(canonicalJson(entry.command.request))??null}));
+    return await buildScopeResultInventory({scope,entryCount:evidence.length,unresolvedCount:evidence.filter(entry=>entry.resolvedByCommandId===null).length,entriesSha256:await canonicalDigest(evidence)});
   }
   // These process-local gates never release a remote mutation on timeout.
   assertMutationAvailable():void{

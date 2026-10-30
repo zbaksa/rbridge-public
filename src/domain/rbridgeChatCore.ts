@@ -364,7 +364,7 @@ export function negotiateHello(localInput:unknown,peerInput:unknown):NegotiatedH
   return {
     schema:'RBRIDGE_CHAT_NEGOTIATED_HELLO_V1',protocolMajor:1,protocolMinor:Math.min(local.protocolMinor,peer.protocolMinor),
     maxMessageBytes:Math.min(local.maxMessageBytes,peer.maxMessageBytes,M0_LIMITS.maxRbridgeControlMessageUtf8Bytes),
-    capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES,...(Math.min(local.protocolMinor,peer.protocolMinor)>=1?['CHAT_EFFECT_REQUEST_V1','CHAT_ASSISTANT_TURN_CAPTURE_V2'].filter(capability=>localCaps.has(capability)&&peerCaps.has(capability)):[])],localReleaseSha:local.releaseSha,peerReleaseSha:peer.releaseSha,
+    capabilities:[...REQUIRED_RBRIDGE_CAPABILITIES,...(Math.min(local.protocolMinor,peer.protocolMinor)>=1?['CHAT_EFFECT_REQUEST_V1','CHAT_ASSISTANT_TURN_CAPTURE_V2','CHAT_SCOPE_QUIESCENCE_V1'].filter(capability=>localCaps.has(capability)&&peerCaps.has(capability)):[])],localReleaseSha:local.releaseSha,peerReleaseSha:peer.releaseSha,
   };
 }
 

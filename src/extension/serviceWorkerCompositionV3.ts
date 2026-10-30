@@ -1,4 +1,5 @@
-import {canonicalJson,parseV3Scope,requireV3Peer,V3_CAPABILITIES,type CocwinRbridgeEffectRequestV1,type RbridgeChatEventV1,type V3Scope,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
+import {assertScopeQuiescenceQueryCurrent,buildWorkerQuiescenceReport,RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY} from '../domain/rbridgeScopeQuiescence.js';
+import {canonicalDigest,canonicalJson,parseV3Scope,requireV3Peer,V3_CAPABILITIES,type CocwinRbridgeEffectRequestV1,type RbridgeChatEventV1,type V3Scope,type VerifiedPeerV3} from '../domain/rbridgeEffectProtocol.js';
 import type {NegotiatedHelloV1,RbridgeChatHelloV1} from '../domain/rbridgeChatCore.js';
 import {buildCommandResultV1,type RbridgeChatCommandV1} from '../domain/rbridgeChatCommand.js';
 import {ChatgptDeliveryAdapterV3} from '../browser/chatgptDeliveryAdapter.js';
@@ -24,6 +25,8 @@ export interface QualifiedV3WorkerOptions{
   bootstrap:ExtensionBootstrapConfigV1;scope:V3Scope;peer:VerifiedPeerV3;initialHistory:readonly RbridgeChatEventV1[];
   /** Caller supplies an independently qualified representation, never a content-message claim. */
   siteReader:SiteMarkdownReaderV3;captureTimeoutMs?:number;capturePollMs?:number;
+  /** Rejection-only trusted provisioner guard, run after initialization and immediately before Native connection. */
+  beforeNativeConnect?:()=>Promise<void>;
 }
 export interface WorkerCaptureStatusV3{
   requestDigest:string;state:'WAITING'|'CAPTURED'|'TERMINAL'|'TIMED_OUT'|'PEER_CHANGED'|'BLOCKED';reason?:string;
@@ -71,12 +74,17 @@ export async function startQualifiedExtensionServiceWorkerV3(api:QualifiedV3Work
   for(const effectId of origins){const original=await effects.requestForEffect(effectId);if(!original)fail('RBRIDGE_WORKER_HISTORY_ORIGIN_MISSING');assertScope(original);}
   if(api.runtime.onMessage)installCaptureMessageBridgeV3({onMessage:api.runtime.onMessage},null);
   const waiters=new Map<string,Promise<void>>();
-  const capture=async(request:CocwinRbridgeEffectRequestV1,admit:()=>void):Promise<void>=>{
+  const capture=async(request:CocwinRbridgeEffectRequestV1,admit:()=>void,freshSendAdmission?:((request:CocwinRbridgeEffectRequestV1)=>void)):Promise<void>=>{
     const pending=waiters.get(request.requestDigest);if(pending)return await pending;
     const sequence=++captureSequence,update=(state:WorkerCaptureStatusV3['state'],reason?:string)=>{if(sequence===captureSequence)lastCapture={requestDigest:request.requestDigest,state,...(reason?{reason}:{})};};
     const check=()=>{assertReady();admit();};
-    const siteReader:SiteMarkdownReaderV3={acquire:(input,observed,prepare)=>reader.acquire(input,observed,async()=>{check();const permit=await prepare();check();return ()=>{check();permit();};})};
-    const egress=new RbridgeCaptureEgressV3({...captureOptions,siteReader,delivery});
+    const guardedPrepare=(prepare:()=>Promise<()=>void>)=>async()=>{check();const permit=await prepare();check();return ()=>{check();permit();};};
+    const startAcquire:NonNullable<SiteMarkdownReaderV3['startAcquire']>=(input,observed,prepare,readAdmission=()=>{})=>{check();return reader.startAcquire!(input,observed,guardedPrepare(prepare),()=>{check();readAdmission();});};
+    const siteReader:SiteMarkdownReaderV3={
+      acquire:(input,observed,prepare)=>reader.acquire(input,observed,guardedPrepare(prepare)),
+      ...(typeof reader.startAcquire==='function'?{startAcquire}:{}),
+    };
+    const egress=new RbridgeCaptureEgressV3({...captureOptions,siteReader,delivery,...(freshSendAdmission?{freshSendAdmission}:{})});
     const work=(async()=>{
       const deadline=Date.now()+captureTimeoutMs;update('WAITING');
       try{
@@ -97,7 +105,7 @@ export async function startQualifiedExtensionServiceWorkerV3(api:QualifiedV3Work
     waiters.set(request.requestDigest,work);try{await work;}finally{if(waiters.get(request.requestDigest)===work)waiters.delete(request.requestDigest);}
   };
   const legacy=new RbridgeChatCommandDispatcherV1(runtime,new ChromeTabsInventoryAdapterV1(api.tabs,bootstrap.browserInstanceId,bootstrap.browserProfileId),bootstrap.browserInstanceId,bootstrap.browserProfileId);
-  const hello:RbridgeChatHelloV1={schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1,protocolMinor:1,releaseSha,maxMessageBytes:peer.maxMessageBytes,capabilities:[...V3_CAPABILITIES],browserInstanceId:bootstrap.browserInstanceId,browserProfileId:bootstrap.browserProfileId,nativeHostVersion:bootstrap.nativeHostVersion};
+  const hello:RbridgeChatHelloV1={schema:'RBRIDGE_CHAT_HELLO_V1',protocolMajor:1,protocolMinor:1,releaseSha,maxMessageBytes:peer.maxMessageBytes,capabilities:[...V3_CAPABILITIES,...(peer.capabilities.includes(RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY)?[RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY]:[])],browserInstanceId:bootstrap.browserInstanceId,browserProfileId:bootstrap.browserProfileId,nativeHostVersion:bootstrap.nativeHostVersion};
   const pin=(remote:RbridgeChatHelloV1,negotiated:NegotiatedHelloV1)=>{
     if(remote.protocolMajor!==1||remote.protocolMinor!==peer.protocolMinor||remote.releaseSha!==peer.releaseSha||remote.browserInstanceId!==peer.browserInstanceId||remote.browserProfileId!==peer.browserProfileId||remote.maxMessageBytes!==peer.maxMessageBytes||negotiated.maxMessageBytes!==peer.maxMessageBytes||negotiated.protocolMinor<1||canonicalJson([...remote.capabilities].sort())!==canonicalJson([...peer.capabilities].sort())||V3_CAPABILITIES.some(cap=>!negotiated.capabilities.includes(cap)))fail('RBRIDGE_WORKER_PEER_PIN_MISMATCH');
   };
@@ -126,12 +134,58 @@ export async function startQualifiedExtensionServiceWorkerV3(api:QualifiedV3Work
           current();await link.sendEffectResult(original,prior.result);return;
         }
       }
-      const dispatcher=new RbridgeEffectDispatcherV1(effects,request=>executor.executeBrowserEffect(request,admit));
+      let freshSendAdmission:((request:CocwinRbridgeEffectRequestV1)=>void)|undefined;
+      const dispatcher=new RbridgeEffectDispatcherV1(effects,async request=>{
+        const result=await executor.executeBrowserEffect(request,admit);
+        if(result.state==='VERIFIED'&&(request.effectKind==='RBRIDGE_SEND'||request.effectKind==='RBRIDGE_RESULT_SEND')){
+          const originalRequest=snapshotEffectData(request);let unused=true;
+          freshSendAdmission=candidate=>{admit();if(!unused||canonicalJson(candidate)!==canonicalJson(originalRequest))fail('RBRIDGE_WORKER_CAPTURE_FRESH_SEND_REQUIRED');unused=false;};
+        }
+        return result;
+      });
       const result=await dispatcher.dispatch(command);await link.sendEffectResult(original,result);
-      if(!stops.stopped&&result.state==='VERIFIED'&&(command.request.effectKind==='RBRIDGE_SEND'||command.request.effectKind==='RBRIDGE_RESULT_SEND'))await capture(command.request,admit);
+      if(!stops.stopped&&result.state==='VERIFIED'&&(command.request.effectKind==='RBRIDGE_SEND'||command.request.effectKind==='RBRIDGE_RESULT_SEND'))await capture(command.request,admit,freshSendAdmission);
+    },
+    onServerScopeQuiescence:async(original)=>{
+      const admission=link.admittedQuiescence(original),pending=helloTask;if(!pending)fail('RBRIDGE_WORKER_PEER_NOT_READY');await pending;
+      const query=admission.query,peerPinsSha256=await canonicalDigest(peer);
+      const current=()=>{assertReady();admission.assertCurrent();assertScopeQuiescenceQueryCurrent(query,{scope,channelId:query.channelId,peerPinsSha256,now:Date.now()});};
+      current();
+      // The immutable original fence is durable before browser control or inventory.
+      const fence=await stops.requestStop(query.request);current();
+      const startPending=admission.pendingHandlers(),activityRevision=admission.activityRevision(),startEgress=outbox.pendingEgress;
+      const startActivity=await outbox.siteActivityFacts(scope),startInventory=await effects.readScopeInventory(scope);current();
+      const drainedBeforeOff=startPending===0&&startEgress===0&&startActivity.pendingCount===0;
+      let captureStopped=false,stopAdmission:symbol|null=null;
+      try{
+        const expected=await runtime.state();current();
+        if(expected){const stopped=await runtime.stopScopeCapture(expected,scope);current();captureStopped=drainedBeforeOff&&stopped.capture?.status==='LOST'&&stopped.leader?.status==='RELEASED';if(captureStopped)stopAdmission=await runtime.assertSnapshot(stopped);}
+      }catch{current();}
+      const entries=await effects.readScopeEntries(scope),resultInventory=await effects.readScopeInventory(scope),events=await outbox.retainedEvents(),activity=await outbox.siteActivityFacts(scope),state=await runtime.state();current();
+      const sends=new Map(entries.filter(entry=>entry.command.action==='EXECUTE'&&(entry.command.request.effectKind==='RBRIDGE_SEND'||entry.command.request.effectKind==='RBRIDGE_RESULT_SEND')).map(entry=>[entry.command.request.requestDigest,entry]));
+      let unresolvedCaptureCount=activity.quarantinedCount;
+      for(const entry of sends.values()){
+        if(entry.result?.state==='FAILED_SAFE')continue;
+        const request=entry.command.request;if(request.effectKind!=='RBRIDGE_SEND'&&request.effectKind!=='RBRIDGE_RESULT_SEND')continue;
+        const captured=events.some(event=>{
+          if(event.eventType!=='ASSISTANT_TURN_CAPTURED_V2')return false;
+          const receipt=event.payload.captureReceipt as Record<string,unknown>;
+          return (['sessionId','generation','attemptId','effectId'] as const).every(key=>event[key]===request[key]&&receipt[key]===request[key])&&receipt.challenge===request.payload.challenge&&receipt.conversationId===request.payload.target.conversationId&&receipt.conversationGeneration===request.payload.target.conversationGeneration;
+        });
+        if(!captured||state?.activeSend?.effectId===request.effectId&&state.activeSend.state!=='RESPONSE_VERIFIED')unresolvedCaptureCount++;
+      }
+      if(state?.activeSend&&state.activeSend.state!=='RESPONSE_VERIFIED'&&!sends.has((await effects.requestForEffect(state.activeSend.effectId))?.requestDigest??''))unresolvedCaptureCount++;
+      unresolvedCaptureCount=Math.min(4096,unresolvedCaptureCount);
+      const pendingHandlers=Math.max(startPending,admission.pendingHandlers()),pendingReaders=activity.pendingCount,pendingEgress=outbox.pendingEgress;
+      const unchanged=activityRevision===admission.activityRevision(),head=events.at(-1);
+      const sealed=captureStopped&&drainedBeforeOff&&startInventory.unresolvedCount===0&&unchanged&&pendingHandlers===0&&pendingReaders===0&&pendingEgress===0&&unresolvedCaptureCount===0&&resultInventory.unresolvedCount===0;
+      const report=await buildWorkerQuiescenceReport(query,{fence,sealed,captureStopped,pendingHandlers,pendingReaders,pendingEgress,unresolvedCaptureCount,resultInventory,eventHead:{sequence:head?.sequence??0,eventSha256:head?.eventSha256??null},observedAt:new Date().toISOString()});
+      current();
+      await link.sendQuiescenceReport(original,report,()=>{current();if(report.sealed&&stopAdmission)runtime.assertAdmission(stopAdmission);if(report.sealed&&(admission.pendingHandlers()!==0||activityRevision!==admission.activityRevision()||outbox.pendingEgress!==0))fail('RBRIDGE_SCOPE_QUIESCENCE_ACTIVITY_CHANGED');});
     },
     onDisconnected:close,onProtocolError:close,
   });
+  if(options.beforeNativeConnect)await options.beforeNativeConnect();
   link.connect();
   return {link,get ready(){return ready();},get lastCapture(){return lastCapture?structuredClone(lastCapture):null;},get stopped(){return stops.stopped;},requestScopeStop:input=>stops.requestStop(input)};
 }

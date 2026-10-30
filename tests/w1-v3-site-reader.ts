@@ -17,12 +17,12 @@ const url=t.origin+'/g/'+t.projectId+'/c/'+t.conversationId,markdown='## Exact s
 const sender:ChromeCaptureSenderV3={id:extensionId,tabId:t.tabId,frameId:0,url};
 type ReadResult={assistantTurnId:string;observation:SiteMarkdownObservationV3};
 type Matched=Extract<DeliveryObservationV3,{kind:'MATCHED'}>;
-interface Reader{acquire(request:CocwinRbridgeEffectRequestV1,delivery:Matched,admit:()=>Promise<()=>void>):Promise<ReadResult>}
+interface Reader{acquire(request:CocwinRbridgeEffectRequestV1,delivery:Matched,admit:()=>Promise<()=>void>):Promise<ReadResult>;startAcquire?:(request:CocwinRbridgeEffectRequestV1,delivery:Matched,admit:()=>Promise<()=>void>,readAdmission?:()=>void)=>{result:Promise<ReadResult>;settled:Promise<{outcome:'COMPLETED'|'FAILED';copyIssued:boolean}>}}
 type ReaderConstructor=new(tabs:unknown,scripting:unknown,browserInstanceId:string,browserProfileId:string)=>Reader;
 type Script={world:string;target:{tabId:number;frameIds?:number[];documentIds?:string[]};func:(input:unknown)=>unknown;args:unknown[]};
 const itemBytes=new WeakMap<object,Blob>();
 class ClipboardItemBoundary{constructor(blob:Blob){itemBytes.set(this,blob);}get types(){if(!itemBytes.has(this))throw TypeError('Illegal item');return ['text/plain'];}getType(){if(!itemBytes.has(this))throw TypeError('Illegal item');return Promise.resolve(itemBytes.get(this)!);}}
-class Storage implements ChromeStorageAreaV1{data:Record<string,unknown>={};failOutbox=false;async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}async set(items:Record<string,unknown>){if(this.failOutbox&&'rbridgeCaptureOutboxV3'in items)throw Error('quota');Object.assign(this.data,structuredClone(items));}}
+class Storage implements ChromeStorageAreaV1{data:Record<string,unknown>={};failOutbox=false;failActivity=false;async get(key:string){return key in this.data?{[key]:structuredClone(this.data[key])}:{};}async set(items:Record<string,unknown>){if(this.failActivity&&'rbridgeSiteCaptureActivityV1'in items)throw Error('activity quota');if(this.failOutbox&&'rbridgeCaptureOutboxV3'in items)throw Error('quota');Object.assign(this.data,structuredClone(items));}}
 async function authority(){
  const storage=new Storage(),{canonicalProjectId:unused,...target}=t;void unused;
  let live:BrowserTargetObservationV1={...target,sessionId:request.sessionId,generation:request.generation,ownerSessionId:request.sessionId};
@@ -48,9 +48,9 @@ async function setup(){
  const scripting={executeScript:async(raw:unknown)=>{const d=raw as Script;scripts.push(d);if(changes.stall)return await new Promise<never>(()=>{});if(d.world==='MAIN')await changes.beforeMain?.();else if(scripts.length===1)await changes.beforeProbe?.();const old=Object.getOwnPropertyDescriptor(globalThis,'document');Object.defineProperty(globalThis,'document',{value:document,configurable:true});let result:unknown;try{result=await d.func(d.args[0]);}finally{if(old)Object.defineProperty(globalThis,'document',old);else Reflect.deleteProperty(globalThis,'document');}if(d.world==='MAIN')await changes.afterMain?.();const out=[{frameId:changes.replyFrame??0,documentId:changes.replyDocument??'chrome-document-1',result}];if(changes.extraFrame)out.push({frameId:2,documentId:'child-document',result});return out;}};
  const tabs={get:async()=>{if(changes.tabStall)return await new Promise<never>(()=>{});return {id:t.tabId,windowId:t.windowId,url:changes.tabUrl??url};}};
  const Constructor=(chromeAdapters as unknown as {ChromeSiteMarkdownReaderV3?:ReaderConstructor}).ChromeSiteMarkdownReaderV3;assert.equal(typeof Constructor,'function','Missing admitted Chrome site reader');
- const reader=new Constructor!(tabs,scripting,t.browserInstanceId,t.browserProfileId),options={...h.options,siteReader:reader,delivery:h.delivery},egress=new RbridgeCaptureEgressV3(options);
+ const makeReader=()=>new Constructor!(tabs,scripting,t.browserInstanceId,t.browserProfileId),reader=makeReader();let fresh=true;const options={...h.options,siteReader:reader,delivery:h.delivery,freshSendAdmission:(candidate:CocwinRbridgeEffectRequestV1)=>{assert.equal(candidate.requestDigest,request.requestDigest);assert.equal(candidate.effectId,request.effectId);if(!fresh)throw Error('FRESH_SEND_ADMISSION_USED');fresh=false;}},egress=new RbridgeCaptureEgressV3(options);
  const acquire=async(token=h.token,source=sender)=>{const fn=(egress as unknown as {acquireSite?:(token:string,sender:ChromeCaptureSenderV3)=>Promise<CaptureAckV3>}).acquireSite;assert.equal(typeof fn,'function','Missing admitted V3 egress acquisition');return await fn!.call(egress,token,source);};
- return {...h,page,document,button,changes,reader,egress,options,acquire,scripts,counts:()=>({siteCopies,forwarded}),close:()=>page.window.close()};
+ return {...h,page,document,button,changes,reader,makeReader,egress,options,acquire,scripts,counts:()=>({siteCopies,forwarded}),close:()=>page.window.close()};
 }
 let passed=0,failed=0;async function test(name:string,fn:()=>Promise<void>){try{await fn();passed++;console.log('PASS V3_SITE_READER '+name);}catch(e){failed++;console.error('FAIL V3_SITE_READER '+name+': '+String(e));}}
 await test('admitted_copy_uses_document_id_and_persists_exact_site_markdown',async()=>{
@@ -106,7 +106,7 @@ await test('send_history_allows_capture_but_prior_capture_history_does_not',asyn
  }
 });
 await test('two_egress_instances_share_one_acquisition_for_the_same_storage',async()=>{
- const h=await setup();let reads=0;const siteReader:Reader={acquire:async(_request,_delivery,admit)=>{reads++;(await admit())();await new Promise(resolve=>setTimeout(resolve,10));return {assistantTurnId:'assistant-new',observation:{kind:'CAPTURED',assistantTurnId:'assistant-new',markdown}};}};
+ const h=await setup();let reads=0;const acquireRaw:Reader['acquire']=async(_request,_delivery,admit)=>{reads++;(await admit())();await new Promise(resolve=>setTimeout(resolve,10));return {assistantTurnId:'assistant-new',observation:{kind:'CAPTURED',assistantTurnId:'assistant-new',markdown}};};const siteReader:Reader={acquire:acquireRaw,startAcquire:(request,delivery,admit,readAdmission=()=>{})=>{const result=(async()=>{readAdmission();return await acquireRaw(request,delivery,admit);})();return {result,settled:result.then(()=>({outcome:'COMPLETED' as const,copyIssued:true}),()=>({outcome:'FAILED' as const,copyIssued:false}))};}};
  const a=new RbridgeCaptureEgressV3({...h.options,siteReader}),b=new RbridgeCaptureEgressV3({...h.options,siteReader});const results=await Promise.all([a.acquireSite(h.token,sender),b.acquireSite(h.token,sender)]);assert.deepEqual(results[0],results[1]);assert.equal(reads,1);assert.equal((await a.events()).length,1);h.close();
 });
 await test('unanswered_chrome_is_bounded_and_quarantines_late_copy',async()=>{
@@ -122,4 +122,30 @@ await test('unanswered_chrome_is_bounded_and_quarantines_late_copy',async()=>{
 await test('minor0_and_default_availability_stay_closed',async()=>{
  assert.equal(SITE_ASSISTANT_MARKDOWN_AVAILABLE_V3,false);let listener:Parameters<CaptureMessageApiV3['onMessage']['addListener']>[0]|undefined;installCaptureMessageBridgeV3({onMessage:{addListener:l=>{listener=l;}}},null);let response:unknown;assert.notEqual(listener!({schema:'RBRIDGE_CONTENT_SITE_CAPTURE_V3',captureToken:'capture:x:1'},{id:extensionId,tab:{id:t.tabId},frameId:0,url},value=>{response=value;}),true);if(response!==undefined)assert.deepEqual(response,{errorCode:'RBRIDGE_CAPTURE_V3_UNAVAILABLE'});}
 );
+
+type ActivityFacts={history:'ABSENT'|'PRESENT';pendingCount:number;quarantinedCount:number;copyIssuedCount:number};
+async function untilCapture(predicate:()=>boolean|Promise<boolean>){const deadline=Date.now()+7000;while(!await predicate()){if(Date.now()>deadline)throw Error('CAPTURE_FIXTURE_TIMEOUT');await new Promise(resolve=>setTimeout(resolve,5));}}
+async function activityFacts(egress:RbridgeCaptureEgressV3):Promise<ActivityFacts|undefined>{const fn=(egress as unknown as {siteActivityFacts?:(scope:unknown)=>Promise<ActivityFacts>}).siteActivityFacts;return await fn?.call(egress,{appId:request.appId,baseSha:request.baseSha,sessionId:request.sessionId,generation:request.generation});}
+await test('timed_out_main_raw_task_is_retained_across_fresh_adapter_reload',async()=>{
+ const h=await setup();let release=()=>{},finished=()=>{},first=true;const done=new Promise<void>(resolve=>{finished=resolve;});
+ try{
+  h.changes.beforeMain=async()=>{if(first){first=false;await new Promise<void>(resolve=>{release=resolve;});}};h.changes.afterMain=()=>finished();
+  await assert.rejects(()=>h.acquire());assert.equal(h.counts().siteCopies,0);const firstFacts=await activityFacts(h.egress);if(firstFacts){assert.equal(firstFacts.pendingCount,1);assert.equal(firstFacts.quarantinedCount,1);}
+  const storage={get:(key:string)=>h.storage.get(key),set:(items:Record<string,unknown>)=>h.storage.set(items)},reader=h.makeReader(),options={...h.options,storage,siteReader:reader},resumed=new RbridgeCaptureEgressV3(options),calls=h.scripts.length;
+  const retry=await resumed.acquireSite(h.token,sender).then(()=> 'fulfilled',()=> 'rejected');assert.equal(retry,'rejected','A fresh worker must retain the unresolved old MAIN task');assert.equal(h.scripts.length,calls);assert.equal(h.counts().siteCopies,0);
+  release();await done;await untilCapture(async()=>{const facts=await activityFacts(resumed);return facts===undefined||facts.pendingCount===0;});
+  const finalFacts=await activityFacts(resumed);if(finalFacts){assert.equal(finalFacts.quarantinedCount,1);assert.equal(finalFacts.copyIssuedCount,1);}
+  assert.equal((await resumed.events()).length,0,'Late raw settlement must not manufacture a full capture receipt');await assert.rejects(()=>resumed.acquireSite(h.token,sender));assert.equal(h.counts().siteCopies,1);
+ }finally{release();if(!first)await Promise.race([done,new Promise(resolve=>setTimeout(resolve,1000))]);h.close();}
+});
+await test('activity_storage_failure_before_chrome_never_enqueues_script',async()=>{
+ const h=await setup();try{h.storage.failActivity=true;await assert.rejects(()=>h.acquire());assert.equal(h.scripts.length,0);assert.equal(h.counts().siteCopies,0);assert.equal((await h.egress.events()).length,0);}finally{h.close();}
+});
+await test('legacy_uncaptured_send_without_fresh_admission_never_copies',async()=>{
+ const h=await setup();try{const storage={get:(key:string)=>h.storage.get(key),set:(items:Record<string,unknown>)=>h.storage.set(items)},options=Object.fromEntries(Object.entries({...h.options,storage,siteReader:h.makeReader()}).filter(([key])=>key!=='freshSendAdmission')) as unknown as typeof h.options,resumed=new RbridgeCaptureEgressV3(options);await assert.rejects(()=>resumed.acquireSite(h.token,sender));assert.equal(h.scripts.length,0);assert.equal(h.counts().siteCopies,0);}finally{h.close();}
+});
+await test('settled_read_only_not_ready_probe_can_poll_before_one_copy',async()=>{
+ const h=await setup();try{const assistant=h.document.querySelector('[data-turn="assistant"]')!;assistant.setAttribute('data-turn-state','streaming');await assert.rejects(()=>h.acquire(),/RBRIDGE_SITE_CAPTURE_NOT_READY/);assert.equal(h.counts().siteCopies,0);assistant.setAttribute('data-turn-state','complete');assert.equal((await h.acquire()).durable,true);assert.equal(h.counts().siteCopies,1);assert.equal((await h.egress.events()).length,1);}finally{h.close();}
+});
+
 console.log(JSON.stringify({suite:'W1_V3_ADMITTED_SITE_READER',passed,failed,ownerWindows:'NOT_RUN',nativeStartup:'NOT_ACTIVATED'}));if(failed)process.exitCode=1;

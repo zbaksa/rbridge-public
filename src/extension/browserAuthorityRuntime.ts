@@ -1,10 +1,11 @@
 import {
-  acquireWriteLeader,activateCapture,createSendTransaction,markClicked,markFailedBeforeClick,markSendReady,markSendUncertain,
+  acquireWriteLeader,activateCapture,loseCapture,releaseWriteLeader,createSendTransaction,markClicked,markFailedBeforeClick,markSendReady,markSendUncertain,
   markSentVerified,markWaitingResponse,markResponseVerified,persistSendIntent,prepareBinding,verifyBinding,validateEventEnvelope,
   type BrowserBindingControlV1,type BrowserTargetObservationV1,type RbridgeChatBindingReceiptV1,type RbridgeChatEventV1,type SendPurpose,
 } from '../domain/rbridgeChatCore.js';
-import {BrowserAuthorityStoreV1,type BrowserAuthoritySnapshotV1,type BrowserAuthorityStateV1} from './browserAuthorityStore.js';
+import {BrowserAuthorityStoreV1,validateBrowserAuthoritySnapshotV1,type BrowserAuthoritySnapshotV1,type BrowserAuthorityStateV1} from './browserAuthorityStore.js';
 import type {DeliveryClickGuardV3} from '../browser/chatgptDeliveryAdapter.js';
+import {parseV3Scope,type V3Scope} from '../domain/rbridgeEffectProtocol.js';
 
 export interface BrowserLiveTargetReaderV1{
   observe(binding:BrowserBindingControlV1):Promise<BrowserTargetObservationV1>;
@@ -121,6 +122,34 @@ export class BrowserAuthorityRuntimeV1{
       try{await this.content.stopCapture(current.binding.tabId);}catch{}
       throw error;
     }
+  }
+
+  /** Stops only the exact current capture authority; SEND uncertainty remains history. */
+  async stopScopeCapture(expected:BrowserAuthoritySnapshotV1,scope:V3Scope):Promise<BrowserAuthoritySnapshotV1>{
+    const originalFence=this.store.mutationFence(),admittedScope=parseV3Scope(structuredClone(scope)),basis=await validateBrowserAuthoritySnapshotV1(structuredClone(expected));
+    const {binding,leader,capture}=basis;
+    if(!binding||binding.status!=='VERIFIED'||!leader||!capture||
+      (leader.status!=='ACTIVE'&&leader.status!=='RELEASED')||(capture.status!=='ACTIVE'&&capture.status!=='LOST'))fail('RBRIDGE_SCOPE_STOP_AUTHORITY_REQUIRED');
+    if(binding.sessionId!==admittedScope.sessionId||binding.generation!==admittedScope.generation)fail('RBRIDGE_SCOPE_STOP_SCOPE_MISMATCH');
+    // A STOP never turns an armed intent into a completed or retryable SEND.
+    this.armedSend=null;
+    this.assertAdmission(originalFence);await this.assertSnapshot(basis);
+    await verifyBinding(binding,await this.targetReader.observe(binding));
+    this.assertAdmission(originalFence);await this.assertSnapshot(basis);
+    const stopped=await this.content.stopCapture(binding.tabId);
+    if(stopped.status!=='OFF')fail('RBRIDGE_CAPTURE_RUNTIME_NOT_OFF');
+    await verifyBinding(binding,await this.targetReader.observe(binding));
+    const fence=await this.assertSnapshot(basis);this.assertAdmission(originalFence);this.assertAdmission(fence);
+    const now=new Date(),nextLeader=releaseWriteLeader(leader,'SCOPE_STOP_REQUESTED',now),nextCapture=loseCapture(capture,'SCOPE_STOP_REQUESTED',now);
+    const completed=nextLeader===leader&&nextCapture===capture?basis:await this.store.commit(basis.revision,{
+      binding,leader:nextLeader,capture:nextCapture,activeSend:basis.activeSend,
+    },now);
+    // OFF is acknowledged by content first. Storage and the same live binding
+    // must still agree before this method yields any positive observation.
+    await this.assertSnapshot(completed);
+    await verifyBinding(binding,await this.targetReader.observe(binding));
+    await this.assertSnapshot(completed);
+    return completed;
   }
 
   async stageSend(input:StageSendInputV1,now=new Date(),expected?:BrowserAuthoritySnapshotV1):Promise<BrowserAuthoritySnapshotV1>{

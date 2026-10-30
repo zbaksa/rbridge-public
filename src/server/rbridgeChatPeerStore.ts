@@ -12,12 +12,20 @@ import {RbridgeChatEventStoreV1} from './rbridgeChatEventStore.js';
 import type {RbridgeChatCommandV1} from '../domain/rbridgeChatCommand.js';
 import {assertRbridgeReadQueryCurrent,correlateRbridgeReadQueryResult,parseRbridgeReadQuery,parseRbridgeReadQueryRecord,RBRIDGE_READ_QUERY_TTL_MS,type RbridgeReadQueryRecordV1} from '../domain/rbridgeReadQuery.js';
 
+import {assertScopeQuiescenceQueryCurrent,buildScopeQuiescenceQuery,buildScopeQuiescenceRecord,buildScopeResultInventory,parseNativeQuiescenceReport,parseScopeQuiescenceRecord,parseScopeStopRequest,RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY,type RbridgeScopeStopRequestV1,type RbridgeScopeQuiescenceQueryV1,type RbridgeScopeQuiescenceRecordV1,type RbridgeScopeResultInventoryV1} from '../domain/rbridgeScopeQuiescence.js';
+export interface RbridgeScopeStopSubmissionV1 {schema:'RBRIDGE_SCOPE_STOP_SUBMISSION_V1';request:RbridgeScopeStopRequestV1;record:RbridgeScopeQuiescenceRecordV1|null;status:'BLOCKED';reason:string}
+export interface RbridgeScopeStopObservationV1 {schema:'RBRIDGE_SCOPE_STOP_OBSERVATION_V1';request:RbridgeScopeStopRequestV1|null;record:RbridgeScopeQuiescenceRecordV1|null;status:'PASS'|'BLOCKED';reason:string|null}
+function stopQueryIdentity(id:unknown,nonce:unknown):void{
+  if(typeof id!=='string'||/^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/.exec(id)?.[0]!==id||typeof nonce!=='string'||/^[a-f0-9]{64}$/.exec(nonce)?.[0]!==nonce)fail('RBRIDGE_SCOPE_QUIESCENCE_INVALID');
+}
+function proofReason(error:unknown):string{return error instanceof Error&&/^(RBRIDGE_[A-Z0-9_]+|OUTPUT_BUDGET_EXCEEDED)$/.exec(error.message)?.[0]===error.message?error.message:'RBRIDGE_SCOPE_QUIESCENCE_UNAVAILABLE';}
+
 export interface RbridgeChatPeerConfigV3 {schema:'RBRIDGE_CHAT_PEER_CONFIG_V3';scope:V3Scope;peerPins:VerifiedPeerV3;initialHistory:NativeV3HistoryAnchor}
 export interface RbridgeChatCommandCommitV1 {schema:'RBRIDGE_CHAT_COMMAND_COMMIT_V1';commandId:string;commandSha256:string;requestDigest:string;transferSha256:string;totalBytes:number;chunkCount:number}
 export interface RbridgeChatCommandChunkV1 extends Omit<RbridgeChatCommandCommitV1,'schema'> {schema:'RBRIDGE_CHAT_COMMAND_CHUNK_V1';index:number;offset:number;dataBase64:string}
 interface Transfer {commit:RbridgeChatCommandCommitV1;chunks:(string|null)[]}
 interface CommandEntry {command:RbridgeChatEffectCommandV1;state:'QUEUED'|'DISPATCHED'}
-interface Journal {schema:'RBRIDGE_CHAT_PEER_JOURNAL_V3';appId:string;peerPinsSha256:string;revision:number;transfers:Transfer[];commands:CommandEntry[];queries?:RbridgeReadQueryRecordV1[];sha256:string}
+interface Journal {schema:'RBRIDGE_CHAT_PEER_JOURNAL_V3';appId:string;peerPinsSha256:string;revision:number;transfers:Transfer[];commands:CommandEntry[];queries?:RbridgeReadQueryRecordV1[];scopeStopRequest?:RbridgeScopeStopRequestV1;scopeStopQueries?:RbridgeScopeQuiescenceRecordV1[];sha256:string}
 interface Channel {schema:'RBRIDGE_CHAT_PEER_CHANNEL_V3';channelId:string;pid:number;processStart:string;scope:V3Scope;peerPins:VerifiedPeerV3;updatedAt:number;sha256:string}
 interface Context {config:RbridgeChatPeerConfigV3;events:RbridgeChatEventStoreV1;results:RbridgeEffectResultStoreV3;authority:NativeV3PeerAuthority;journal:Journal}
 const queues=new Map<string,Promise<void>>();
@@ -95,7 +103,7 @@ export class RbridgeChatPeerStoreV3 {
     const marker=await this.file(join(this.dataRoot,'authority.json'),16384),text=await this.file(join(this.dataRoot,'journal.json'),MAX_BYTES);
     if(marker!==null&&marker!==ownerText)fail('RBRIDGE_PEER_OWNER_PIN_MISMATCH');
     if(text===null){if(marker!==null)fail('RBRIDGE_PEER_JOURNAL_MISSING');return {schema:'RBRIDGE_CHAT_PEER_JOURNAL_V3',appId:owner.appId,peerPinsSha256:owner.peerPinsSha256,revision:0,transfers:[],commands:[],sha256:''};}
-    if(marker===null)fail('RBRIDGE_PEER_AUTHORITY_MISSING');let row:Record<string,unknown>;try{const parsed=JSON.parse(text);row=exact(parsed,['schema','appId','peerPinsSha256','revision','transfers','commands','sha256',...(Object.hasOwn(parsed,'queries')?['queries']:[])]);}catch{fail('RBRIDGE_PEER_JOURNAL_INVALID');}
+    if(marker===null)fail('RBRIDGE_PEER_AUTHORITY_MISSING');let row:Record<string,unknown>;try{const parsed=JSON.parse(text);row=exact(parsed,['schema','appId','peerPinsSha256','revision','transfers','commands','sha256',...(Object.hasOwn(parsed,'queries')?['queries']:[]),...(Object.hasOwn(parsed,'scopeStopRequest')?['scopeStopRequest']:[]),...(Object.hasOwn(parsed,'scopeStopQueries')?['scopeStopQueries']:[])]);}catch{fail('RBRIDGE_PEER_JOURNAL_INVALID');}
     const {sha256,...body}=row;if(row.schema!=='RBRIDGE_CHAT_PEER_JOURNAL_V3'||row.appId!==owner.appId||row.peerPinsSha256!==owner.peerPinsSha256||!Number.isSafeInteger(row.revision)||Number(row.revision)<1||text!==canonicalJson(row)+'\n'||sha256!==await canonicalDigest(body)||!Array.isArray(row.transfers)||row.transfers.length>MAX_TRANSFERS||!Array.isArray(row.commands)||row.commands.length>MAX_COMMANDS)fail('RBRIDGE_PEER_JOURNAL_INVALID');
     const ids=new Set<string>();for(const entry of row.transfers){const t=exact(entry,['commit','chunks']),c=commit(t.commit);if(ids.has(c.commandId)||!Array.isArray(t.chunks)||t.chunks.length!==c.chunkCount)fail('RBRIDGE_PEER_JOURNAL_INVALID');ids.add(c.commandId);for(let i=0;i<t.chunks.length;i++)if(t.chunks[i]!==null)chunk({...c,schema:'RBRIDGE_CHAT_COMMAND_CHUNK_V1',index:i,offset:i*CHUNK_BYTES,dataBase64:t.chunks[i]});}
     ids.clear();for(const entry of row.commands){const e=exact(entry,['command','state']),c=await parseEffectCommand(e.command,config.peerPins.maxMessageBytes);if(c.request.appId!==owner.appId||ids.has(c.commandId)||!['QUEUED','DISPATCHED'].includes(String(e.state)))fail('RBRIDGE_PEER_JOURNAL_INVALID');ids.add(c.commandId);}
@@ -104,23 +112,29 @@ export class RbridgeChatPeerStoreV3 {
       const occupied=new Set([...row.commands.map(entry=>(entry as CommandEntry).command.commandId),...row.transfers.map(entry=>(entry as Transfer).commit.commandId)]);
       for(const input of row.queries){const query=await parseRbridgeReadQueryRecord(input);if(query.scope.appId!==owner.appId||occupied.has(query.command.commandId))fail('RBRIDGE_PEER_JOURNAL_INVALID');occupied.add(query.command.commandId);}
     }
+    if(Object.hasOwn(row,'scopeStopRequest')){const request=row.scopeStopRequest as RbridgeScopeStopRequestV1;await parseScopeStopRequest(request,parseV3Scope(request.scope));if(request.scope.appId!==owner.appId)fail('RBRIDGE_PEER_JOURNAL_INVALID');}
+    if(Object.hasOwn(row,'scopeStopQueries')){
+      if(!row.scopeStopRequest||!Array.isArray(row.scopeStopQueries)||row.scopeStopQueries.length>MAX_QUERIES)fail('RBRIDGE_PEER_JOURNAL_INVALID');
+      const occupied=new Set([...row.commands.map(entry=>(entry as CommandEntry).command.commandId),...row.transfers.map(entry=>(entry as Transfer).commit.commandId),...((row.queries??[]) as RbridgeReadQueryRecordV1[]).map(query=>query.command.commandId)]);
+      for(const input of row.scopeStopQueries){const record=await parseScopeQuiescenceRecord(input);if(!same(record.query.request,row.scopeStopRequest)||record.query.peerPinsSha256!==owner.peerPinsSha256||occupied.has(record.query.queryId))fail('RBRIDGE_PEER_JOURNAL_INVALID');occupied.add(record.query.queryId);}
+    }
     return row as unknown as Journal;
   }
-  private budget(journal:Journal):void{if(journal.commands.length>MAX_COMMANDS||(journal.queries?.length??0)>MAX_QUERIES||journal.transfers.length>MAX_TRANSFERS||Buffer.byteLength(canonicalJson({...journal,revision:Number.MAX_SAFE_INTEGER,sha256:'0'.repeat(64)})+'\n')>MAX_BYTES)fail('RBRIDGE_PEER_SPOOL_BUDGET_EXCEEDED');}
+  private budget(journal:Journal):void{if(journal.commands.length>MAX_COMMANDS||(journal.queries?.length??0)>MAX_QUERIES||(journal.scopeStopQueries?.length??0)>MAX_QUERIES||journal.transfers.length>MAX_TRANSFERS||Buffer.byteLength(canonicalJson({...journal,revision:Number.MAX_SAFE_INTEGER,sha256:'0'.repeat(64)})+'\n')>MAX_BYTES)fail('RBRIDGE_PEER_SPOOL_BUDGET_EXCEEDED');}
   private async persist(journal:Journal):Promise<void>{
     if(journal.revision>=Number.MAX_SAFE_INTEGER)fail('RBRIDGE_PEER_REVISION_LIMIT');this.budget(journal);
     if(journal.revision===0){const owner={schema:'RBRIDGE_CHAT_PEER_AUTHORITY_V3',appId:journal.appId,peerPinsSha256:journal.peerPinsSha256},text=canonicalJson({...owner,sha256:await canonicalDigest(owner)})+'\n';const handle=await open(join(this.dataRoot,'authority.json'),constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);try{await handle.writeFile(text);await handle.sync();}finally{await handle.close();}await this.sync(this.dataRoot);}
     const {sha256:prior,...body}=journal;void prior;body.revision++;const next={...body,sha256:await canonicalDigest(body)};await this.atomic('journal.json',canonicalJson(next)+'\n');Object.assign(journal,next);
   }
-  private async exclusive<T>(fn:(context:Context)=>Promise<T>):Promise<T>{
+  private async exclusive<T>(fn:(context:Context)=>Promise<T>,initialize=true):Promise<T>{
     const key=process.platform==='win32'?this.dataRoot.toLowerCase():this.dataRoot,prior=queues.get(key)??Promise.resolve();let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});queues.set(key,gate);await prior;
     let lock:Awaited<ReturnType<typeof open>>|undefined,identity:{ino:number;dev:number}|undefined;
     try{
-      if(this.faulted)fail('RBRIDGE_PEER_STORE_FAULTED');const config=await this.config();await this.directory(this.dataRoot,true);await this.sync(this.root);
+      if(this.faulted)fail('RBRIDGE_PEER_STORE_FAULTED');const config=await this.config();await this.directory(this.dataRoot,initialize);await this.sync(this.root);
       const operation=async()=>{
         // Each operation reloads originals; the fixed Linux peer and nested result journal share process-safe gates.
         const events=new RbridgeChatEventStoreV1({root:this.root}),results=new RbridgeEffectResultStoreV3({eventStoreRoot:this.root,scope:config.scope,maxMessageBytes:config.peerPins.maxMessageBytes,crossProcess:true}),authority=new NativeV3PeerAuthority({eventStoreRoot:this.root,appId:config.scope.appId,peerPins:config.peerPins,initialHistory:config.initialHistory});
-        const eventFile=await this.file(join(this.root,'events.ndjson'),MAX_BYTES);void eventFile;await authority.initialize(events,results);
+        const eventFile=await this.file(join(this.root,'events.ndjson'),MAX_BYTES);void eventFile;if(initialize)await authority.initialize(events,results);
         return fn({config,events,results,authority,journal:await this.journal(config)});
       };
       if(process.platform==='linux')return await withPrivateLinuxFileGate(this.dataRoot,'RBRIDGE_PEER',operation);
@@ -164,20 +178,20 @@ export class RbridgeChatPeerStoreV3 {
   }
   async stageChunk(input:unknown):Promise<void>{
     const immutable=snapshotNativeMessage(input,8192),data=chunk(immutable);return this.exclusive(async c=>{
-      await this.channel(c);if(c.journal.queries?.some(query=>query.command.commandId===data.commandId))fail('REQUEST_ID_COLLISION');if(data.totalBytes>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');const {index,offset,dataBase64,...body}=data;void offset;const descriptor=commit({...body,schema:'RBRIDGE_CHAT_COMMAND_COMMIT_V1'});
-      await this.retireCompletedTransfers(c);const completed=c.journal.commands.find(e=>e.command.commandId===data.commandId);
+      await this.channel(c);if(this.controlId(c,data.commandId)||c.journal.queries?.some(query=>query.command.commandId===data.commandId))fail('REQUEST_ID_COLLISION');if(data.totalBytes>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');const {index,offset,dataBase64,...body}=data;void offset;const descriptor=commit({...body,schema:'RBRIDGE_CHAT_COMMAND_COMMIT_V1'});
+      if(!this.stopped(c))await this.retireCompletedTransfers(c);const completed=c.journal.commands.find(e=>e.command.commandId===data.commandId);
       if(completed){const replay=Array.from({length:data.chunkCount},()=>null as string|null);replay[index]=dataBase64;await this.replayTransfer(completed.command,descriptor,replay);return;}
       let transfer=c.journal.transfers.find(t=>t.commit.commandId===data.commandId);if(transfer&&!same(transfer.commit,descriptor))fail('REQUEST_ID_COLLISION');
-      if(!transfer){transfer={commit:descriptor,chunks:Array.from({length:data.chunkCount},()=>null)};c.journal.transfers.push(transfer);}
+      if(!transfer){if(this.stopped(c))fail('RBRIDGE_SCOPE_STOP_REQUESTED');transfer={commit:descriptor,chunks:Array.from({length:data.chunkCount},()=>null)};c.journal.transfers.push(transfer);}
       const old=transfer.chunks[index];if(old!==null){if(old!==dataBase64)fail('REQUEST_ID_COLLISION');return;}
-      transfer.chunks[index]=dataBase64;await this.persist(c.journal);
+      if(this.stopped(c))fail('RBRIDGE_SCOPE_STOP_REQUESTED');transfer.chunks[index]=dataBase64;await this.persist(c.journal);
     });
   }
   async commitCommand(input:unknown):Promise<void>{
     const immutable=snapshotNativeMessage(input,2048),descriptor=commit(immutable);return this.exclusive(async c=>{
-      await this.channel(c);if(c.journal.queries?.some(query=>query.command.commandId===descriptor.commandId))fail('REQUEST_ID_COLLISION');await this.retireCompletedTransfers(c);const completed=c.journal.commands.find(e=>e.command.commandId===descriptor.commandId);
+      await this.channel(c);if(this.controlId(c,descriptor.commandId)||c.journal.queries?.some(query=>query.command.commandId===descriptor.commandId))fail('REQUEST_ID_COLLISION');if(!this.stopped(c))await this.retireCompletedTransfers(c);const completed=c.journal.commands.find(e=>e.command.commandId===descriptor.commandId);
       if(completed){await this.replayTransfer(completed.command,descriptor,Array.from({length:descriptor.chunkCount},()=>null));return;}
-      const t=c.journal.transfers.find(t=>t.commit.commandId===descriptor.commandId);if(!t||t.chunks.some(x=>x===null))fail('PARTIAL_COMMAND_UNCERTAIN');if(!same(t.commit,descriptor))fail('REQUEST_ID_COLLISION');
+      const t=c.journal.transfers.find(t=>t.commit.commandId===descriptor.commandId);if(t&&!same(t.commit,descriptor))fail('REQUEST_ID_COLLISION');if(this.stopped(c))fail('RBRIDGE_SCOPE_STOP_REQUESTED');if(!t||t.chunks.some(x=>x===null))fail('PARTIAL_COMMAND_UNCERTAIN');
       const bytes=Buffer.concat(t.chunks.map(x=>Buffer.from(x!,'base64')));if(bytes.length!==descriptor.totalBytes||await sha256Hex(bytes)!==descriptor.transferSha256)fail('RBRIDGE_PEER_TRANSFER_DIGEST_MISMATCH');
       let text:string,input:unknown;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);input=JSON.parse(text);}catch{fail('RBRIDGE_PEER_COMMAND_JSON_INVALID');}
       const command=await parseEffectCommand(input,c.config.peerPins.maxMessageBytes);if(canonicalJson(command)!==text||command.commandId!==descriptor.commandId||command.commandSha256!==descriptor.commandSha256||command.request.requestDigest!==descriptor.requestDigest)fail('RBRIDGE_PEER_COMMAND_IDENTITY_MISMATCH');
@@ -188,9 +202,10 @@ export class RbridgeChatPeerStoreV3 {
     const immutable=snapshotNativeMessage(input,65536),scope=parseV3Scope(scopeInput);return this.exclusive(async c=>{await this.channel(c);await this.enqueueValidated(await parseEffectCommand(immutable,c.config.peerPins.maxMessageBytes),scope,c);});
   }
   private async enqueueValidated(command:RbridgeChatEffectCommandV1,scope:V3Scope,c:Context):Promise<void>{
-    if(c.journal.queries?.some(query=>query.command.commandId===command.commandId))fail('REQUEST_ID_COLLISION');
+    if(this.controlId(c,command.commandId)||c.journal.queries?.some(query=>query.command.commandId===command.commandId))fail('REQUEST_ID_COLLISION');
     if(!same(scope,c.config.scope)||!sameScope(command,scope))fail('RBRIDGE_PEER_SCOPE_MISMATCH');c.authority.validateTarget(command.request.payload.target);
     const old=c.journal.commands.find(e=>e.command.commandId===command.commandId);if(old){if(!same(old.command,command))fail('REQUEST_ID_COLLISION');return;}
+    if(this.stopped(c))fail('RBRIDGE_SCOPE_STOP_REQUESTED');
     // Generation changes retain uncertain old sends; a later authenticated result is stored, never relabelled.
     if(command.action==='EXECUTE'){
       const terminal=new Set((await c.results.replay()).filter(r=>['VERIFIED','FAILED_SAFE'].includes(r.state)).map(r=>r.commandId));
@@ -208,9 +223,10 @@ export class RbridgeChatPeerStoreV3 {
       if(!same(query.scope,c.config.scope))fail('RBRIDGE_READ_QUERY_SCOPE_MISMATCH');
       if(Buffer.byteLength(canonicalJson(query.command))>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');
       const id=query.command.commandId;
-      if(c.journal.commands.some(entry=>entry.command.commandId===id)||c.journal.transfers.some(entry=>entry.commit.commandId===id)||(await c.results.readRetained(id))!==null)fail('REQUEST_ID_COLLISION');
+      if(this.controlId(c,id)||c.journal.commands.some(entry=>entry.command.commandId===id)||c.journal.transfers.some(entry=>entry.commit.commandId===id)||(await c.results.readRetained(id))!==null)fail('REQUEST_ID_COLLISION');
       const old=c.journal.queries?.find(entry=>entry.command.commandId===id);
-      if(old){if(!same(old.scope,query.scope)||!same(old.command,query.command))fail('REQUEST_ID_COLLISION');assertRbridgeReadQueryCurrent(old,c.config.scope,channel.channelId);return structuredClone(old);}
+      if(old){if(!same(old.scope,query.scope)||!same(old.command,query.command))fail('REQUEST_ID_COLLISION');if(this.stopped(c))fail('RBRIDGE_SCOPE_STOP_REQUESTED');assertRbridgeReadQueryCurrent(old,c.config.scope,channel.channelId);return structuredClone(old);}
+      if(this.stopped(c))fail('RBRIDGE_SCOPE_STOP_REQUESTED');
       if((c.journal.queries?.length??0)>=MAX_QUERIES)fail('RBRIDGE_READ_QUERY_RECORD_LIMIT');
       const submittedAt=Date.now(),record=await parseRbridgeReadQueryRecord({schema:'RBRIDGE_CHAT_READ_QUERY_RECORD_V1',...query,channelId:channel.channelId,submittedAt,expiresAt:submittedAt+RBRIDGE_READ_QUERY_TTL_MS,state:'QUEUED',result:null,receivedAt:null});
       c.journal.queries=[...(c.journal.queries??[]),record];await this.persist(c.journal);
@@ -220,12 +236,102 @@ export class RbridgeChatPeerStoreV3 {
   async readQuery(id:string,scopeInput:V3Scope):Promise<RbridgeReadQueryRecordV1|null>{
     commandId(id);const scope=parseV3Scope(snapshotNativeMessage(scopeInput,1024));return this.exclusive(async c=>{
       if(!same(scope,c.config.scope))fail('RBRIDGE_READ_QUERY_SCOPE_MISMATCH');const channel=await this.channel(c),record=c.journal.queries?.find(entry=>entry.command.commandId===id);
-      if(!record)return null;assertRbridgeReadQueryCurrent(record,scope,channel.channelId);return structuredClone(record);
+      if(this.stopped(c))fail('RBRIDGE_SCOPE_STOP_REQUESTED');if(!record)return null;assertRbridgeReadQueryCurrent(record,scope,channel.channelId);return structuredClone(record);
     });
   }
-  async takeForDispatch():Promise<RbridgeChatEffectCommandV1|RbridgeChatCommandV1|null>{return this.exclusive(async c=>{
-    const channel=await this.channel(c,true),entry=c.journal.commands.find(e=>e.state==='QUEUED'&&sameScope(e.command,c.config.scope));
+
+  private stopped(c:Context):boolean{return c.journal.scopeStopRequest!==undefined&&same(c.journal.scopeStopRequest.scope,c.config.scope);}
+  private controlId(c:Context,id:string):boolean{return Boolean(c.journal.scopeStopQueries?.some(record=>record.query.queryId===id));}
+  private currentStopQuery(c:Context,query:RbridgeScopeQuiescenceQueryV1,channel:Channel,now=Date.now()):void{
+    if(!c.config.peerPins.capabilities.includes(RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY))fail('RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY_REQUIRED');
+    if(!c.journal.scopeStopRequest||!same(query.request,c.journal.scopeStopRequest))fail('RBRIDGE_SCOPE_QUIESCENCE_REQUEST_MISMATCH');
+    assertScopeQuiescenceQueryCurrent(query,{scope:c.config.scope,channelId:channel.channelId,peerPinsSha256:c.journal.peerPinsSha256,now});
+  }
+  /** A STOP admission fence is durable before remote proof availability is considered. */
+  async requestScopeStop(input:unknown):Promise<RbridgeScopeStopSubmissionV1>{
+    const row=exact(snapshotNativeMessage(input,8192),['request','queryId','queryNonce']);stopQueryIdentity(row.queryId,row.queryNonce);
+    return this.exclusive(async c=>{
+      const request=await parseScopeStopRequest(row.request,c.config.scope),id=row.queryId as string,nonce=row.queryNonce as string;
+      if(c.journal.scopeStopRequest&&!same(c.journal.scopeStopRequest,request))fail('REQUEST_ID_COLLISION');
+      if(c.journal.commands.some(entry=>entry.command.commandId===id)||c.journal.transfers.some(entry=>entry.commit.commandId===id)||c.journal.queries?.some(entry=>entry.command.commandId===id)||(await c.results.readRetained(id))!==null)fail('REQUEST_ID_COLLISION');
+      const prior=c.journal.scopeStopQueries?.find(record=>record.query.queryId===id);
+      if(prior&&(!same(prior.query.request,request)||prior.query.queryNonce!==nonce))fail('REQUEST_ID_COLLISION');
+      if(!c.journal.scopeStopRequest){c.journal.scopeStopRequest=request;await this.persist(c.journal);}
+      const response=(record:RbridgeScopeQuiescenceRecordV1|null,reason:string):RbridgeScopeStopSubmissionV1=>({schema:'RBRIDGE_SCOPE_STOP_SUBMISSION_V1',request:structuredClone(c.journal.scopeStopRequest!),record:record?structuredClone(record):null,status:'BLOCKED',reason});
+      let channel:Channel;
+      try{channel=await this.channel(c);if(!c.config.peerPins.capabilities.includes(RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY))return response(prior??null,'RBRIDGE_SCOPE_QUIESCENCE_CAPABILITY_REQUIRED');}
+      catch(error){return response(prior??null,proofReason(error));}
+      if(prior){try{this.currentStopQuery(c,prior.query,channel);}catch(error){return response(prior,proofReason(error));}return response(prior,'RBRIDGE_SCOPE_QUIESCENCE_PENDING');}
+      if((c.journal.scopeStopQueries?.length??0)>=MAX_QUERIES)return response(null,'RBRIDGE_SCOPE_QUIESCENCE_RECORD_LIMIT');
+      const query=await buildScopeQuiescenceQuery({queryId:id,queryNonce:nonce,request:c.journal.scopeStopRequest!,channelId:channel.channelId,peerPinsSha256:c.journal.peerPinsSha256,submittedAt:Date.now()});
+      if(Buffer.byteLength(canonicalJson(query))>c.config.peerPins.maxMessageBytes)return response(null,'OUTPUT_BUDGET_EXCEEDED');
+      const record=await buildScopeQuiescenceRecord({query,state:'QUEUED',nativeReport:null,receivedAt:null});
+      c.journal.scopeStopQueries=[...(c.journal.scopeStopQueries??[]),record];await this.persist(c.journal);
+      return response(record,'RBRIDGE_SCOPE_QUIESCENCE_PENDING');
+    });
+  }
+  private async stopInventory(c:Context):Promise<RbridgeScopeResultInventoryV1>{
+    const commands=c.journal.commands.filter(entry=>sameScope(entry.command,c.config.scope)).sort((a,b)=>a.command.commandId<b.command.commandId?-1:a.command.commandId>b.command.commandId?1:0);
+    const entries:{command:RbridgeChatEffectCommandV1;result:RbridgeChatEffectResultV1|null}[]=[];
+    for(const entry of commands){const retained=await c.results.readRetained(entry.command.commandId);if(!retained||!same(retained.command,entry.command))fail('RBRIDGE_SCOPE_QUIESCENCE_INVENTORY_MISMATCH');entries.push({command:entry.command,result:retained.result});}
+    const terminal=(entry:typeof entries[number])=>entry.result?.state==='VERIFIED'||entry.result?.state==='FAILED_SAFE',reconciliations=new Map<string,string>();
+    for(const entry of entries)if(entry.command.action==='RECONCILE'&&terminal(entry)&&!reconciliations.has(canonicalJson(entry.command.request)))reconciliations.set(canonicalJson(entry.command.request),entry.command.commandId);
+    const evidence=entries.map(entry=>({...entry,resolvedByCommandId:terminal(entry)?entry.command.commandId:reconciliations.get(canonicalJson(entry.command.request))??null}));
+    const inventory=await buildScopeResultInventory({scope:c.config.scope,entryCount:evidence.length,unresolvedCount:evidence.filter(entry=>entry.resolvedByCommandId===null).length,entriesSha256:await canonicalDigest(evidence)});
+    // The separate complete result journal detects orphan reservations as well as every null result.
+    const durable=await c.results.readScopeInventory(c.config.scope);
+    if(durable.entryCount!==inventory.entryCount||durable.unresolvedCount!==inventory.unresolvedCount||durable.entriesSha256!==inventory.entriesSha256)fail('RBRIDGE_SCOPE_QUIESCENCE_INVENTORY_MISMATCH');
+    return inventory;
+  }
+  private async deriveScopeStop(c:Context,record:RbridgeScopeQuiescenceRecordV1):Promise<void>{
+    const owner={schema:'RBRIDGE_NATIVE_V3_PEER_OWNER_V1',appId:c.config.scope.appId,peerPins:c.config.peerPins,initialHistory:c.config.initialHistory};
+    if(await this.file(join(this.root,'v3-peer-owner.json'),16384)!==canonicalJson({...owner,sha256:await canonicalDigest(owner)})+'\n')fail('RBRIDGE_NATIVE_PEER_OWNER_PIN_MISMATCH');
+    let channel=await this.channel(c);this.currentStopQuery(c,record.query,channel);
+    if(record.state!=='COMPLETE'||record.nativeReport===null)fail('RBRIDGE_SCOPE_QUIESCENCE_PENDING');
+    const report=await parseNativeQuiescenceReport(record.nativeReport,record.query),worker=report.worker;
+    if(!worker.sealed||!worker.captureStopped||worker.pendingHandlers!==0||worker.pendingReaders!==0||worker.pendingEgress!==0||worker.unresolvedCaptureCount!==0)fail('RBRIDGE_SCOPE_QUIESCENCE_WORK_PENDING');
+    const now=Date.now();for(const observedAt of [worker.observedAt,report.observedAt]){
+      const observed=Date.parse(observedAt);if(observed<record.query.submittedAt||observed>record.receivedAt!||observed>now)fail('RBRIDGE_SCOPE_QUIESCENCE_STALE');
+    }
+    if(Date.parse(worker.observedAt)>Date.parse(report.observedAt))fail('RBRIDGE_SCOPE_QUIESCENCE_STALE');
+    if(c.journal.transfers.length!==0||c.journal.commands.some(entry=>sameScope(entry.command,c.config.scope)&&entry.state==='QUEUED'))fail('RBRIDGE_SCOPE_QUIESCENCE_WORK_PENDING');
+    // Expired ordinary queries remain durable history, classified expired rather than active work.
+    if(c.journal.queries?.some(query=>same(query.scope,c.config.scope)&&query.state!=='COMPLETE'&&now<query.expiresAt))fail('RBRIDGE_SCOPE_QUIESCENCE_WORK_PENDING');
+    const inventory=await this.stopInventory(c);
+    if(inventory.unresolvedCount!==0||!same(inventory,worker.resultInventory)||!same(inventory,report.resultInventory))fail('RBRIDGE_SCOPE_QUIESCENCE_INVENTORY_MISMATCH');
+    const events=await c.events.load(),last=events.at(-1),head={sequence:last?.sequence??0,eventSha256:last?.eventSha256??null};
+    const anchor=c.config.initialHistory;if(events.length<anchor.sequence||(anchor.sequence>0&&events[anchor.sequence-1]?.eventSha256!==anchor.eventSha256))fail('RBRIDGE_NATIVE_HISTORY_OWNERSHIP_UNVERIFIED');
+    if(!same(head,worker.eventHead)||!same(head,report.eventHead))fail('RBRIDGE_SCOPE_QUIESCENCE_EVENT_HEAD_MISMATCH');
+    // Recheck transport liveness after the complete durable evidence walk.
+    channel=await this.channel(c);this.currentStopQuery(c,record.query,channel);
+  }
+  /** Reads originals under the existing gate; no stored report boolean is a PASS cache. */
+  async readScopeStop(input:unknown):Promise<RbridgeScopeStopObservationV1>{
+    const row=exact(snapshotNativeMessage(input,8192),['scope','requestId','requestDigest','queryId','queryNonce']),scope=parseV3Scope(row.scope);
+    commandId(row.requestId);stopQueryIdentity(row.queryId,row.queryNonce);if(typeof row.requestDigest!=='string'||/^[a-f0-9]{64}$/.exec(row.requestDigest)?.[0]!==row.requestDigest)fail('RBRIDGE_SCOPE_QUIESCENCE_INVALID');
+    let request:RbridgeScopeStopRequestV1|null=null,record:RbridgeScopeQuiescenceRecordV1|null=null;
+    const response=(reason:string|null):RbridgeScopeStopObservationV1=>({schema:'RBRIDGE_SCOPE_STOP_OBSERVATION_V1',request:request?structuredClone(request):null,record:record?structuredClone(record):null,status:reason===null?'PASS':'BLOCKED',reason});
+    try{return await this.exclusive(async c=>{
+      request=c.journal.scopeStopRequest??null;
+      if(request===null)return response('RBRIDGE_SCOPE_STOP_NOT_REQUESTED');
+      if(!same(scope,c.config.scope)||!same(request.scope,scope)||row.requestId!==request.requestId||row.requestDigest!==request.requestDigest)return response('RBRIDGE_SCOPE_QUIESCENCE_REQUEST_MISMATCH');
+      record=c.journal.scopeStopQueries?.find(entry=>entry.query.queryId===row.queryId)??null;
+      if(!record||record.query.queryNonce!==row.queryNonce||!same(record.query.request,request))return response('RBRIDGE_SCOPE_QUIESCENCE_QUERY_MISMATCH');
+      await this.deriveScopeStop(c,record);return response(null);
+    },false);}catch(error){return response(errno(error)==='ENOENT'?'RBRIDGE_SCOPE_STOP_NOT_REQUESTED':proofReason(error));}
+  }
+
+  async takeForDispatch():Promise<RbridgeChatEffectCommandV1|RbridgeChatCommandV1|RbridgeScopeQuiescenceQueryV1|null>{return this.exclusive(async c=>{
+    const channel=await this.channel(c,true),stop=c.journal.scopeStopQueries?.find(record=>record.state==='QUEUED'&&record.query.channelId===channel.channelId&&Date.now()>=record.query.submittedAt&&Date.now()<record.query.expiresAt);
+    if(stop){
+      this.currentStopQuery(c,stop.query,channel);
+      const dispatched=await buildScopeQuiescenceRecord({query:stop.query,state:'DISPATCHED',nativeReport:null,receivedAt:null});Object.assign(stop,dispatched);await this.persist(c.journal);
+      try{this.currentStopQuery(c,stop.query,await this.channel(c,true));}catch(error){if(error instanceof Error&&error.message==='RBRIDGE_SCOPE_QUIESCENCE_STALE')return null;throw error;}
+      return structuredClone(stop.query);
+    }
+    const entry=c.journal.commands.find(e=>e.state==='QUEUED'&&sameScope(e.command,c.config.scope)&&(!this.stopped(c)||e.command.action==='RECONCILE'));
     if(entry){entry.state='DISPATCHED';await this.persist(c.journal);await this.channel(c,true);return structuredClone(entry.command);}
+    if(this.stopped(c))return null;
     const now=Date.now(),query=c.journal.queries?.find(record=>record.state==='QUEUED'&&same(record.scope,c.config.scope)&&record.channelId===channel.channelId&&now>=record.submittedAt&&now<record.expiresAt);
     if(!query)return null;query.state='DISPATCHED';await this.persist(c.journal);const current=await this.channel(c,true),observedAt=Date.now();
     // A durable dispatch reservation is retained even when it expires before output.
@@ -239,6 +345,18 @@ export class RbridgeChatPeerStoreV3 {
         const id=this.channelId??randomBytes(16).toString('hex');await this.saveChannel({schema:'RBRIDGE_CHAT_PEER_CHANNEL_V3',channelId:id,pid:process.pid,processStart:await processStart(process.pid),scope:c.config.scope,peerPins:c.config.peerPins,updatedAt:Date.now()});this.channelId=id;return;
       }
       const channel=await this.channel(c,true);if(Buffer.byteLength(canonicalJson(immutable))>c.config.peerPins.maxMessageBytes)fail('OUTPUT_BUDGET_EXCEEDED');
+      if(schema==='RBRIDGE_SCOPE_QUIESCENCE_NATIVE_V1'){
+        const hash=(immutable as {querySha256?:unknown}).querySha256,record=c.journal.scopeStopQueries?.find(entry=>entry.query.sha256===hash);
+        if(!record||record.state==='QUEUED')fail('RBRIDGE_SCOPE_QUIESCENCE_REPORT_UNSOLICITED');
+        const report=await parseNativeQuiescenceReport(immutable,record.query);
+        if(record.nativeReport!==null&&!same(record.nativeReport,report))fail('REQUEST_ID_COLLISION');
+        const receivedAt=Date.now();
+        try{this.currentStopQuery(c,record.query,channel,receivedAt);}catch(error){if(error instanceof Error&&error.message==='RBRIDGE_SCOPE_QUIESCENCE_STALE'&&receivedAt>=record.query.expiresAt)return;throw error;}
+        if(record.nativeReport!==null)return;
+        for(const observedAt of [report.observedAt,report.worker.observedAt])if(Date.parse(observedAt)<record.query.submittedAt||Date.parse(observedAt)>receivedAt)fail('RBRIDGE_SCOPE_QUIESCENCE_STALE');
+        if(Date.parse(report.worker.observedAt)>Date.parse(report.observedAt))fail('RBRIDGE_SCOPE_QUIESCENCE_STALE');
+        Object.assign(record,await buildScopeQuiescenceRecord({query:record.query,state:'COMPLETE',nativeReport:report,receivedAt}));await this.persist(c.journal);return;
+      }
       if(schema==='RBRIDGE_CHAT_COMMAND_RESULT_V1'){
         const id=commandId((immutable as {commandId?:unknown}).commandId),record=c.journal.queries?.find(query=>query.command.commandId===id);
         if(!record||record.state==='QUEUED')fail('RBRIDGE_READ_QUERY_RESULT_UNSOLICITED');
