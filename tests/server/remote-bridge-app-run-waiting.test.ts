@@ -159,8 +159,7 @@ describe('APP_RUN occupied-writer durable admission',()=>{
     };
     writerBusy=false;
     clock=LATER; // Original intake TTL has now expired, but the durable claim remains.
-    const withHold={...TRANSPORT,now,store,github,controller,admissionHold}
-      as unknown as Parameters<typeof createRemoteBridgeWorker>[0];
+    const withHold={...TRANSPORT,now,store,github,controller,admissionHold};
     expect(await createRemoteBridgeWorker(withHold).runOnce())
       .toMatchObject({pending:1,published:0,blocked:0});
     expect(holdObserved).toHaveLength(1);
