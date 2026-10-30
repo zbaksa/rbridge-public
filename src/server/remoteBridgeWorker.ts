@@ -11,7 +11,8 @@ interface FilePort {execute(operation:Extract<RemoteBridgeRequestV2['operation']
 interface ChunkPort {putChunk(input:{transferId:string;index:number;count:number;dataBase64:string;chunkSha256:string;objectSha256:string;expiresAt:string}):Promise<unknown>;getChunk(transferId:string,index:number):Promise<unknown>;finalizeTransfer(transferId:string):Promise<unknown>;}
 interface HealthPort {snapshot():unknown|Promise<unknown>;}
 interface ProcessPort {execute(operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'PROCESS'}>,requestDigest:string):Promise<unknown>;}
-export interface RemoteBridgeWorkerOptions {store:Store;github:GitHubPort;controller:ControllerPort;fileOps?:FilePort;chunkStore?:ChunkPort;health?:HealthPort;processSessions?:ProcessPort;now?:()=>Date;maxIssues?:number;repository:string;authorLogin:string;instanceId:string;}
+export interface AppRunHoldIdentity {appId:string;requestId:string;jobId:string;requestSha256:string;issueNumber:number;}
+export interface RemoteBridgeWorkerOptions {store:Store;github:GitHubPort;controller:ControllerPort;fileOps?:FilePort;chunkStore?:ChunkPort;health?:HealthPort;processSessions?:ProcessPort;now?:()=>Date;maxIssues?:number;repository:string;authorLogin:string;instanceId:string;admissionHold?:(identity:Readonly<AppRunHoldIdentity>)=>Promise<boolean>;}
 export interface RemoteBridgeRunSummary {seen:number;pending:number;published:number;blocked:number;errors:number;}
 interface BridgeResultV1 {schema:'COCWIN_REMOTE_BRIDGE_RESULT_V1';requestId:string;issueNumber:number;status:'PASS'|'FAIL'|'BLOCKED'|'UNCERTAIN';requestSha256:string;resultSha256?:string;controllerResult?:Record<string,unknown>;reason?:string;completedAt:string;}
 interface BridgeResultV2 {schema:'COCWIN_REMOTE_BRIDGE_RESULT_V2';requestId:string;issueNumber:number;status:'PASS'|'FAIL'|'BLOCKED'|'UNCERTAIN';requestSha256:string;resultSha256?:string;operationResult?:unknown;reason?:string;completedAt:string;}
@@ -54,6 +55,15 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
   // same app/job/payload is idempotent at the protected controller boundary.
   async function submitWaitingV2App(request:RemoteBridgeRequestV2&{operation:Extract<RemoteBridgeRequestV2['operation'],{kind:'APP_RUN'}>},issue:GitHubBridgeIssue,digest:string,summary:RemoteBridgeRunSummary){
     const operation=request.operation;
+    // An injected trusted owner HOLD can suspend this app's pending submission
+    // without publishing a result, modifying its durable WAITING row, or
+    // touching the protected controller. Unknown hold decisions fail closed.
+    if(options.admissionHold){
+      try{
+        const held=await options.admissionHold({appId:operation.appId,requestId:request.requestId,jobId:operation.jobId,requestSha256:digest,issueNumber:issue.number});
+        if(held!==false){summary.pending++;if(held!==true)summary.errors++;return;}
+      }catch{summary.pending++;summary.errors++;return;}
+    }
     let status:Record<string,unknown>;
     try{status=await options.controller.submit(operation.appId,operation.jobId,operation.payload);}
     catch{summary.pending++;summary.errors++;return;}
@@ -109,6 +119,10 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
     }
     const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,scopeSha256,issueNumber:issue.number,jobId:request.jobId});
     if(claim.state==='SCOPE_MISMATCH'){
+      // A pre-scope historical record is not a definitive rejection: publishing
+      // BLOCKED would close its Issue while its durable work remains unresolved.
+      // Leave the exact original bytes untouched pending separately qualified migration.
+      if(claim.record.scopeSha256===undefined){summary.pending++;summary.errors++;return;}
       try{await options.github.publishResult(issue.number,blockedV1(issue,digest,'REQUEST_SCOPE_MISMATCH',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
       return;
     }
@@ -121,6 +135,14 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
     }
     if(claim.state==='REPLAY'&&claim.record.phase==='SUBMITTED'){await reconcileV1(request,issue,digest,summary);return;}
     if(claim.state==='REPLAY'&&claim.record.phase!=='CLAIMED'){summary.errors++;return;}
+    // V1 shares the same owner HOLD decision as V2 before any controller effect.
+    // A held V1 remains in the durable CLAIMED phase without publishing an Issue result.
+    if(options.admissionHold){
+      try{
+        const held=await options.admissionHold({appId:request.appId,requestId:request.requestId,jobId:request.jobId,requestSha256:digest,issueNumber:issue.number});
+        if(held!==false){summary.pending++;if(held!==true)summary.errors++;return;}
+      }catch{summary.pending++;summary.errors++;return;}
+    }
     await options.store.markSubmitted(request.requestId,digest);
     let status:Record<string,unknown>;
     try{status=await options.controller.submit(request.appId,request.jobId,request.payload);}catch{summary.pending++;summary.errors++;return;}
@@ -156,6 +178,10 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
     const operation=request.operation,jobId=operation.kind==='APP_RUN'?operation.jobId:`host-${digest.slice(0,48)}`;
     const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,scopeSha256,issueNumber:issue.number,jobId});
     if(claim.state==='SCOPE_MISMATCH'){
+      // A pre-scope historical record is not a definitive rejection: publishing
+      // BLOCKED would close its Issue while its durable work remains unresolved.
+      // Leave the exact original bytes untouched pending separately qualified migration.
+      if(claim.record.scopeSha256===undefined){summary.pending++;summary.errors++;return;}
       try{await options.github.publishResult(issue.number,blockedV2(issue,request.requestId,digest,'REQUEST_SCOPE_MISMATCH',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
       return;
     }
