@@ -55,7 +55,7 @@ describe('live-based protected owner HOLD before legacy V1/V2 controller effects
     const before=await readFile(path);
     const newSubmit=vi.fn(async()=>({state:'SUCCEEDED'}));
     const hold=vi.fn(async()=>true);
-    const afterWorker=createRemoteBridgeWorker({...TRANSPORT,now:NOW,store,
+    const afterWorker=createRemoteBridgeWorker({...TRANSPORT,now:()=>new Date('2026-10-30T18:05:00.000Z'),store,
       github:{listOpenRequests:async()=>[issue],publishResult:publish},
       controller:ctl(newSubmit),admissionHold:hold});
     expect(await afterWorker.runOnce()).toEqual({seen:1,pending:1,published:0,blocked:0,errors:0});
@@ -125,4 +125,57 @@ describe('live-based protected owner HOLD before legacy V1/V2 controller effects
     expect(controller.submit).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
+  it('retains an expired original V1 CLAIMED under owner HOLD without issue closure',async()=>{
+    const {root,store}=await durable(),issue=v1Issue(),publish=vi.fn(),ctl1=ctl();
+    const first=createRemoteBridgeWorker({...TRANSPORT,now:NOW,store,
+      github:{listOpenRequests:async()=>[issue],publishResult:publish},
+      controller:ctl1,admissionHold:async()=>true});
+    expect(await first.runOnce()).toMatchObject({pending:1,published:0,errors:0});
+    expect(ctl1.submit).not.toHaveBeenCalled();
+    const path=join(root,'rbridge.owner.hold.v1.json'),snapshot=await readFile(path);
+    const ctl2=ctl(),later=createRemoteBridgeWorker({...TRANSPORT,
+      now:()=>new Date('2026-10-30T18:05:00.000Z'),store,
+      github:{listOpenRequests:async()=>[issue],publishResult:publish},
+      controller:ctl2,admissionHold:async()=>true});
+    expect(await later.runOnce()).toEqual({seen:1,pending:1,published:0,blocked:0,errors:0});
+    expect((await store.get('rbridge.owner.hold.v1'))?.phase).toBe('CLAIMED');
+    expect(await readFile(path)).toEqual(snapshot);
+    expect(ctl2.submit).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('rejects an expired unclaimed V1 without invoking owner HOLD or controller',async()=>{
+    const {store}=await durable(),issue=v1Issue(),controller=ctl(),published=vi.fn(),
+      hold=vi.fn(async()=>true);
+    const worker=createRemoteBridgeWorker({...TRANSPORT,
+      now:()=>new Date('2026-10-30T18:05:00.000Z'),store,
+      github:{listOpenRequests:async()=>[issue],publishResult:published},
+      controller,admissionHold:hold});
+    expect(await worker.runOnce()).toMatchObject({seen:1,published:1,blocked:1,pending:0});
+    expect(published.mock.calls[0]?.[1]).toMatchObject({status:'BLOCKED',reason:'REMOTE_BRIDGE_REQUEST_EXPIRED'});
+    expect(await store.get('rbridge.owner.hold.v1')).toBeUndefined();
+    expect(controller.submit).not.toHaveBeenCalled();
+    expect(hold).not.toHaveBeenCalled();
+  });
+
+  it('cannot use altered expired V1 bytes to replay the protected old claim',async()=>{
+    const {root,store}=await durable(),issue=v1Issue(),publish=vi.fn(),controller=ctl();
+    const first=createRemoteBridgeWorker({...TRANSPORT,now:NOW,store,
+      github:{listOpenRequests:async()=>[issue],publishResult:publish},
+      controller,admissionHold:async()=>true});
+    await first.runOnce();
+    const path=join(root,'rbridge.owner.hold.v1.json'),snapshot=await readFile(path);
+    const altered=JSON.parse(issue.body);
+    altered.payload.args=['--different'];
+    const modified={...issue,body:JSON.stringify(altered)};
+    const later=createRemoteBridgeWorker({...TRANSPORT,
+      now:()=>new Date('2026-10-30T18:05:00.000Z'),store,
+      github:{listOpenRequests:async()=>[modified],publishResult:publish},
+      controller,admissionHold:async()=>true});
+    expect(await later.runOnce()).toMatchObject({seen:1,published:1,blocked:1});
+    expect(publish.mock.calls.at(-1)?.[1]).toMatchObject({status:'BLOCKED',reason:'REMOTE_BRIDGE_REQUEST_EXPIRED'});
+    expect(await readFile(path)).toEqual(snapshot);
+    expect(controller.submit).not.toHaveBeenCalled();
+  });
+
 });
