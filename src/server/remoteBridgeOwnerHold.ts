@@ -40,7 +40,7 @@ export function validateOwnerHoldManifest(raw:Buffer,context:OwnerHoldContext):O
        ||typeof r.storeSha256!=='string'||!SHA.test(r.storeSha256)
        ||r.phase!=='WAITING'||r.scope!=='UNSCOPED'
        ||issues.has(Number(r.issueNumber))||ids.has(r.requestId)||jobs.has(r.appId+'\0'+r.jobId))fail('RBRIDGE_OWNER_HOLD_ORIGINALS_INVALID');
-    previous=Number(r.issueNumber);issues.add(previous);ids.add(r.requestId);jobs.add(r.appId+'\0'+r.jobId);byApp[r.appId]++;
+    previous=Number(r.issueNumber);issues.add(previous);ids.add(r.requestId);jobs.add(r.appId+'\0'+r.jobId);byApp[r.appId]=(byApp[r.appId]??0)+1;
   }
   if(REQUIRED_APPS.some(app=>byApp[app]!==EXPECTED_COUNTS[app]))fail('RBRIDGE_OWNER_HOLD_ORIGINALS_INVALID');
   if(raw.toString('utf8')!==JSON.stringify(canonical(parsed))+'\n')fail('RBRIDGE_OWNER_HOLD_CANONICAL_INVALID');
@@ -58,7 +58,7 @@ export function loadProtectedOwnerHold(context:OwnerHoldContext):OwnerHoldManife
   const root=trustedParent('/'),etc=trustedParent('/etc'),folder=trustedParent('/etc/rbridge');
   const file=RBRIDGE_OWNER_HOLD_PATH,before=lstatSync(file,{bigint:true});
   if(!before.isFile()||before.isSymbolicLink()||before.uid!==0n||before.gid!==BigInt(context.runtimeGid)||(before.mode&0o777n)!==0o640n||before.nlink!==1n||before.size<1n||before.size>BigInt(MAX_BYTES))fail('RBRIDGE_OWNER_HOLD_FILE_UNTRUSTED');
-  const fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK|constants.O_CLOEXEC);
+  const fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK|0o2000000 /* Linux O_CLOEXEC */);
   let current,after,data:Buffer;
   try{
     current=fstatSync(fd,{bigint:true});
