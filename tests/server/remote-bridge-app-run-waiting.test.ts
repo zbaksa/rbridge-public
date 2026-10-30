@@ -127,7 +127,7 @@ describe('APP_RUN occupied-writer durable admission',()=>{
   });
   it('RED: a verified app-scoped owner HOLD must prevent stale WAITING dispatch after the original writer clears',async()=>{
     const store=await durable(),old=issue(),originalJob='keyb-v9-1';
-    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    const published=vi.fn(async()=>{});
     let writerBusy=true;
     const controller={
       submit:vi.fn(async(_app:string,job:string)=>writerBusy
@@ -170,7 +170,7 @@ describe('APP_RUN occupied-writer durable admission',()=>{
 
   it('HOLD: fresh app request remains WAITING without any controller effect',async()=>{
     const store=await durable(),entry=issue('keyb-v9-2',801);
-    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    const published=vi.fn(async()=>{});
     const controller={
       submit:vi.fn(async(_app:string,job:string)=>success(job)),
       status:vi.fn(async()=>({state:'SUCCEEDED'})),
@@ -192,7 +192,7 @@ describe('APP_RUN occupied-writer durable admission',()=>{
 
   it('HOLD: inability to verify owner policy fails closed without controller or Issue mutation',async()=>{
     const store=await durable(),entry=issue('keyb-v9-3',802);
-    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    const published=vi.fn(async()=>{});
     const controller={
       submit:vi.fn(async(_app:string,job:string)=>success(job)),
       status:vi.fn(async()=>({state:'SUCCEEDED'})),
@@ -210,7 +210,7 @@ describe('APP_RUN occupied-writer durable admission',()=>{
 
   it('HOLD: an explicit not-held decision preserves ordinary APP_RUN execution',async()=>{
     const store=await durable(),entry=issue('keyb-v9-4',803);
-    const published=vi.fn(async(_issue:number,_value:unknown)=>{});
+    const published=vi.fn(async()=>{});
     const controller={
       submit:vi.fn(async(_app:string,job:string)=>success(job)),
       status:vi.fn(async()=>({state:'SUCCEEDED'})),
