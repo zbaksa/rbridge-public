@@ -119,6 +119,10 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
     }
     const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,scopeSha256,issueNumber:issue.number,jobId:request.jobId});
     if(claim.state==='SCOPE_MISMATCH'){
+      // A pre-scope historical record is not a definitive rejection: publishing
+      // BLOCKED would close its Issue while its durable work remains unresolved.
+      // Leave the exact original bytes untouched pending separately qualified migration.
+      if(claim.record.scopeSha256===undefined){summary.pending++;summary.errors++;return;}
       try{await options.github.publishResult(issue.number,blockedV1(issue,digest,'REQUEST_SCOPE_MISMATCH',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
       return;
     }
@@ -166,6 +170,10 @@ export function createRemoteBridgeWorker(options:RemoteBridgeWorkerOptions){
     const operation=request.operation,jobId=operation.kind==='APP_RUN'?operation.jobId:`host-${digest.slice(0,48)}`;
     const claim=await options.store.claim({requestId:request.requestId,requestSha256:digest,scopeSha256,issueNumber:issue.number,jobId});
     if(claim.state==='SCOPE_MISMATCH'){
+      // A pre-scope historical record is not a definitive rejection: publishing
+      // BLOCKED would close its Issue while its durable work remains unresolved.
+      // Leave the exact original bytes untouched pending separately qualified migration.
+      if(claim.record.scopeSha256===undefined){summary.pending++;summary.errors++;return;}
       try{await options.github.publishResult(issue.number,blockedV2(issue,request.requestId,digest,'REQUEST_SCOPE_MISMATCH',now()));summary.published++;summary.blocked++;}catch{summary.errors++;}
       return;
     }
