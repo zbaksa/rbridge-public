@@ -9,7 +9,7 @@ import {remoteBridgeRequestV2Digest,parseRemoteBridgeRequestV2} from '../../src/
 const roots:string[]=[];
 const now=()=>new Date('2026-10-31T22:00:00.000Z');
 async function store(){const root=await mkdtemp(join(tmpdir(),'bridge-claude-routing-'));roots.push(root);return createRemoteBridgeStore(root,now);}
-afterEach(async()=>await Promise.all(roots.splice(0).map(p=>rm(p,{recursive:true,force:true}))));
+afterEach(async()=>{await Promise.all(roots.splice(0).map(p=>rm(p,{recursive:true,force:true})));});
 const TRANSPORT={repository:'example/rbridge-control',authorLogin:'bridge-owner'} as const;
 const request=(requestId='claude.health.1',operation:Record<string,unknown>={kind:'HEALTH',action:'STATUS'})=>({
   schema:'COCWIN_REMOTE_BRIDGE_REQUEST_V2',requestId,createdAt:'2026-10-31T21:59:00.000Z',
@@ -71,7 +71,7 @@ describe('Claude fenced RBridge request routing — SOURCE ONLY',()=>{
   });
 
   it('preserves protected APP_RUN HOLD before controller.submit when signed JSON is enabled',async()=>{
-    const db=await store(),hold=vi.fn(async()=>true),ctl=controller(),pub=vi.fn();
+    const db=await store(),hold=vi.fn(async(_identity:{appId:string;requestId:string;jobId:string;issueNumber:number;requestSha256:string})=>true),ctl=controller(),pub=vi.fn();
     const app=request('claude.held.1',{kind:'APP_RUN',appId:'dart',jobId:'claude-held-1',
       payload:{tool:'probe',cwd:'/home/dart/backend',args:[],timeout_ms:10000,max_bytes:4096}});
     const worker=createRemoteBridgeWorker({...TRANSPORT,allowClaudeFence:true,now,store:db,
