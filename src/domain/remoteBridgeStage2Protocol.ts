@@ -67,7 +67,8 @@ export function parseRemoteBridgeRequestV2(input:{title:string;body:string;autho
   if(input.repository!==input.expectedRepository)fail('REMOTE_BRIDGE_V2_REPOSITORY_INVALID');
   if(typeof input.title!=='string'||!input.title.startsWith(REQUEST_PREFIX))fail('REMOTE_BRIDGE_V2_TITLE_INVALID');
   if(typeof input.body!=='string'||Buffer.byteLength(input.body)>MAX_BODY_BYTES)fail('REMOTE_BRIDGE_V2_BODY_TOO_LARGE');
-  let parsed:unknown;try{parsed=JSON.parse(extractClaudeFencedIssueBody(input.body,input.allowClaudeFence===true));}catch{fail('REMOTE_BRIDGE_V2_BODY_JSON_INVALID');}
+  const jsonText=extractClaudeFencedIssueBody(input.body,input.allowClaudeFence===true);
+  let parsed:unknown;try{parsed=JSON.parse(jsonText);}catch{fail('REMOTE_BRIDGE_V2_BODY_JSON_INVALID');}
   const row=record(parsed,'REMOTE_BRIDGE_V2_BODY_INVALID');
   exactFields(row,TOP_FIELDS,'REMOTE_BRIDGE_V2_FIELDS_INVALID');
   if(row.schema!=='COCWIN_REMOTE_BRIDGE_REQUEST_V2')fail('REMOTE_BRIDGE_V2_SCHEMA_INVALID');
