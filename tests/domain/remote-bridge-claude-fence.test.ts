@@ -51,6 +51,16 @@ describe('RBridge V11 Claude fenced issue body — disabled by default',()=>{
       expect(()=>parse(wrong,true)).toThrow(/REMOTE_BRIDGE_V2_BODY_FENCE_INVALID/);
     }
   });
+  it('accepts JSON formatting but rejects duplicate keys and ambiguous lexical JSON',()=>{
+    const pretty=JSON.stringify(JSON.parse(RAW),null,2);
+    expect(parse(fenced(pretty,SIGNATURE),true)).toEqual(parse(RAW));
+    expect(remoteBridgeRequestV2Digest(parse(fenced(pretty,SIGNATURE),true))).toBe(remoteBridgeRequestV2Digest(parse(RAW)));
+    const duplicated=RAW.replace('"schema":','"schema":"FAKE","schema":');
+    expect(()=>parse(fenced(duplicated,SIGNATURE),true)).toThrow(/REMOTE_BRIDGE_V2_BODY_FENCE_NONCANONICAL/);
+    expect(()=>extractClaudeFencedIssueBody(fenced('{"value":1e3}'),true)).toThrow(/REMOTE_BRIDGE_V2_BODY_FENCE_NONCANONICAL/);
+    const escapedNewline=JSON.stringify({value:'before\nand after'});
+    expect(extractClaudeFencedIssueBody(fenced(escapedNewline),true)).toBe(escapedNewline);
+  });
   it('never accepts text before the block or another language / malformed JSON',()=>{
     expect(()=>parse('hello\n'+fenced(RAW,SIGNATURE),true)).toThrow(/REMOTE_BRIDGE_V2_BODY_JSON_INVALID/);
     expect(()=>parse(FENCE+'javascript\n'+RAW+'\n'+FENCE,true)).toThrow(/REMOTE_BRIDGE_V2_BODY_JSON_INVALID/);
