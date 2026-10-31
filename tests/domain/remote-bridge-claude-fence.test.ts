@@ -19,7 +19,7 @@ const BASE={
 };
 function fenced(inner:string,tail=''){return FENCE+'json\n'+inner+'\n'+FENCE+tail;}
 function parse(body:string,allowClaudeFence?:boolean){
-  return parseRemoteBridgeRequestV2({...BASE,body,allowClaudeFence});
+  return parseRemoteBridgeRequestV2({...BASE,body,...(allowClaudeFence===undefined?{}:{allowClaudeFence})});
 }
 
 describe('RBridge V11 Claude fenced issue body — disabled by default',()=>{
