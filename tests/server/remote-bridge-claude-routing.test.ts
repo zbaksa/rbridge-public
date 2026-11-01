@@ -81,7 +81,20 @@ describe('Claude fenced RBridge request routing — SOURCE ONLY',()=>{
     expect(hold).toHaveBeenCalledOnce();
     expect(hold.mock.calls[0]![0]).toMatchObject({appId:'dart',requestId:'claude.held.1'});
     expect(ctl.submit).not.toHaveBeenCalled();expect(pub).not.toHaveBeenCalled();
-    expect((await db.get('claude.held.1'))?.phase).toBe('WAITING');
+    const before=await db.get('claude.held.1');
+    expect(before?.phase).toBe('WAITING');
+    // A protected V2 WAITING can outlive the original intake TTL. A Claude
+    // signed Issue must not be terminalized, replayed or sent to the controller.
+    const later=()=>new Date('2026-11-01T11:00:00.000Z');
+    const afterExpiry=createRemoteBridgeWorker({...TRANSPORT,allowClaudeFence:true,now:later,store:db,
+      github:{listOpenRequests:async()=>[issue(704,app)],publishResult:pub},
+      controller:ctl,admissionHold:hold});
+    expect(await afterExpiry.runOnce()).toMatchObject({pending:1,blocked:0,published:0});
+    expect(hold).toHaveBeenCalledTimes(2);
+    expect(ctl.submit).not.toHaveBeenCalled();expect(pub).not.toHaveBeenCalled();
+    const after=await db.get('claude.held.1');
+    expect(after?.phase).toBe('WAITING');
+    expect(after?.requestSha256).toBe(before?.requestSha256);
   });
 
   it('rejects forged author, malformed signature, and second JSON block without effects',async()=>{
