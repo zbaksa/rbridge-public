@@ -55,6 +55,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Read-only host facts regressions
+        run: npm run test:host-facts
+
       - name: Typecheck
         run: npm run typecheck
 
