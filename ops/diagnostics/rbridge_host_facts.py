@@ -28,7 +28,7 @@ def need(condition, reason):
 
 
 def check_context(host, uid, gid, isolated, no_site, no_bytecode):
-    need(socket.gethostname().split('.')[0] == host, 'WRONG_HOST')
+    need(socket.gethostname() == host, 'WRONG_HOST')
     need(uid == 0 and gid == 0, 'ROOT_READER_REQUIRED')
     need(isolated and no_site and no_bytecode, 'ISOLATED_INTERPRETER_REQUIRED')
 
@@ -50,9 +50,9 @@ def stamp(info):
             info.st_uid, info.st_gid, info.st_mode, info.st_nlink)
 
 
-def read_regular(path, limit):
+def read_regular(path, limit, dir_fd=None):
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
     except OSError:
         raise Blocked('FILE_OPEN_UNAVAILABLE') from None
     try:
@@ -62,7 +62,7 @@ def read_regular(path, limit):
         raw = os.read(fd, limit + 1)
         after = os.fstat(fd)
         need(len(raw) == before.st_size and stamp(before) == stamp(after), 'FILE_CHANGED')
-        current = os.lstat(path)
+        current = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
         need(stamp(current) == stamp(after), 'FILE_PATH_CHANGED')
         return raw, {'uid': before.st_uid, 'gid': before.st_gid,
                      'mode': format(stat.S_IMODE(before.st_mode), '04o'), 'bytes': len(raw),
@@ -76,16 +76,40 @@ def read_regular(path, limit):
 
 
 def trusted_file(path, limit, expected_sha):
-    for parent in reversed(PurePosixPath(path).parents):
-        try:
-            info = os.lstat(str(parent))
-        except OSError:
-            raise Blocked('PARENT_UNAVAILABLE') from None
+    parts = PurePosixPath(path).parts
+    need(parts[0] == '/' and str(PurePosixPath(path)) == path and '..' not in parts,
+         'FILE_PATH_INVALID')
+    held, links = [], []
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        parent = os.open('/', flags)
+        held.append(parent)
+        root_stamp = stamp(os.fstat(parent))
+        for name in parts[1:-1]:
+            info = os.fstat(parent)
+            need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
+                 'PARENT_UNTRUSTED')
+            child = os.open(name, flags, dir_fd=parent)
+            held.append(child)
+            links.append((parent, name, child, stamp(os.fstat(child))))
+            parent = child
+        info = os.fstat(parent)
         need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
              'PARENT_UNTRUSTED')
-    _, metadata = read_regular(path, limit)
-    need(metadata['uid'] == 0 and not int(metadata['mode'], 8) & 0o022, 'FILE_OWNER_MODE_UNTRUSTED')
-    return {**metadata, 'expectedShaMatches': metadata['sha256'] == expected_sha}
+        _, metadata = read_regular(parts[-1], limit, dir_fd=parent)
+        need(metadata['uid'] == 0 and not int(metadata['mode'], 8) & 0o022, 'FILE_OWNER_MODE_UNTRUSTED')
+        need(stamp(os.fstat(held[0])) == root_stamp
+             and stamp(os.stat('/', follow_symlinks=False)) == root_stamp, 'PARENT_CHANGED')
+        for ancestor, name, child, identity in links:
+            need(stamp(os.fstat(child)) == identity
+                 and stamp(os.stat(name, dir_fd=ancestor, follow_symlinks=False)) == identity,
+                 'PARENT_CHANGED')
+        return {**metadata, 'expectedShaMatches': metadata['sha256'] == expected_sha}
+    except OSError:
+        raise Blocked('FILE_PATH_UNAVAILABLE') from None
+    finally:
+        for fd in reversed(held):
+            os.close(fd)
 
 
 def selected_environment(raw):

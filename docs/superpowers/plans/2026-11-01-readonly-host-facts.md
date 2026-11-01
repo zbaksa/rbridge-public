@@ -40,3 +40,13 @@ Interfaces: `check_context(host, uid, gid, isolated, no_site, no_bytecode)`; `re
 - [ ] Prepare one hash-bound owner command; host execution remains NOT_RUN until an allowed channel or owner returns actual evidence.
 
 Ruling: No new server or transport is introduced. Existing operational access is blocked independently of source development; source tests cannot remove that blocker.
+
+## Qualification record
+
+- Initial missing implementation: eight regressions observed RED, then GREEN.
+- Reserved HOLD label and option-like unit name: two further regressions observed RED, then GREEN.
+- One independent source review found shortened hostname matching and ancestor substitution. Both failures were reproduced before the fixes; the collector now checks the full hostname and holds directory descriptors through final ancestry revalidation.
+- Process/unit drift coverage was treated as required acceptance coverage and added with an actual process-UID rejection case. Final Python suite: 16 tests.
+- Local Node suite: 231/239; eight PROCESS cases encounter the environment's forbidden Unix socket listener. Do not report that local suite as PASS. The canonical exact-HEAD runner must qualify the complete suite.
+- Live host qualification, loaded/runtime policy correspondence, FENCE and production GO were outside the source review and remain UNKNOWN. The collector itself is NOT_RUN on the target host.
+- CLI form: `python3 -I -S -B ops/diagnostics/rbridge_host_facts.py --host EXPECTED_FULL_HOSTNAME --runtime-uid UID --hold-sha SHA256 [--component NAME=/usr/local/libexec/example/module.py=SHA256] [--unit example.service]`. At most four components and four extra units. No argument selects an executable.

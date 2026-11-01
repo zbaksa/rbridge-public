@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -28,10 +29,19 @@ class HostFactsTests(unittest.TestCase):
 
     def test_nonroot_or_unisolated_context_is_rejected(self):
         m = self.load()
-        host = m.socket.gethostname().split('.')[0]
+        host = m.socket.gethostname()
         for context in [(1000, 1000, True, True, True), (0, 0, False, True, True), (0, 0, True, False, True), (0, 0, True, True, False)]:
             with self.subTest(context=context), self.assertRaises(m.Blocked):
                 m.check_context(host, *context)
+
+    def test_hostname_requires_exact_full_identity(self):
+        m = self.load()
+        with patch.object(m.socket, 'gethostname', return_value='bridge.other.example'):
+            with self.assertRaisesRegex(m.Blocked, 'WRONG_HOST'):
+                m.check_context('bridge', 0, 0, True, True, True)
+            with self.assertRaisesRegex(m.Blocked, 'WRONG_HOST'):
+                m.check_context('bridge.expected.example', 0, 0, True, True, True)
+            m.check_context('bridge.other.example', 0, 0, True, True, True)
 
     def test_component_cannot_select_command_or_noncode_path(self):
         m = self.load()
@@ -55,7 +65,7 @@ class HostFactsTests(unittest.TestCase):
     def test_cli_wrong_host_emits_blocked_before_collect(self):
         m = self.load()
         output = io.StringIO()
-        expected = m.socket.gethostname().split('.')[0] + '-different'
+        expected = m.socket.gethostname() + '-different'
         with contextlib.redirect_stdout(output), patch.object(m, 'collect', side_effect=AssertionError('must not collect')):
             rc = m.main(['--host', expected, '--runtime-uid', '1000', '--hold-sha', 'a' * 64])
         self.assertEqual(rc, 1)
@@ -64,7 +74,7 @@ class HostFactsTests(unittest.TestCase):
     def test_cli_nonroot_emits_blocked_before_collect(self):
         m = self.load()
         output = io.StringIO()
-        host = m.socket.gethostname().split('.')[0]
+        host = m.socket.gethostname()
         with contextlib.redirect_stdout(output), patch.object(m.os, 'geteuid', return_value=1000), patch.object(m.os, 'getegid', return_value=1000), patch.object(m, 'collect', side_effect=AssertionError('must not collect')):
             rc = m.main(['--host', host, '--runtime-uid', '1000', '--hold-sha', 'a' * 64])
         self.assertEqual(rc, 1)
@@ -117,6 +127,60 @@ class HostFactsTests(unittest.TestCase):
             with patch.object(m.os, 'read', side_effect=mutate):
                 with self.assertRaisesRegex(m.Blocked, 'FILE_CHANGED'):
                     m.read_regular(str(path), 4096)
+
+    def test_ancestor_replacement_is_rejected_with_descriptor_anchoring(self):
+        m = self.load()
+        # Only ownership/mode trust is simulated for this nonprivileged fixture.
+        # Directory rename, symlink substitution and fd-relative reads are real.
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            parent, outside, retained = base / 'checked', base / 'outside', base / 'retained'
+            parent.mkdir(); outside.mkdir()
+            target = parent / 'worker.py'
+            target.write_bytes(b'original code')
+            (outside / 'worker.py').write_bytes(b'outside code')
+            expected = hashlib.sha256(b'original code').hexdigest()
+            real_open, real_stat, real_lstat, real_fstat = os.open, os.stat, os.lstat, os.fstat
+            fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_uid', 'st_gid', 'st_mode', 'st_nlink')
+            def trusted(info):
+                row = {field: getattr(info, field) for field in fields}
+                row.update(st_uid=0, st_gid=0, st_mode=info.st_mode & ~0o022)
+                return SimpleNamespace(**row)
+            replaced = False
+            def replace_before_leaf(path, flags, *args, **kwargs):
+                nonlocal replaced
+                if str(path) in (str(target), 'worker.py') and not replaced:
+                    parent.rename(retained)
+                    parent.symlink_to(outside, target_is_directory=True)
+                    replaced = True
+                return real_open(path, flags, *args, **kwargs)
+            with patch.object(m.os, 'stat', side_effect=lambda *a, **k: trusted(real_stat(*a, **k))), patch.object(m.os, 'lstat', side_effect=lambda *a, **k: trusted(real_lstat(*a, **k))), patch.object(m.os, 'fstat', side_effect=lambda *a, **k: trusted(real_fstat(*a, **k))):
+                self.assertTrue(m.trusted_file(str(target), 4096, expected)['expectedShaMatches'])
+                with patch.object(m.os, 'open', side_effect=replace_before_leaf):
+                    with self.assertRaises(m.Blocked):
+                        m.trusted_file(str(target), 4096, expected)
+            self.assertTrue(replaced)
+
+    def test_actual_process_uid_mismatch_is_rejected(self):
+        m = self.load()
+        with self.assertRaisesRegex(m.Blocked, 'BRIDGE_PROCESS_UID_CHANGED'):
+            m.process_identity(os.getpid(), os.getuid() + 1)
+
+    def test_collect_detects_unit_or_start_tick_changes(self):
+        m = self.load()
+        args = SimpleNamespace(runtime_uid=1000, hold_sha='a' * 64, component=[], unit=[])
+        before = {'MainPID': '123', 'ActiveState': 'active', 'InvocationID': 'first'}
+        bridge = {'pid': 123, 'startTick': '100', 'runtimeUid': 1000, 'holdPinPresent': True, 'holdPinMatches': True, 'releaseSha': 'b' * 40}
+        for after, tick in [({**before, 'InvocationID': 'second'}, '100'), (before, '101')]:
+            with self.subTest(after=after, tick=tick), patch.object(m, 'unit_info', side_effect=[before, after]), patch.object(m, 'bridge_info', return_value=bridge), patch.object(m, 'trusted_file', return_value={'expectedShaMatches': True}), patch.object(m, 'process_identity', return_value=tick):
+                with self.assertRaisesRegex(m.Blocked, 'BRIDGE_CHANGED_DURING_OBSERVATION'):
+                    m.collect(args)
+        with patch.object(m, 'unit_info', side_effect=[before, before]), patch.object(m, 'bridge_info', return_value=bridge), patch.object(m, 'trusted_file', return_value={'expectedShaMatches': True}), patch.object(m, 'process_identity', return_value='100'):
+            result = m.collect(args)
+        self.assertEqual(result['status'], 'OBSERVED_ONLY')
+        self.assertEqual(result['productionGo'], 'UNKNOWN')
+        self.assertEqual(result['nativeControllerFence'], 'UNKNOWN')
+        self.assertEqual(result['originalWriterDisposition'], 'UNKNOWN')
 
     def test_environment_discloses_only_selected_keys(self):
         m = self.load()
