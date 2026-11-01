@@ -71,7 +71,7 @@ describe('Claude fenced RBridge request routing — SOURCE ONLY',()=>{
   });
 
   it('preserves protected APP_RUN HOLD before controller.submit when signed JSON is enabled',async()=>{
-    const db=await store(),hold=vi.fn(async(_identity:{appId:string;requestId:string;jobId:string;issueNumber:number;requestSha256:string})=>true),ctl=controller(),pub=vi.fn();
+    const db=await store(),hold=vi.fn(async(identity:{appId:string;requestId:string;jobId:string;issueNumber:number;requestSha256:string})=>identity.appId==='dart'&&identity.requestId==='claude.held.1'),ctl=controller(),pub=vi.fn();
     const app=request('claude.held.1',{kind:'APP_RUN',appId:'dart',jobId:'claude-held-1',
       payload:{tool:'probe',cwd:'/home/dart/backend',args:[],timeout_ms:10000,max_bytes:4096}});
     const worker=createRemoteBridgeWorker({...TRANSPORT,allowClaudeFence:true,now,store:db,
