@@ -25,6 +25,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:host-facts": "python3 -I -S -B -m unittest discover -s tests/ops -p test_rbridge_host_facts.py -v",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify": "npm test && npm run typecheck && npm run lint && npm run build:server",
