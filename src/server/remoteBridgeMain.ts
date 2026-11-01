@@ -19,6 +19,12 @@ interface LoopLock {release():Promise<void>;}
 export interface RemoteBridgeLoopOptions {acquireLock:()=>Promise<LoopLock>;onLocked?:()=>Promise<void>;runOnce:()=>Promise<RemoteBridgeRunSummary>;shouldContinue:()=>boolean;sleep:(ms:number)=>Promise<void>;log:(value:Record<string,unknown>)=>void;pollMs:number;maxBackoffMs?:number;now?:()=>Date;}
 function reason(error:unknown){return error instanceof Error&&error.message?error.message.split('\n')[0]!.slice(0,512):'REMOTE_BRIDGE_UNKNOWN_ERROR';}
 function rateLimited(value:string){return /(?:\\b429\\b|rate[- ]?limit|secondary rate limit)/i.test(value);}
+export function resolveRemoteBridgeClaudeFenceConfig(env:Record<string,string|undefined>):boolean{
+  const value=env.RBRIDGE_ALLOW_CLAUDE_FENCE;
+  if(value===undefined||value==='0')return false;
+  if(value==='1')return true;
+  throw new Error('REMOTE_BRIDGE_CLAUDE_FENCE_CONFIG_INVALID');
+}
 export function resolveRemoteBridgeGitHubConfig(env:Record<string,string|undefined>){
   const repository=(env.RBRIDGE_GITHUB_REPOSITORY??'').trim(),authorLogin=(env.RBRIDGE_GITHUB_AUTHOR??'').trim();
   if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))throw new Error('REMOTE_BRIDGE_GITHUB_REPOSITORY_CONFIG_INVALID');
@@ -58,6 +64,7 @@ export async function runRemoteBridgeMain():Promise<void>{
   const {stateRoot:root}=resolveRemoteBridgeRuntimeConfig(process.env,{username:user.username,homedir:user.homedir,uid});
   const instanceId=resolveRemoteBridgeInstanceId(process.env);
   const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env);
+  const allowClaudeFence=resolveRemoteBridgeClaudeFenceConfig(process.env);
   // Mandatory protected bootstrap: missing/changed root SHA pins fail CLOSED.
   const admissionHold=createProtectedOwnerHold({expectedSha256:process.env.RBRIDGE_OWNER_HOLD_SHA256,repository,authorLogin,instanceId,runtimeUid:uid,runtimeGid:typeof process.getgid==='function'?process.getgid():user.gid});
   const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
@@ -72,7 +79,7 @@ export async function runRemoteBridgeMain():Promise<void>{
     maxReadBytes:fileProfile.maxReadBytes,
     maxSearchResults:fileProfile.maxSearchResults
   });
-  const worker=createRemoteBridgeWorker({store,github,controller,chunkStore,health,processSessions,fileOps,repository,authorLogin,admissionHold});let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
+  const worker=createRemoteBridgeWorker({store,github,controller,chunkStore,health,processSessions,fileOps,allowClaudeFence,repository,authorLogin,admissionHold});let running=true;const stop=()=>{running=false;};process.once('SIGTERM',stop);process.once('SIGINT',stop);
   try{
     await runRemoteBridgeLoop({
       acquireLock:async()=>await acquireRemoteBridgeProcessLock(root),
