@@ -16,10 +16,16 @@ function jsonFromFence(body:string){return JSON.parse(body.replace(/^```json\n/,
 
 describe('GitHub issue remote bridge transport',()=>{
   it('lists only exact request-prefix issues authored by the configured owner from the configured repository',async()=>{
-    const runner=vi.fn<GhCommandRunner>(async()=>({exitCode:0,stdout:JSON.stringify(rows),stderr:''}));
+    const runner=vi.fn<GhCommandRunner>(async input=>{
+      const query=(JSON.parse(input.stdin!) as {query:string}).query;
+      const repository=query.includes('issues(')
+        ? {nameWithOwner:REPO,issues:{nodes:rows.map(row=>({...row,state:'OPEN'})),pageInfo:{hasNextPage:false,endCursor:null}}}
+        : {nameWithOwner:REPO,issue:{...rows[1],state:'OPEN'}};
+      return {exitCode:0,stdout:JSON.stringify({data:{repository}}),stderr:''};
+    });
     const gh=createGitHubIssueRemoteBridge({repository:REPO,authorLogin:AUTHOR,runner});
     await expect(gh.listOpenRequests()).resolves.toEqual([{number:49,title:rows[1]!.title,body:requestBody,authorLogin:AUTHOR,url:rows[1]!.url}]);
-    expect(runner).toHaveBeenCalledWith({command:'/usr/bin/gh',args:['issue','list','--repo',REPO,'--state','open','--limit','1000','--json','number,title,body,author,url'],timeoutMs:30000,maxOutputBytes:2_000_000});
+    expect(runner).toHaveBeenCalledWith({command:'/usr/bin/gh',args:['api','graphql','--input','-'],stdin:expect.any(String),timeoutMs:30000,maxOutputBytes:16_777_216});
   });
 
   it('publishes one fenced JSON result over stdin and closes only after comment succeeds',async()=>{
@@ -43,7 +49,7 @@ describe('GitHub issue remote bridge transport',()=>{
 
   it('publishes oversized results as digest-bound numbered chunks under 60000 bytes plus a final manifest',async()=>{
     const calls:Parameters<GhCommandRunner>[0][]=[];
-    const runner=vi.fn<GhCommandRunner>(async input=>{calls.push(input);if(input.args[1]==='view')return {exitCode:0,stdout:JSON.stringify({comments:[]}),stderr:''};return {exitCode:0,stdout:'ok',stderr:''};});
+    const runner=vi.fn<GhCommandRunner>(async input=>{calls.push(input);if(input.args[0]==='api')return {exitCode:0,stdout:JSON.stringify({data:{repository:{nameWithOwner:REPO,issue:{number:49,comments:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}}}}}),stderr:''};return {exitCode:0,stdout:'ok',stderr:''};});
     const gh=createGitHubIssueRemoteBridge({repository:REPO,authorLogin:AUTHOR,runner});
     const huge={...result,controllerResult:{state:'SUCCEEDED',stdout:'abc123-'.repeat(30_000)}};
     await gh.publishResult(49,huge);
@@ -68,7 +74,7 @@ describe('GitHub issue remote bridge transport',()=>{
     const first=bytes.subarray(0,40_000);
     const existing=fenced({schema:'COCWIN_REMOTE_BRIDGE_RESULT_CHUNK_V1',transferId,index:0,count:Math.ceil(bytes.length/40_000),dataBase64:first.toString('base64'),chunkSha256:hash(first),objectSha256});
     const calls:Parameters<GhCommandRunner>[0][]=[];
-    const runner=vi.fn<GhCommandRunner>(async input=>{calls.push(input);if(input.args[1]==='view')return {exitCode:0,stdout:JSON.stringify({comments:[{body:existing}]}),stderr:''};return {exitCode:0,stdout:'ok',stderr:''};});
+    const runner=vi.fn<GhCommandRunner>(async input=>{calls.push(input);if(input.args[0]==='api')return {exitCode:0,stdout:JSON.stringify({data:{repository:{nameWithOwner:REPO,issue:{number:49,comments:{nodes:[{body:existing}],pageInfo:{hasNextPage:false,endCursor:null}}}}}}),stderr:''};return {exitCode:0,stdout:'ok',stderr:''};});
     await createGitHubIssueRemoteBridge({repository:REPO,authorLogin:AUTHOR,runner}).publishResult(49,huge);
     const posted=calls.filter(call=>call.args[1]==='comment').map(call=>jsonFromFence(call.stdin!));
     expect(posted.some(row=>row.schema==='COCWIN_REMOTE_BRIDGE_RESULT_CHUNK_V1'&&row.index===0)).toBe(false);
