@@ -2,7 +2,7 @@ import {userInfo} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createControllerExecRemoteBridge} from '../adapters/controllerExecRemoteBridge.js';
-import {createGitHubIssueRemoteBridge} from '../adapters/githubIssueRemoteBridge.js';
+import {createGitHubIssueRemoteBridge,resolveGitHubTransportLimits,type GitHubTransportLimits} from '../adapters/githubIssueRemoteBridge.js';
 import {createFlowPilotBridgeRuntime} from './flowPilotBridgeRuntime.js';
 import {runFlowPilotBridgeTick} from './flowPilotBridgeTick.js';
 import {createRemoteBridgeChunkStore} from './remoteBridgeChunkStore.js';
@@ -22,6 +22,18 @@ export function resolveRemoteBridgeGitHubConfig(env:Record<string,string|undefin
   if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))throw new Error('REMOTE_BRIDGE_GITHUB_REPOSITORY_CONFIG_INVALID');
   if(!/^[A-Za-z0-9-]{1,39}$/.test(authorLogin))throw new Error('REMOTE_BRIDGE_GITHUB_AUTHOR_CONFIG_INVALID');
   return {repository,authorLogin};
+}
+export function resolveRemoteBridgeGitHubTransportConfig(env:Record<string,string|undefined>):GitHubTransportLimits{
+  const configured:Partial<GitHubTransportLimits>={};
+  for(const [name,field,error] of [
+    ['RBRIDGE_GITHUB_MAX_OUTPUT_BYTES','maxOutputBytes','REMOTE_BRIDGE_GITHUB_MAX_OUTPUT_CONFIG_INVALID'],
+    ['RBRIDGE_GITHUB_TIMEOUT_MS','timeoutMs','REMOTE_BRIDGE_GITHUB_TIMEOUT_CONFIG_INVALID']
+  ] as const){
+    const value=env[name];if(value===undefined)continue;
+    if(!/^[1-9][0-9]*$/.test(value))throw new Error(error);
+    configured[field]=Number(value);
+  }
+  return resolveGitHubTransportLimits(configured);
 }
 export function resolveRemoteBridgeRuntimeConfig(env:Record<string,string|undefined>,identity:{username:string;homedir:string;uid:number}){
   const runtimeUser=(env.RBRIDGE_RUNTIME_USER??'').trim();
@@ -44,7 +56,8 @@ export async function runRemoteBridgeMain():Promise<void>{
   const user=userInfo(),uid=typeof process.getuid==='function'?process.getuid():user.uid;
   const {stateRoot:root}=resolveRemoteBridgeRuntimeConfig(process.env,{username:user.username,homedir:user.homedir,uid});
   const {repository,authorLogin}=resolveRemoteBridgeGitHubConfig(process.env);
-  const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
+  const transportLimits=resolveRemoteBridgeGitHubTransportConfig(process.env);
+  const store=createRemoteBridgeStore(root),github=createGitHubIssueRemoteBridge({repository,authorLogin,...transportLimits}),controller=createControllerExecRemoteBridge(),chunkStore=createRemoteBridgeChunkStore({root:join(root,'transfers')}),processSessions=createRemoteBridgeProcessSessions({root:join(root,'sessions')});
   const flowPilot=createFlowPilotBridgeRuntime({root,controller,env:process.env});
   let queueCount=0,sessionCount=(await processSessions.stats()).activeSessions,transferCount=(await chunkStore.stats()).activeTransfers;
   const releaseSha=process.env.RBRIDGE_RELEASE_SHA??process.env.COCWIN_REMOTE_BRIDGE_RELEASE_SHA??'',health=createRemoteBridgeHealth({releaseSha,startedAt:new Date(),counts:()=>({queueCount,sessionCount,transferCount})});
@@ -61,6 +74,7 @@ export async function runRemoteBridgeMain():Promise<void>{
     await runRemoteBridgeLoop({
       acquireLock:async()=>await acquireRemoteBridgeProcessLock(root),
       onLocked:async()=>{
+        console.log(JSON.stringify({schema:'RBRIDGE_GITHUB_TRANSPORT_CONFIG_V1',...transportLimits}));
         const address=await flowPilot?.start();
         if(address){
           console.log(JSON.stringify({
